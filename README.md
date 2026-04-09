@@ -6,6 +6,15 @@ Read your `~/.claude/projects/*.jsonl` transcripts and visualize everything — 
 
 Nothing leaves your machine.
 
+## Why another one?
+
+There are [several](https://github.com/ryoppippi/ccusage) [excellent](https://github.com/chiphuyen/sniffly) [Claude Code](https://github.com/FlorianBruniaux/ccboard) [dashboards](https://github.com/d-kimuson/claude-code-viewer) already — `ccusage` (CLI), `sniffly` (error taxonomy), `ccboard` (feature-dense TUI+web), `claude-code-viewer` (PWA). This one focuses on two things they don't do well:
+
+1. **Parallel agent run detection.** No existing tool robustly detects when you had 2+ Claude Code sessions running simultaneously (against worktrees, multi-agent fleets, etc.). We compute this via sweep-line over session intervals and surface peaks + contiguous windows.
+2. **Per-session PR shipping attribution.** Claude Code's OTEL emits a `pull_request.count` metric, but nobody links individual sessions to the PR that resulted from them. We scan Bash tool calls for `gh pr create`, pull the `--title`, and plot PRs against session position — so you can measure *"how early in the session did Claude ship the PR?"* as a proxy for how well your harness is tuned.
+
+Plus: a full transcript UI modeled on Claude's managed-agents view (mini-map timeline, turn collapsing, pretty tool cards), because nobody else makes reading a session a pleasant experience.
+
 ## What you get
 
 ### Dashboard
@@ -125,12 +134,35 @@ Everything runs on `localhost:3321` against your local filesystem. Nothing is se
 
 ## Roadmap
 
+Informed by a scan of the Claude Code dashboard ecosystem ([ccusage](https://github.com/ryoppippi/ccusage), [sniffly](https://github.com/chiphuyen/sniffly), [ccboard](https://github.com/FlorianBruniaux/ccboard), [claude-code-viewer](https://github.com/d-kimuson/claude-code-viewer), [codedash](https://github.com/vakovalskii/codedash), [tokscale](https://github.com/junhoyeo/tokscale), [claude-code-otel](https://github.com/ColeMurray/claude-code-otel)):
+
+**Unique differentiators to lean into**
+- [x] Parallel agent run detection (sweep-line over session intervals)
+- [x] Per-session PR shipping attribution with "position in session" metric
+- [ ] Cross-repo organization rollup (monorepo + related packages + infra as one unit)
+- [ ] Friction analytics: which slash commands fail most, where you interrupt Claude, which tool calls retry most
+
+**Ecosystem-proven features worth stealing**
+- [ ] Token cost estimation using LiteLLM pricing data (Opus vs Sonnet vs Haiku, cache-write 1.25x/2x, cache-read 0.1x) — *borrowed from ccusage, tokscale*
+- [ ] Error-type classification (content-not-found, tool failure, rate limit) — *borrowed from sniffly*
+- [ ] Session bookmarks + tags — *borrowed from ccboard, codedash*
+- [ ] Full-text FTS5 search across all sessions — *borrowed from ccboard*
+- [ ] Session replay with play/pause slider — *borrowed from codedash*
+- [ ] Streak stats on the heatmap — *borrowed from codedash*
+- [ ] Model-switch timeline per session — *borrowed from ccboard*
+- [ ] Audit log for credential leaks / destructive commands — *borrowed from ccboard*
+- [ ] Git commit correlation: interleave commits with session messages — *borrowed from amac0/ClaudeCodeJSONLParser, simonw/claude-code-transcripts*
+- [ ] Live status badges via hook injection (Running / WaitingInput / Stopped) — *borrowed from ccboard, agents-observe*
+- [ ] `npx @claude-sessions/web` distribution — *borrowed from ccusage pattern*
+
+**Infrastructure**
+- [ ] SQLite cache at `~/.claude/claude-sessions.db` with mtime-based incremental scan (ccboard reports 89x speedup over raw rescans)
+- [ ] Scan additional session paths: `~/Library/Developer/Xcode/CodingAssistant/ClaudeAgentConfig/projects/` (phuryn does this)
 - [ ] Command palette (`⌘K`) for quick session lookup
 - [ ] Compare two sessions side-by-side
 - [ ] Export session as markdown / PDF
-- [ ] Git commit correlation (match session timestamps to nearby commits)
 - [ ] Per-tool usage breakdown charts
-- [ ] Token cost estimation (Opus vs Sonnet vs Haiku)
+- [ ] Zod-strict parsing for zero data loss on schema drift (d-kimuson pattern)
 
 ## License
 
