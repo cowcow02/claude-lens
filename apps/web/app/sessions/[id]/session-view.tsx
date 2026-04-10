@@ -933,32 +933,78 @@ function Minimap({
   const [playheadMs, setPlayheadMs] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  /* Playhead — observe <main> scroll and map to a time offset by
-     measuring which transcript row is at the top of the viewport. */
+  /* Playhead — track which transcript row is at the top of the viewport.
+   *
+   * The old implementation ran `querySelectorAll("[data-sl-row-index]")`
+   * on every scroll event. For a session with ~2000 rows that's thousands
+   * of DOM queries per second during scroll — enough to pin a CPU core
+   * and make Chrome ask to kill the tab. IntersectionObserver is event-
+   * driven: the browser only notifies us when rows cross a narrow band
+   * near the top of the viewport (the "playhead line"), so the cost
+   * scales with *changes* instead of with scroll rate × row count.
+   */
   useEffect(() => {
     const main = containerRef.current?.closest("main") as HTMLElement | null;
     if (!main) return;
-    const allRowEls = () =>
-      Array.from(main.querySelectorAll<HTMLDivElement>("[data-sl-row-index]"));
-    const update = () => {
-      const scroll = main.scrollTop;
-      // Find the first row whose top is below the sticky header
-      const els = allRowEls();
-      for (const el of els) {
-        const top = el.offsetTop;
-        if (top - scroll >= headerOffset - 8) {
-          const tOff = Number(el.getAttribute("data-sl-toffset"));
-          if (!Number.isNaN(tOff)) {
-            setPlayheadMs(tOff);
-            return;
-          }
+
+    // A thin horizontal band just below the sticky header. A row is
+    // "at the playhead" when it enters this band from the bottom.
+    // rootMargin: top crop = headerOffset (so the band starts where the
+    // transcript actually starts), bottom crop = everything except the
+    // band, so only rows inside the band trigger callbacks.
+    const BAND_HEIGHT = 12;
+    const rootMargin = `-${headerOffset}px 0px -${Math.max(
+      0,
+      main.clientHeight - headerOffset - BAND_HEIGHT,
+    )}px 0px`;
+
+    // Track which rows are currently inside the band. The topmost is
+    // the playhead. Using a Set keeps updates O(1).
+    const inBand = new Set<HTMLElement>();
+
+    const publishTopmost = () => {
+      if (inBand.size === 0) {
+        // Fall back to the row just above the band by scanning the
+        // few immediately-adjacent rows — cheap because the band is
+        // narrow.
+        setPlayheadMs(null);
+        return;
+      }
+      let topmost: HTMLElement | null = null;
+      let topmostOff = Infinity;
+      for (const el of inBand) {
+        const t = el.offsetTop;
+        if (t < topmostOff) {
+          topmostOff = t;
+          topmost = el;
         }
       }
-      setPlayheadMs(null);
+      if (!topmost) {
+        setPlayheadMs(null);
+        return;
+      }
+      const tOff = Number(topmost.getAttribute("data-sl-toffset"));
+      setPlayheadMs(Number.isNaN(tOff) ? null : tOff);
     };
-    update();
-    main.addEventListener("scroll", update, { passive: true });
-    return () => main.removeEventListener("scroll", update);
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const el = e.target as HTMLElement;
+          if (e.isIntersecting) inBand.add(el);
+          else inBand.delete(el);
+        }
+        publishTopmost();
+      },
+      { root: main, rootMargin, threshold: 0 },
+    );
+
+    // Observe all current rows. Re-observes whenever the row count
+    // changes (i.e. filter switch, turn expand/collapse).
+    const rows = main.querySelectorAll<HTMLDivElement>("[data-sl-row-index]");
+    for (const r of rows) observer.observe(r);
+
+    return () => observer.disconnect();
   }, [displayRows.length, headerOffset]);
 
   const safeDur = Math.max(durationMs, 1);
@@ -1050,7 +1096,51 @@ function Minimap({
         });
       }
     }
-    return out;
+
+    // Cap the number of rendered segments. Each <rect> carries two
+    // event handlers (onMouseEnter + onClick), so 2000 raw-events in
+    // "All events" mode becomes 4000 DOM event listeners — enough to
+    // stall Chrome during paint. Sampling to MAX contiguous buckets
+    // loses per-item hover precision but keeps the overall shape and
+    // click-to-navigate behavior (clicks map to the first row inside
+    // the bucket, which is the right anchor for "jump here" UX).
+    const MAX_SEGMENTS = 600;
+    if (out.length <= MAX_SEGMENTS) return out;
+
+    const step = Math.ceil(out.length / MAX_SEGMENTS);
+    const bucketed: MinimapSeg[] = [];
+    for (let i = 0; i < out.length; i += step) {
+      const first = out[i]!;
+      const last = out[Math.min(i + step - 1, out.length - 1)]!;
+      // Merge bucket: keep the first seg's kind + primaryIndex (so clicks
+      // jump to the first item of the bucket), but extend the end range
+      // to cover the whole bucket's time span.
+      if (first.kind === "idle") {
+        bucketed.push({
+          kind: "idle",
+          start: first.start,
+          end: last.end,
+          durationMs: last.end - first.start,
+        });
+      } else if (first.kind === "turn") {
+        bucketed.push({
+          kind: "turn",
+          turn: first.turn,
+          primaryIndex: first.primaryIndex,
+          start: first.start,
+          end: last.end,
+        });
+      } else {
+        bucketed.push({
+          kind: "row",
+          row: first.row,
+          primaryIndex: first.primaryIndex,
+          start: first.start,
+          end: last.end,
+        });
+      }
+    }
+    return bucketed;
   }, [displayRows, safeDur]);
 
   /* Sequential layout with a minimum displayed width per segment.
@@ -1703,6 +1793,11 @@ function CollapsedTurnRow({
         borderBottom: "1px solid var(--af-border-subtle)",
         transition: "background 0.08s",
         scrollMarginTop: stickyOffset,
+        // Browser-level culling. Collapsed turns are tall (first msg +
+        // steps + conclusion + bottom bar), so reserve more height than
+        // a plain transcript row.
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 320px",
       }}
     >
       {/* Col 1 — Chevron (grid column 1). Aligns with the 20px empty
@@ -2258,6 +2353,12 @@ function TranscriptRow({
             : "transparent",
         transition: "background 0.08s",
         scrollMarginTop: stickyOffset,
+        // Browser-level row culling: skip paint/layout for off-screen
+        // rows. The browser only does the full render work when the row
+        // enters the viewport. `contain-intrinsic-size` tells it how much
+        // height to reserve so the scroll bar is accurate before render.
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 48px",
       }}
       onMouseEnter={(e) => {
         if (!selected) e.currentTarget.style.background = "var(--af-surface-hover)";
@@ -2491,6 +2592,30 @@ function TurnTokenChip({
 /* ------------------------------------------------------------------ */
 
 function DebugList({ events }: { events: SessionEvent[] }) {
+  // Rebuild a JSON view from the structured fields on the event. The
+  // original `raw` field is stripped server-side before serialization
+  // (see app/sessions/[id]/page.tsx) because including the full JSONL
+  // line per event doubles the RSC payload on large sessions. All the
+  // useful data is already on the structured event; this view surfaces
+  // it in the same shape you'd get from the raw JSONL.
+  const shapeForDebug = (e: SessionEvent) => ({
+    type: e.rawType,
+    index: e.index,
+    uuid: e.uuid,
+    parentUuid: e.parentUuid,
+    timestamp: e.timestamp,
+    role: e.role,
+    messageId: e.messageId,
+    stopReason: e.stopReason,
+    model: e.model,
+    requestId: e.requestId,
+    toolName: e.toolName,
+    toolUseId: e.toolUseId,
+    attachmentType: e.attachmentType,
+    usage: e.usage,
+    blocks: e.blocks,
+  });
+
   return (
     <div style={{ padding: "8px 0" }}>
       {events.map((e) => (
@@ -2499,6 +2624,8 @@ function DebugList({ events }: { events: SessionEvent[] }) {
           style={{
             borderBottom: "1px solid var(--af-border-subtle)",
             padding: "8px 12px",
+            contentVisibility: "auto",
+            containIntrinsicSize: "auto 40px",
           }}
         >
           <summary
@@ -2525,7 +2652,7 @@ function DebugList({ events }: { events: SessionEvent[] }) {
               color: "var(--af-text-secondary)",
             }}
           >
-            {JSON.stringify(e.raw, null, 2)}
+            {JSON.stringify(shapeForDebug(e), null, 2)}
           </pre>
         </details>
       ))}

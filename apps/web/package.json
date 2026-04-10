@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@claude-sessions/parser": "workspace:*",
+    "@tanstack/react-virtual": "^3.13.23",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "next": "16.2.2",

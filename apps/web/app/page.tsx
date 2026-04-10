@@ -230,7 +230,7 @@ export default async function DashboardHome() {
           ) : (
             recentSessions.map((s) => (
               <Link
-                key={s.id}
+                key={`${s.projectDir}/${s.id}`}
                 href={`/sessions/${s.id}`}
                 style={{
                   display: "grid",

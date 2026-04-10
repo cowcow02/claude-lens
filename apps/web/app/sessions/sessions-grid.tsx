@@ -120,7 +120,11 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
           }}
         >
           {filtered.map((s) => (
-            <SessionCard key={s.id} session={s} />
+            // Compose key from projectDir + id because Claude Code reuses
+            // session UUIDs when the same conversation continues across
+            // git worktrees — same UUID in two project dirs is a real
+            // pattern in `~/.claude/projects/`.
+            <SessionCard key={`${s.projectDir}/${s.id}`} session={s} />
           ))}
         </div>
       )}

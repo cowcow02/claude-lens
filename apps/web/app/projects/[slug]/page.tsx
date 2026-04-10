@@ -249,7 +249,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ slug
         <div>
           {projectSessions.map((s) => (
             <Link
-              key={s.id}
+              key={`${s.projectDir}/${s.id}`}
               href={`/sessions/${s.id}`}
               style={{
                 display: "grid",
