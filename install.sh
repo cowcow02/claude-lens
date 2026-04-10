@@ -95,6 +95,30 @@ info "Building parser..."
 pnpm -F @claude-lens/parser build >/dev/null 2>&1
 ok "Parser built"
 
+# ─── Check if already running ────────────────────────────────────
+if curl -s --max-time 2 "http://localhost:$PORT/" >/dev/null 2>&1; then
+  ok "Claude Lens is already running on http://localhost:$PORT"
+  echo ""
+  if command -v open &>/dev/null; then
+    open "http://localhost:$PORT"
+  elif command -v xdg-open &>/dev/null; then
+    xdg-open "http://localhost:$PORT"
+  else
+    info "Open http://localhost:$PORT in your browser"
+  fi
+  exit 0
+fi
+
+# Check if something else is using the port.
+if lsof -i ":$PORT" >/dev/null 2>&1; then
+  OTHER_PID=$(lsof -ti ":$PORT" 2>/dev/null | head -1)
+  OTHER_CMD=$(ps -p "$OTHER_PID" -o comm= 2>/dev/null || echo "unknown")
+  warn "Port $PORT is in use by $OTHER_CMD (PID $OTHER_PID)"
+  # Try the next port.
+  PORT=$((PORT + 1))
+  info "Trying port $PORT instead..."
+fi
+
 # ─── Start server ────────────────────────────────────────────────
 info "Starting dashboard on http://localhost:$PORT ..."
 echo ""
@@ -111,4 +135,4 @@ echo ""
 }) &
 
 # Run in foreground so Ctrl+C stops it cleanly
-pnpm -F @claude-lens/web dev
+pnpm -F @claude-lens/web dev -- -p "$PORT"
