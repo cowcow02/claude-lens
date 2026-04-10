@@ -48,8 +48,22 @@ function runNpmInstall(): boolean {
 
 /** Re-exec the CLI with the same arguments (after update). */
 function reExec(): never {
-  const result = spawnSync(process.argv[0], process.argv.slice(1), { stdio: "inherit" });
+  const result = spawnSync(process.argv[0], process.argv.slice(1), {
+    stdio: "inherit",
+    env: { ...process.env, __CLAUDE_LENS_UPDATED: "1" },
+  });
   process.exit(result.status ?? 0);
+}
+
+/**
+ * Returns true if the CLI is running from a local development path
+ * (i.e., not a global npm install). Skip auto-update in dev mode.
+ */
+function isDevMode(): boolean {
+  // When running via `node packages/cli/dist/index.js`, argv[1] is a local path.
+  // Global installs go through a shim in the npm prefix bin directory.
+  const script = process.argv[1] ?? "";
+  return script.includes("packages/cli/") || script.includes("packages\\cli\\");
 }
 
 /**
@@ -57,6 +71,9 @@ function reExec(): never {
  * Called at the start of `claude-lens start`.
  */
 export async function checkForUpdate(): Promise<void> {
+  if (isDevMode()) return; // skip in local dev
+  if (process.env.__CLAUDE_LENS_UPDATED === "1") return; // prevent re-exec loop
+
   const latest = await fetchLatestVersion();
   if (latest === null) return; // offline or error
 

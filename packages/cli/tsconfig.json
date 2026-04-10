@@ -8,8 +8,5 @@
     "declaration": false,
     "sourceMap": false
   },
-  "include": ["src"],
-  "references": [
-    { "path": "../parser" }
-  ]
+  "include": ["src"]
 }
