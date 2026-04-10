@@ -377,8 +377,9 @@ export default async function DashboardHome({
                     fontFamily: "var(--font-mono)",
                     textAlign: "right",
                   }}
+                  title="Active time (filters out idle gaps)"
                 >
-                  {formatDuration(s.durationMs)}
+                  {formatDuration(s.airTimeMs ?? s.durationMs)}
                 </div>
                 <div
                   style={{

@@ -198,6 +198,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
   }, [scrollIntent, selectedIndex]);
 
   const { events, durationMs, totalUsage, model, eventCount, projectName } = session;
+  const airTimeMs = session.airTimeMs ?? durationMs;
 
   /** Build the full presentation stream once. */
   const allRows = useMemo(() => buildPresentation(events), [events]);
@@ -371,8 +372,11 @@ export function SessionView({ session }: { session: SessionDetail }) {
           <InlineStatDivider />
           <InlineStat icon={<Folder size={12} />} value={projectName} truncate />
           <InlineStatDivider />
-          {durationMs !== undefined && (
-            <InlineStat icon={<Clock size={12} />} value={formatDurationHeader(durationMs)} />
+          {airTimeMs !== undefined && (
+            <InlineStat
+              icon={<Clock size={12} />}
+              value={formatDurationHeader(airTimeMs)}
+            />
           )}
           <InlineStatDivider />
           <InlineTokenStat usage={totalUsage} />

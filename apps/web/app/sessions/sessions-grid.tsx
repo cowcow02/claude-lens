@@ -35,7 +35,14 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
           s.projectName.toLowerCase().includes(q),
       );
     }
-    if (sortBy === "longest") rows.sort((a, b) => (b.durationMs ?? 0) - (a.durationMs ?? 0));
+    // "Longest" uses active time (airTimeMs), not wall-clock duration.
+    // Otherwise a session that sat idle for 14 days with one message
+    // would out-rank a session that was actively coding for 4 hours.
+    if (sortBy === "longest")
+      rows.sort(
+        (a, b) =>
+          (b.airTimeMs ?? b.durationMs ?? 0) - (a.airTimeMs ?? a.durationMs ?? 0),
+      );
     else if (sortBy === "most-tokens")
       rows.sort(
         (a, b) =>
@@ -232,7 +239,10 @@ function SessionCard({ session: s }: { session: SessionMeta }) {
       >
         <Stat icon={<MessagesSquare size={11} />} label={`${s.turnCount ?? 0} turn${s.turnCount === 1 ? "" : "s"}`} />
         <Stat icon={<Wrench size={11} />} label={`${s.toolCallCount ?? 0} tools`} />
-        <Stat icon={<Clock size={11} />} label={formatDuration(s.durationMs)} />
+        <Stat
+          icon={<Clock size={11} />}
+          label={formatDuration(s.airTimeMs ?? s.durationMs)}
+        />
         <span style={{ marginLeft: "auto" }}>{formatTokens(totalTokens)}</span>
       </div>
     </Link>
