@@ -1,3 +1,5 @@
+import { forceUpdate } from "../updater.js";
+
 export async function update(): Promise<void> {
-  console.log("Update command not yet implemented.");
+  await forceUpdate();
 }
