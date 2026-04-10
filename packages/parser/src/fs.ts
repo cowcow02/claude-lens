@@ -26,7 +26,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseTranscript } from "./parser.js";
-import type { SessionDetail, SessionMeta } from "./types.js";
+import type { SessionDetail, SessionEvent, SessionMeta, SubagentRun, Usage } from "./types.js";
 
 export const DEFAULT_ROOT = path.join(os.homedir(), ".claude", "projects");
 
@@ -263,7 +263,195 @@ export async function getSession(
   const files = await walkJsonlFiles(root);
   const hit = files.find((f) => sessionIdFromFileName(f.fileName) === id);
   if (!hit) return null;
-  return getCachedDetail(hit);
+  const detail = await getCachedDetail(hit);
+  if (!detail) return detail;
+
+  // Hydrate sub-agent runs if Claude Code wrote any. The directory is
+  // a sibling of the .jsonl file, named after the session uuid (no
+  // extension), with `subagents/agent-<id>.jsonl` + `.meta.json` inside.
+  const sessionStartMs = detail.firstTimestamp ? Date.parse(detail.firstTimestamp) : undefined;
+  const subagentsDir = path.join(
+    path.dirname(hit.fullPath),
+    sessionIdFromFileName(hit.fileName),
+    "subagents",
+  );
+  const subagents = await loadSubagents(subagentsDir, sessionStartMs, detail.events);
+  return { ...detail, subagents };
+}
+
+/* ================================================================= */
+/*  Subagent loading                                                 */
+/* ================================================================= */
+
+const BLANK_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+type SubagentMeta = { agentType?: string; description?: string };
+
+/**
+ * Quick-pass parser for a subagent JSONL — we don't run the full
+ * parseTranscript on it because the UI only needs aggregate timing +
+ * usage for the timeline. The detail view would lazily load the full
+ * transcript on click.
+ */
+function summarizeSubagentLines(lines: unknown[]): {
+  startMs?: number;
+  endMs?: number;
+  totalUsage: Usage;
+  eventCount: number;
+  finalPreview?: string;
+} {
+  let startMs: number | undefined;
+  let endMs: number | undefined;
+  const totalUsage: Usage = { ...BLANK_USAGE };
+  const seenMessageIds = new Set<string>();
+  let finalPreview: string | undefined;
+  let eventCount = 0;
+
+  for (const raw of lines) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    eventCount++;
+
+    const ts = typeof r.timestamp === "string" ? Date.parse(r.timestamp) : NaN;
+    if (!Number.isNaN(ts)) {
+      if (startMs === undefined || ts < startMs) startMs = ts;
+      if (endMs === undefined || ts > endMs) endMs = ts;
+    }
+
+    if (r.type === "assistant") {
+      const m = r.message as Record<string, unknown> | undefined;
+      if (!m) continue;
+
+      // Token dedup by message.id (same fix as the main parser).
+      const mid = typeof m.id === "string" ? m.id : undefined;
+      if (mid && !seenMessageIds.has(mid)) {
+        seenMessageIds.add(mid);
+        const u = m.usage as Record<string, unknown> | undefined;
+        if (u) {
+          const toNum = (v: unknown) => (typeof v === "number" ? v : 0);
+          totalUsage.input += toNum(u.input_tokens);
+          totalUsage.output += toNum(u.output_tokens);
+          totalUsage.cacheRead += toNum(u.cache_read_input_tokens);
+          totalUsage.cacheWrite += toNum(u.cache_creation_input_tokens);
+        }
+      }
+
+      // Track the most recent assistant text block as the "final preview".
+      const content = m.content as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block?.type === "text" && typeof block.text === "string") {
+            finalPreview = String(block.text).slice(0, 240);
+          }
+        }
+      }
+    }
+  }
+
+  return { startMs, endMs, totalUsage, eventCount, finalPreview };
+}
+
+/**
+ * Walk a session's `subagents/` dir, parse each agent-*.jsonl + .meta.json
+ * pair, and return one SubagentRun per file. Matches each subagent to its
+ * parent Agent tool_use call by `description` (the most reliable signal —
+ * Claude Code copies the prompt's `description` into both meta.json and
+ * the parent's tool_use input).
+ */
+async function loadSubagents(
+  dir: string,
+  sessionStartMs: number | undefined,
+  parentEvents: SessionEvent[],
+): Promise<SubagentRun[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+
+  // Build a description → parent Agent tool_use lookup from the parent's
+  // events. We scan the raw blocks (since `raw` may have been stripped at
+  // the page boundary, we use the structured `blocks` field instead).
+  type ParentRef = { toolUseId: string; parentUuid: string; runInBackground: boolean };
+  const byDesc = new Map<string, ParentRef>();
+  for (const e of parentEvents) {
+    if (e.role !== "tool-call" || e.toolName !== "Agent") continue;
+    for (const b of e.blocks) {
+      if (b?.type !== "tool_use" || b.name !== "Agent") continue;
+      const input = (b.input as Record<string, unknown>) ?? {};
+      const desc = typeof input.description === "string" ? input.description : undefined;
+      if (!desc) continue;
+      byDesc.set(desc, {
+        toolUseId: b.id,
+        parentUuid: e.uuid ?? "",
+        runInBackground: input.run_in_background === true,
+      });
+    }
+  }
+
+  const jsonlFiles = entries.filter((f) => f.startsWith("agent-") && f.endsWith(".jsonl"));
+  const runs = await Promise.all(
+    jsonlFiles.map(async (f): Promise<SubagentRun | null> => {
+      const agentId = f.replace(/^agent-/, "").replace(/\.jsonl$/, "");
+      const jsonlPath = path.join(dir, f);
+      const metaPath = path.join(dir, `agent-${agentId}.meta.json`);
+
+      let meta: SubagentMeta = {};
+      try {
+        const raw = await fs.readFile(metaPath, "utf8");
+        meta = JSON.parse(raw);
+      } catch {
+        // Some subagents may not have a meta sidecar — fall through with
+        // an empty record.
+      }
+
+      let lines: unknown[];
+      try {
+        lines = await readJsonlFile(jsonlPath);
+      } catch {
+        return null;
+      }
+
+      const summary = summarizeSubagentLines(lines);
+      const description = meta.description ?? "(no description)";
+      const parentRef = byDesc.get(description);
+
+      const startTOffsetMs =
+        sessionStartMs !== undefined && summary.startMs !== undefined
+          ? Math.max(0, summary.startMs - sessionStartMs)
+          : undefined;
+      const endTOffsetMs =
+        sessionStartMs !== undefined && summary.endMs !== undefined
+          ? Math.max(0, summary.endMs - sessionStartMs)
+          : undefined;
+      const durationMs =
+        summary.startMs !== undefined && summary.endMs !== undefined
+          ? summary.endMs - summary.startMs
+          : undefined;
+
+      return {
+        agentId,
+        agentType: meta.agentType ?? "unknown",
+        description,
+        startMs: summary.startMs,
+        endMs: summary.endMs,
+        durationMs,
+        startTOffsetMs,
+        endTOffsetMs,
+        eventCount: summary.eventCount,
+        totalUsage: summary.totalUsage,
+        parentUuid: parentRef?.parentUuid,
+        parentToolUseId: parentRef?.toolUseId,
+        runInBackground: parentRef?.runInBackground,
+        finalPreview: summary.finalPreview,
+      };
+    }),
+  );
+
+  return runs
+    .filter((r): r is SubagentRun => r !== null)
+    .sort((a, b) => (a.startMs ?? 0) - (b.startMs ?? 0));
 }
 
 /* ================================================================= */

@@ -94,6 +94,47 @@ export type SessionMeta = {
   turnCount?: number;
 };
 
+/**
+ * One subagent invocation. Claude Code stores subagent transcripts in a
+ * sibling `<session-uuid>/subagents/agent-<agentId>.jsonl` (+ .meta.json)
+ * structure. Every line in those files carries `isSidechain: true` and
+ * the `agentId`. We surface them as a separate timeline so the UI can
+ * visualize parallelism — e.g. a background research agent that ran for
+ * 5 minutes alongside the main session.
+ */
+export type SubagentRun = {
+  /** Internal id from the file name and `agentId` field on every line. */
+  agentId: string;
+  /** From meta.json — "general-purpose", "Explore", or a custom subagent type. */
+  agentType: string;
+  /** Short human description from meta.json — usually the prompt's `description`. */
+  description: string;
+  /** Wall-clock start (first event ts in the subagent transcript) */
+  startMs?: number;
+  /** Wall-clock end (last event ts in the subagent transcript) */
+  endMs?: number;
+  /** Subagent duration in ms */
+  durationMs?: number;
+  /** Start time relative to the parent session's t=0, in ms */
+  startTOffsetMs?: number;
+  /** End time relative to the parent session's t=0, in ms */
+  endTOffsetMs?: number;
+  /** Number of JSONL events in the subagent transcript */
+  eventCount: number;
+  /** Aggregate token usage of the subagent (deduped per message.id) */
+  totalUsage: Usage;
+  /** Parent assistant message uuid that issued the Agent tool_use call */
+  parentUuid?: string;
+  /** Parent Agent tool_use id, when matchable via description */
+  parentToolUseId?: string;
+  /** Whether the parent dispatched it with run_in_background=true */
+  runInBackground?: boolean;
+  /** Final text output from the subagent (last assistant text block) */
+  finalPreview?: string;
+};
+
 export type SessionDetail = SessionMeta & {
   events: SessionEvent[];
+  /** Sub-agent runs spawned during this session, sorted by start time. */
+  subagents?: SubagentRun[];
 };

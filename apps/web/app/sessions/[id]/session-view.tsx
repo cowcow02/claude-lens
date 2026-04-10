@@ -17,7 +17,12 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ContentBlock, SessionDetail, SessionEvent } from "@claude-sessions/parser";
+import type {
+  ContentBlock,
+  SessionDetail,
+  SessionEvent,
+  SubagentRun,
+} from "@claude-sessions/parser";
 import {
   buildPresentation,
   buildMegaRows,
@@ -450,13 +455,16 @@ export function SessionView({ session }: { session: SessionDetail }) {
 
         {/* Mini-map — adapts to whatever the transcript list is currently
             showing. In "Turns" mode a collapsed turn becomes ONE wide block
-            spanning its duration. In flat modes, each row is atomic. */}
+            spanning its duration. In flat modes, each row is atomic. The
+            `subagents` prop adds parallel lanes below the main timeline,
+            one bar per subagent run, positioned at the same x-scale. */}
         <Minimap
           displayRows={displayRows}
           durationMs={durationMs ?? 0}
           selectedIndex={selectedIndex}
           onSelect={scrollToIndex}
           headerOffset={headerH}
+          subagents={session.subagents}
         />
       </div>
 
@@ -902,17 +910,24 @@ function Minimap({
   selectedIndex,
   onSelect,
   headerOffset,
+  subagents,
 }: {
   displayRows: DisplayRow[];
   durationMs: number;
   selectedIndex: number | null;
   onSelect: (i: number) => void;
   headerOffset: number;
+  subagents?: SubagentRun[];
 }) {
   const WIDTH = 1400;
-  const HEIGHT = 28;
+  /** Main timeline height. Sub-agent lanes stack below this. */
+  const MAIN_H = 28;
+  /** Per-subagent lane height including the inner gap. */
+  const SUB_LANE_H = 11;
+  /** Gap between the main timeline and the sub-agent lanes (when present). */
+  const SUB_LANE_GAP = 6;
   const BAR_TOP = 3;
-  const BAR_BOT = HEIGHT - 3;
+  const BAR_BOT = MAIN_H - 3;
   const BAR_H = BAR_BOT - BAR_TOP;
   /** Gap subtracted from each segment's width so blocks never touch. */
   const GAP = 3;
@@ -929,6 +944,7 @@ function Minimap({
     row?: PresentationRow;
     turn?: TurnMegaRow;
     idleMs?: number;
+    subagent?: SubagentRun;
   } | null>(null);
   const [playheadMs, setPlayheadMs] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1188,6 +1204,44 @@ function Minimap({
     return last ? last.x + last.w : WIDTH;
   };
 
+  // ---- Sub-agent lane assignment -------------------------------------
+  // Place each subagent in the lowest lane index where it doesn't
+  // collide with the most recent bar in that lane. Greedy left→right
+  // sweep — O(N×L) where L is the number of lanes (small in practice).
+  // Returns a Map agentId → laneIndex plus the total lane count.
+  const { laneOf, laneCount } = useMemo(() => {
+    if (!subagents || subagents.length === 0) {
+      return { laneOf: new Map<string, number>(), laneCount: 0 };
+    }
+    const sorted = [...subagents].sort(
+      (a, b) => (a.startTOffsetMs ?? 0) - (b.startTOffsetMs ?? 0),
+    );
+    const laneEnds: number[] = [];
+    const laneOf = new Map<string, number>();
+    for (const s of sorted) {
+      const start = s.startTOffsetMs ?? 0;
+      const end = s.endTOffsetMs ?? start + 1;
+      let assigned = -1;
+      for (let i = 0; i < laneEnds.length; i++) {
+        if (laneEnds[i]! <= start) {
+          assigned = i;
+          break;
+        }
+      }
+      if (assigned === -1) {
+        assigned = laneEnds.length;
+        laneEnds.push(0);
+      }
+      laneEnds[assigned] = end;
+      laneOf.set(s.agentId, assigned);
+    }
+    return { laneOf, laneCount: laneEnds.length };
+  }, [subagents]);
+
+  const SUB_BLOCK_TOP = MAIN_H + SUB_LANE_GAP;
+  const SUB_LANES_H = laneCount > 0 ? laneCount * SUB_LANE_H : 0;
+  const TOTAL_H = MAIN_H + (laneCount > 0 ? SUB_LANE_GAP + SUB_LANES_H : 0);
+
   return (
     <div
       ref={containerRef}
@@ -1202,11 +1256,11 @@ function Minimap({
       onMouseLeave={() => setHover(null)}
     >
       <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        viewBox={`0 0 ${WIDTH} ${TOTAL_H}`}
         preserveAspectRatio="none"
         style={{
           width: "100%",
-          height: HEIGHT,
+          height: TOTAL_H,
           display: "block",
           overflow: "visible",
         }}
@@ -1316,13 +1370,66 @@ function Minimap({
           );
         })}
 
-        {/* Playhead — positioned against the relaxed layout, not raw time. */}
+        {/* Sub-agent lanes — one row per lane, colored by agentType.
+            Background-mode runs are highlighted with a brighter fill +
+            extra dashed outline so you can spot true parallelism at a
+            glance. Bars use the same msToX mapping as the main timeline
+            so the subagent's start/end aligns vertically with whatever
+            was happening in the main session at that time. */}
+        {laneCount > 0 && subagents && (
+          <g>
+            {/* Faint divider line above the subagent lane block */}
+            <line
+              x1={0}
+              x2={WIDTH}
+              y1={MAIN_H + SUB_LANE_GAP / 2}
+              y2={MAIN_H + SUB_LANE_GAP / 2}
+              stroke="var(--af-border-subtle)"
+              strokeWidth="0.6"
+              strokeDasharray="2 4"
+            />
+            {subagents.map((s) => {
+              const lane = laneOf.get(s.agentId) ?? 0;
+              if (s.startTOffsetMs === undefined || s.endTOffsetMs === undefined) return null;
+              const startX = msToX(s.startTOffsetMs);
+              const endX = msToX(s.endTOffsetMs);
+              // Minimum 8px so a 78-second subagent in a 16-hour session is
+              // still wide enough to read + hit-test. Long subagents render
+              // at their actual proportional width.
+              const w = Math.max(endX - startX, 8);
+              const y = SUB_BLOCK_TOP + lane * SUB_LANE_H;
+              const h = SUB_LANE_H - 2;
+              const fill = subagentColor(s.agentType, s.runInBackground);
+              return (
+                <g key={s.agentId}>
+                  <rect
+                    x={startX}
+                    y={y}
+                    width={w}
+                    height={h}
+                    fill={fill}
+                    stroke={s.runInBackground ? "#fff" : "transparent"}
+                    strokeWidth={s.runInBackground ? 0.5 : 0}
+                    strokeDasharray={s.runInBackground ? "1.5 1.5" : undefined}
+                    rx="2"
+                    style={{ cursor: "pointer" }}
+                    onMouseEnter={(e) => setHover({ clientX: e.clientX, subagent: s })}
+                  />
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* Playhead — positioned against the relaxed layout, not raw time.
+            Spans the full SVG height (main + subagent lanes) so you can see
+            which subagents were running at the current scroll position. */}
         {playheadMs !== null && (
           <line
             x1={msToX(playheadMs)}
             x2={msToX(playheadMs)}
             y1={0}
-            y2={HEIGHT}
+            y2={TOTAL_H}
             stroke="#0F172A"
             strokeWidth="1.25"
             strokeDasharray="2 2"
@@ -1339,10 +1446,84 @@ function Minimap({
           row={hover.row}
           turn={hover.turn}
           idleMs={hover.idleMs}
+          subagent={hover.subagent}
         />
+      )}
+
+      {/* Sub-agent legend strip — only when there are subagent lanes. */}
+      {laneCount > 0 && subagents && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            marginTop: 6,
+            fontSize: 10,
+            color: "var(--af-text-tertiary)",
+          }}
+        >
+          <span style={{ fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Sub-agents
+          </span>
+          <span>·</span>
+          <span>
+            {subagents.length} run{subagents.length === 1 ? "" : "s"}
+          </span>
+          <span style={{ marginLeft: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {Array.from(new Set(subagents.map((s) => s.agentType))).map((type) => (
+              <span
+                key={type}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+              >
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 8,
+                    height: 8,
+                    borderRadius: 2,
+                    background: subagentColor(type, false),
+                  }}
+                />
+                {type}
+              </span>
+            ))}
+            {subagents.some((s) => s.runInBackground) && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 8,
+                    height: 8,
+                    borderRadius: 2,
+                    background: "transparent",
+                    border: "1px dashed var(--af-text-secondary)",
+                  }}
+                />
+                background
+              </span>
+            )}
+          </span>
+        </div>
       )}
     </div>
   );
+}
+
+/** Color a sub-agent bar by its type. Background runs use a brighter
+ *  variant of their color so true parallelism is visually distinct from
+ *  blocking subagent calls (where the parent waits and there's no
+ *  meaningful overlap with main session work). */
+function subagentColor(agentType: string, background?: boolean): string {
+  const palette: Record<string, [string, string]> = {
+    "general-purpose": ["#5C84C3", "#7BA3DC"],
+    Explore: ["#A855F7", "#C57BFF"],
+    Plan: ["#F59E0B", "#FFBD3D"],
+    "code-reviewer": ["#34D399", "#5EE5B0"],
+    "playwright-qa-verifier": ["#22D3EE", "#67E8F9"],
+    "claude-code-guide": ["#EC4899", "#F472B6"],
+  };
+  const [base, bright] = palette[agentType] ?? ["#8A8580", "#A8A19A"];
+  return background ? bright : base;
 }
 
 function MinimapHoverCard({
@@ -1351,16 +1532,127 @@ function MinimapHoverCard({
   row,
   turn,
   idleMs,
+  subagent,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>;
   clientX: number;
   row?: PresentationRow;
   turn?: TurnMegaRow;
   idleMs?: number;
+  subagent?: SubagentRun;
 }) {
   const rect = containerRef.current?.getBoundingClientRect();
   const localX = rect ? clientX - rect.left : 0;
   const left = Math.min(Math.max(localX - 140, 8), (rect?.width ?? 1400) - 300);
+
+  if (subagent) {
+    const startOff = formatOffset(subagent.startTOffsetMs);
+    const endOff = formatOffset(subagent.endTOffsetMs);
+    const dur = subagent.durationMs !== undefined ? formatGap(subagent.durationMs) : "";
+    const totalIn =
+      subagent.totalUsage.input + subagent.totalUsage.cacheRead + subagent.totalUsage.cacheWrite;
+    return (
+      <div
+        style={{
+          position: "absolute",
+          top: -12,
+          left,
+          transform: "translateY(-100%)",
+          zIndex: 100,
+          background: "#0F172A",
+          color: "#F1F5F9",
+          borderRadius: 10,
+          padding: "12px 14px",
+          fontSize: 11,
+          pointerEvents: "none",
+          boxShadow: "0 6px 24px rgba(15,23,42,0.22)",
+          maxWidth: 440,
+          minWidth: 280,
+          lineHeight: 1.45,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 8,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 4,
+              background: subagentColor(subagent.agentType, subagent.runInBackground),
+              color: "#fff",
+            }}
+          >
+            {subagent.agentType}
+          </span>
+          {subagent.runInBackground && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 600,
+                padding: "1px 6px",
+                borderRadius: 3,
+                background: "rgba(251, 191, 36, 0.18)",
+                color: "#FBBF24",
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              }}
+            >
+              background
+            </span>
+          )}
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              opacity: 0.7,
+              marginLeft: "auto",
+            }}
+          >
+            {startOff} → {endOff} · {dur}
+          </span>
+        </div>
+        <div style={{ fontWeight: 500, marginBottom: 6 }}>{subagent.description}</div>
+        <div
+          style={{
+            fontSize: 10,
+            opacity: 0.65,
+            display: "flex",
+            gap: 8,
+            paddingTop: 6,
+            borderTop: "1px solid rgba(241,245,249,0.08)",
+          }}
+        >
+          <span>{subagent.eventCount} events</span>
+          <span>·</span>
+          <span style={{ fontFamily: "var(--font-mono)" }}>
+            {formatTokens(totalIn)}/{formatTokens(subagent.totalUsage.output)} tok
+          </span>
+        </div>
+        {subagent.finalPreview && (
+          <div
+            style={{
+              marginTop: 6,
+              opacity: 0.78,
+              fontStyle: "italic",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            → {subagent.finalPreview}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (idleMs !== undefined) {
     return (
