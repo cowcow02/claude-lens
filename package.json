@@ -10,6 +10,8 @@
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
+    "smoke": "node scripts/smoke.mjs",
+    "verify": "pnpm typecheck && pnpm smoke",
     "clean": "turbo clean && rm -rf node_modules"
   },
   "devDependencies": {
