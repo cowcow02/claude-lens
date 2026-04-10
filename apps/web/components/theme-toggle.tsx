@@ -6,6 +6,7 @@ import { Moon, Sun } from "lucide-react";
 type Theme = "light" | "dark";
 
 const STORAGE_KEY = "claude-lens:theme";
+const COOKIE_NAME = "claude-lens-theme";
 
 function readStoredTheme(): Theme | null {
   if (typeof window === "undefined") return null;
@@ -26,21 +27,30 @@ function systemTheme(): Theme {
 function applyTheme(theme: Theme) {
   if (typeof document === "undefined") return;
   document.documentElement.setAttribute("data-theme", theme);
+  // Set cookie so the server can read it on next navigation — this
+  // is the FOUC-free alternative to inline <script> tags, which
+  // Next.js 16 errors on regardless of strategy.
+  try {
+    document.cookie = `${COOKIE_NAME}=${theme};path=/;max-age=${365 * 24 * 60 * 60};samesite=lax`;
+  } catch {
+    // ignore
+  }
 }
 
 /**
  * Theme toggle button.
  *
- * The initial theme is set **before** React hydrates via an inline
- * script in `app/layout.tsx` (see ThemeScript), so there's no FOUC.
- * This component only handles the click interaction and keeps the
- * icon in sync after a user toggle.
+ * On first mount, reads the stored theme from localStorage (or falls
+ * back to system preference), applies it to the DOM, and sets a
+ * cookie so the next server render can pick it up.
+ *
+ * The server reads the cookie in layout.tsx and sets data-theme on
+ * <html> during SSR — so after the first visit there's no FOUC.
  */
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>("dark");
   const [hydrated, setHydrated] = useState(false);
 
-  // Read the actual current theme set by ThemeScript before React took over.
   useEffect(() => {
     const attr = document.documentElement.getAttribute("data-theme");
     if (attr === "light" || attr === "dark") {
@@ -64,8 +74,6 @@ export function ThemeToggle() {
     }
   };
 
-  // Render a stable placeholder on first paint so SSR and client match.
-  // Once hydrated we know which icon to show.
   return (
     <button
       type="button"
@@ -98,4 +106,3 @@ export function ThemeToggle() {
     </button>
   );
 }
-

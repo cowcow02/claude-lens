@@ -90,10 +90,11 @@ info "Installing dependencies..."
 pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 ok "Dependencies installed"
 
-# ─── Build parser ────────────────────────────────────────────────
-info "Building parser..."
+# ─── Build ───────────────────────────────────────────────────────
+info "Building (this takes ~15s on first run)..."
 pnpm -F @claude-lens/parser build >/dev/null 2>&1
-ok "Parser built"
+pnpm -F @claude-lens/web build >/dev/null 2>&1
+ok "Production build ready"
 
 # ─── Check if already running ────────────────────────────────────
 if curl -s --max-time 2 "http://localhost:$PORT/" >/dev/null 2>&1; then
@@ -134,5 +135,7 @@ echo ""
   fi
 }) &
 
-# Run in foreground so Ctrl+C stops it cleanly
-pnpm -F @claude-lens/web dev -- -p "$PORT"
+# Run production server in foreground so Ctrl+C stops it cleanly.
+# `next start` serves the pre-built .next output — no Turbopack
+# compilation per request, optimized React bundles, ~3x faster.
+pnpm -F @claude-lens/web start -- -p "$PORT"
