@@ -30,7 +30,7 @@ export function getServerStatus(): ServerStatus {
 }
 
 export async function startServer(opts: { port?: number } = {}): Promise<{ pid: number; port: number }> {
-  const port = opts.port ?? parseInt(process.env.CLAUDE_LENS_PORT ?? "", 10) || DEFAULT_PORT;
+  const port = opts.port ?? (parseInt(process.env.CLAUDE_LENS_PORT ?? "", 10) || DEFAULT_PORT);
   const serverJs = join(appDir(), "server.js");
 
   if (!existsSync(serverJs)) {
