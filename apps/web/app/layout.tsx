@@ -20,11 +20,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        {/* Runs before React hydrates so there's no FOUC on page load. */}
-        <ThemeScript />
-      </head>
       <body>
+        {/* next/script with beforeInteractive — injects synchronously
+            before hydration so there's no flash of the wrong theme. */}
+        <ThemeScript />
         <div style={{ display: "flex", minHeight: "100vh" }}>
           <Sidebar projects={projects} totalSessions={totalSessions} />
           <main

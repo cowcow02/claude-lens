@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
+import Script from "next/script";
 
 type Theme = "light" | "dark";
 
@@ -102,7 +103,12 @@ export function ThemeToggle() {
 /**
  * Inline script that runs before React hydrates and picks up the
  * persisted theme (or system preference) so there's no flash of the
- * wrong theme on page load. Mount this inside <head>.
+ * wrong theme on page load.
+ *
+ * Next 16 warns (and errors in dev) when you render a bare <script>
+ * inside a React tree, so we use next/script with strategy
+ * "beforeInteractive" — it emits the script synchronously before
+ * hydration, which is exactly what we need for FOUC prevention.
  */
 export function ThemeScript() {
   const code = `
@@ -118,5 +124,9 @@ export function ThemeScript() {
   }
 })();
 `;
-  return <script dangerouslySetInnerHTML={{ __html: code }} />;
+  return (
+    <Script id="claude-sessions-theme-init" strategy="beforeInteractive">
+      {code}
+    </Script>
+  );
 }

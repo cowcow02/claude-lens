@@ -150,6 +150,37 @@ export function SessionView({ session }: { session: SessionDetail }) {
     return () => obs.disconnect();
   }, []);
 
+  /** Collapsed-header state. When the user scrolls past the first
+   *  ~80px, hide the breadcrumb / title / meta-stats / tabs row and
+   *  keep only the mini-map visible. This matches the pattern in
+   *  Claude's own Sessions UI — you trade discovery info for more
+   *  screen real-estate once you're deep in reading. Hysteresis (60
+   *  vs 80) prevents flicker at the boundary. */
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const main = el.closest("main") as HTMLElement | null;
+    if (!main) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const y = main.scrollTop;
+      // Expand hysteresis: collapse at >80, expand when back under 30.
+      setCollapsed((prev) => (prev ? y > 30 : y > 80));
+    };
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(update);
+    };
+    update();
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      main.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
   // Run after every render that changed scrollIntent — the DOM is now
   // guaranteed up-to-date (including any drawer grid reflow).
   useEffect(() => {
@@ -261,6 +292,20 @@ export function SessionView({ session }: { session: SessionDetail }) {
           padding: "18px 40px 0",
         }}
       >
+        {/* Collapsible top block — breadcrumb + title + meta-stats + tabs.
+            Hidden once the user scrolls past ~80px so the mini-map alone
+            stays pinned and the transcript gets more vertical space. */}
+        <div
+          style={{
+            maxHeight: collapsed ? 0 : 500,
+            opacity: collapsed ? 0 : 1,
+            overflow: "hidden",
+            transition:
+              "max-height 0.24s ease, opacity 0.18s ease, margin-bottom 0.24s ease",
+            marginBottom: collapsed ? 0 : 0,
+            pointerEvents: collapsed ? "none" : "auto",
+          }}
+        >
         {/* Breadcrumb */}
         <div
           style={{
@@ -440,12 +485,20 @@ export function SessionView({ session }: { session: SessionDetail }) {
             <Copy size={12} /> Copy all
           </button>
         </div>
+        </div>{/* /collapsible top block */}
 
         {/* Mini-map — adapts to whatever the transcript list is currently
             showing. In "Turns" mode a collapsed turn becomes ONE wide block
             spanning its duration. In flat modes, each row is atomic. The
             `subagents` prop adds parallel lanes below the main timeline,
-            one bar per subagent run, positioned at the same x-scale. */}
+            one bar per subagent run, positioned at the same x-scale.
+            This strip stays visible even when the header is collapsed. */}
+        <div
+          style={{
+            paddingBottom: collapsed ? 10 : 0,
+            transition: "padding-bottom 0.2s ease",
+          }}
+        >
         <Minimap
           displayRows={displayRows}
           durationMs={durationMs ?? 0}
@@ -454,6 +507,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
           headerOffset={headerH}
           subagents={session.subagents}
         />
+        </div>
       </div>
 
       {/* ============================ CONTENT ============================ */}

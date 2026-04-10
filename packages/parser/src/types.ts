@@ -129,8 +129,21 @@ export type SubagentRun = {
   parentToolUseId?: string;
   /** Whether the parent dispatched it with run_in_background=true */
   runInBackground?: boolean;
-  /** Final text output from the subagent (last assistant text block) */
+  /** Final text output from the subagent (last assistant text block), truncated */
   finalPreview?: string;
+  /** Full text of the final assistant message (untruncated) */
+  finalText?: string;
+  /** Full prompt the parent sent via the Agent tool_use.input.prompt — the
+   *  task description that the subagent was given. */
+  prompt?: string;
+  /** Model the subagent ran on (from the first assistant line's message.model) */
+  model?: string;
+  /** Per-tool-name call counts, ordered by count desc */
+  toolCalls?: { name: string; count: number }[];
+  /** Tool-call count total (sum of all toolCalls[i].count) */
+  toolCallCount?: number;
+  /** Number of assistant messages the subagent emitted */
+  assistantMessageCount?: number;
 };
 
 export type SessionDetail = SessionMeta & {
