@@ -15,15 +15,23 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { ArrowDown, Radio } from "lucide-react";
 
 export function TailMode({ isLive }: { isLive: boolean }) {
-  const [tailing, setTailing] = useState(false);
+  const [tailing, setTailing] = useState(isLive);
   const [atBottom, setAtBottom] = useState(false);
   const mainRef = useRef<HTMLElement | null>(null);
   const userScrolledRef = useRef(false);
 
-  // Find the <main> scroll container once.
+  // Find the <main> scroll container once and auto-scroll if live.
   useEffect(() => {
     mainRef.current = document.querySelector("main");
-  }, []);
+    if (isLive && mainRef.current) {
+      // Small delay so the initial render settles before scrolling.
+      const t = setTimeout(() => {
+        userScrolledRef.current = false;
+        mainRef.current?.scrollTo({ top: mainRef.current.scrollHeight, behavior: "smooth" });
+      }, 300);
+      return () => clearTimeout(t);
+    }
+  }, [isLive]);
 
   // Track whether we're at the bottom.
   useEffect(() => {

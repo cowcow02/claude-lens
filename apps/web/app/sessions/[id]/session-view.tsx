@@ -11,6 +11,7 @@ import {
   Copy,
   Cpu,
   Folder,
+  GitPullRequest,
   Wrench,
   X,
 } from "lucide-react";
@@ -21,10 +22,12 @@ import type {
   SessionDetail,
   SessionEvent,
   SubagentRun,
+  PrMarker,
 } from "@claude-lens/parser";
 import {
   buildPresentation,
   buildMegaRows,
+  detectPrMarkers,
   rowPrimaryIndex as rowPrimaryIndexFromLib,
   type MegaRow,
   type PresentationRow,
@@ -231,6 +234,9 @@ export function SessionView({ session }: { session: SessionDetail }) {
     return !Number.isNaN(ms) && Date.now() - ms < 45_000;
   })();
 
+  /** Detect PR creations in this session. */
+  const prMarkers = useMemo(() => detectPrMarkers(session), [session]);
+
   /** Build the full presentation stream once. */
   const allRows = useMemo(() => buildPresentation(events), [events]);
 
@@ -414,6 +420,24 @@ export function SessionView({ session }: { session: SessionDetail }) {
           <InlineTokenStat usage={totalUsage} />
           <InlineStatDivider />
           <InlineStat value={`${eventCount} events`} />
+          {prMarkers.length > 0 && (
+            <>
+              <InlineStatDivider />
+              <InlineStat
+                icon={<GitPullRequest size={12} />}
+                value={
+                  prMarkers.length === 1
+                    ? prMarkers[0].title
+                      ? `PR${prMarkers[0].prNumber ? ` #${prMarkers[0].prNumber}` : ""}: ${prMarkers[0].title}`
+                      : prMarkers[0].prNumber
+                        ? `PR #${prMarkers[0].prNumber}`
+                        : "1 PR shipped"
+                    : `${prMarkers.length} PRs shipped`
+                }
+                truncate
+              />
+            </>
+          )}
           <span style={{ marginLeft: "auto" }}>
             {session.firstTimestamp && (
               <span
@@ -465,7 +489,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
             onChange={(e) =>
               setFilter(e.target.value as "meaningful" | "all" | PresentationRowKind)
             }
-            style={{ height: 32, padding: "4px 12px !important" }}
+            className="sl-compact-select"
           >
             {FILTER_MODES.map((r) => (
               <option key={r.value} value={r.value}>
@@ -537,6 +561,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
           headerOffset={headerH}
           subagents={session.subagents}
           collapsed={collapsed}
+          prMarkers={prMarkers}
           selectedSubagentId={selectedSubagentId}
           onSelectSubagent={(id) => {
             setSelectedSubagentId(id);
@@ -567,6 +592,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
             onSelect={setSelectedIndex}
             onToggleTurn={toggleTurn}
             stickyOffset={headerH + 16}
+            isSessionLive={isSessionLive}
           />
         ) : (
           <DebugList events={events} />
@@ -1071,6 +1097,7 @@ function Minimap({
   collapsed,
   selectedSubagentId,
   onSelectSubagent,
+  prMarkers,
 }: {
   displayRows: DisplayRow[];
   durationMs: number;
@@ -1081,6 +1108,7 @@ function Minimap({
   collapsed?: boolean;
   selectedSubagentId?: string | null;
   onSelectSubagent?: (id: string | null) => void;
+  prMarkers?: PrMarker[];
 }) {
   const WIDTH = 1400;
   /** Main timeline height. Sub-agent lanes stack below this. */
@@ -1108,6 +1136,7 @@ function Minimap({
     turn?: TurnMegaRow;
     idleMs?: number;
     subagent?: SubagentRun;
+    pr?: PrMarker;
   } | null>(null);
   const [playheadMs, setPlayheadMs] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1335,7 +1364,7 @@ function Minimap({
     const raws = segs.map((s) => ((s.end - s.start) / safeDur) * WIDTH);
     const enforced = raws.map((w) => Math.max(w, MIN_DISPLAY_WIDTH));
     const total = enforced.reduce((a, b) => a + b, 0);
-    const scale = total > WIDTH ? WIDTH / total : 1;
+    const scale = WIDTH / total;
     const out: { x: number; w: number }[] = [];
     let cursor = 0;
     for (const w of enforced) {
@@ -1599,6 +1628,45 @@ function Minimap({
           </g>
         )}
 
+        {/* PR markers — diamond + vertical line at each `gh pr create` */}
+        {prMarkers?.map((pr, i) => {
+          if (pr.tOffsetMs === undefined) return null;
+          const x = msToX(pr.tOffsetMs);
+          return (
+            <g
+              key={`pr-${i}`}
+              style={{ cursor: "pointer" }}
+              onMouseEnter={(e) => setHover({ clientX: e.clientX, pr })}
+            >
+              <line
+                x1={x}
+                x2={x}
+                y1={0}
+                y2={TOTAL_H}
+                stroke="#8b5cf6"
+                strokeWidth="1.5"
+                strokeDasharray="4 3"
+                opacity="0.7"
+              />
+              {/* Invisible wider hit area for easier hovering */}
+              <rect
+                x={x - 8}
+                y={0}
+                width={16}
+                height={TOTAL_H}
+                fill="transparent"
+              />
+              {/* Diamond marker at mid-height */}
+              <polygon
+                points={`${x},${MAIN_H / 2 - 5} ${x + 5},${MAIN_H / 2} ${x},${MAIN_H / 2 + 5} ${x - 5},${MAIN_H / 2}`}
+                fill="#8b5cf6"
+                stroke="var(--af-surface)"
+                strokeWidth="1.5"
+              />
+            </g>
+          );
+        })}
+
         {/* Playhead — positioned against the relaxed layout, not raw time.
             Spans the full SVG height (main + subagent lanes) so you can see
             which subagents were running at the current scroll position. */}
@@ -1625,7 +1693,7 @@ function Minimap({
           turn={hover.turn}
           idleMs={hover.idleMs}
           subagent={hover.subagent}
-          openDown={collapsed}
+          pr={hover.pr}
         />
       )}
 
@@ -1712,7 +1780,7 @@ function MinimapHoverCard({
   turn,
   idleMs,
   subagent,
-  openDown,
+  pr,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>;
   clientX: number;
@@ -1720,16 +1788,14 @@ function MinimapHoverCard({
   turn?: TurnMegaRow;
   idleMs?: number;
   subagent?: SubagentRun;
-  /** When true, open below the mini-map (collapsed header mode). */
-  openDown?: boolean;
+  pr?: PrMarker;
 }) {
   const rect = containerRef.current?.getBoundingClientRect();
   const localX = rect ? clientX - rect.left : 0;
   const left = Math.min(Math.max(localX - 140, 8), (rect?.width ?? 1400) - 300);
-  // Position: normally above (translateY -100%), but below when collapsed.
-  const posStyle = openDown
-    ? { top: "calc(100% + 8px)", left }
-    : { top: -12, left, transform: "translateY(-100%)" };
+  // Always open below the minimap. The minimap lives inside the sticky
+  // header, so there's never reliable space above it for a tooltip.
+  const posStyle = { top: "calc(100% + 8px)", left };
 
   if (subagent) {
     const startOff = formatOffset(subagent.startTOffsetMs);
@@ -1834,6 +1900,54 @@ function MinimapHoverCard({
             → {subagent.finalPreview}
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (pr) {
+    const label = pr.title
+      ? `PR${pr.prNumber ? ` #${pr.prNumber}` : ""}: ${pr.title}`
+      : pr.prNumber
+        ? `PR #${pr.prNumber}`
+        : "PR created";
+    return (
+      <div
+        style={{
+          position: "absolute",
+          ...posStyle,
+          zIndex: 100,
+          background: "#0F172A",
+          color: "#F1F5F9",
+          borderRadius: 10,
+          padding: "10px 14px",
+          fontSize: 11,
+          pointerEvents: "none",
+          boxShadow: "0 6px 24px rgba(15,23,42,0.22)",
+          maxWidth: 360,
+          minWidth: 200,
+          lineHeight: 1.45,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 4,
+              background: "#8b5cf6",
+              color: "#fff",
+            }}
+          >
+            PR
+          </span>
+          {pr.tOffsetMs !== undefined && (
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.7 }}>
+              at {formatOffset(pr.tOffsetMs)}
+            </span>
+          )}
+        </div>
+        <div style={{ fontWeight: 500 }}>{label}</div>
       </div>
     );
   }
@@ -2018,9 +2132,7 @@ function MinimapHoverCard({
     <div
       style={{
         position: "absolute",
-        top: -12,
-        left,
-        transform: "translateY(-100%)",
+        ...posStyle,
         zIndex: 100,
         background: "#0F172A",
         color: "#F1F5F9",
@@ -2090,6 +2202,7 @@ function TranscriptList({
   onSelect,
   onToggleTurn,
   stickyOffset,
+  isSessionLive,
 }: {
   displayRows: DisplayRow[];
   rowRefs: React.MutableRefObject<Record<number, HTMLDivElement | null>>;
@@ -2097,7 +2210,20 @@ function TranscriptList({
   onSelect: (i: number | null) => void;
   onToggleTurn: (firstPrimaryIndex: number) => void;
   stickyOffset: number;
+  isSessionLive?: boolean;
 }) {
+  // Find the last collapsed turn index so we can mark it as in-progress
+  // when the session is live.
+  let lastCollapsedTurnIdx = -1;
+  if (isSessionLive) {
+    for (let i = displayRows.length - 1; i >= 0; i--) {
+      if (displayRows[i].kind === "turn-collapsed") {
+        lastCollapsedTurnIdx = i;
+        break;
+      }
+    }
+  }
+
   const out: React.ReactNode[] = [];
   for (let i = 0; i < displayRows.length; i++) {
     const d = displayRows[i];
@@ -2111,6 +2237,7 @@ function TranscriptList({
           turn={d.turn}
           stickyOffset={stickyOffset}
           onClick={() => onToggleTurn(idx)}
+          inProgress={i === lastCollapsedTurnIdx}
           refCb={(el) => {
             rowRefs.current[idx] = el;
           }}
@@ -2209,6 +2336,7 @@ function CollapsedTurnRow({
   onClick,
   refCb,
   stickyOffset,
+  inProgress,
 }: {
   turn: TurnMegaRow;
   /** Fires when the user wants to fully expand this turn into the
@@ -2217,6 +2345,7 @@ function CollapsedTurnRow({
   onClick: () => void;
   refCb: (el: HTMLDivElement | null) => void;
   stickyOffset: number;
+  inProgress?: boolean;
 }) {
   const theme = ROLE_THEMES.agent;
   const s = turn.summary;
@@ -2322,10 +2451,31 @@ function CollapsedTurnRow({
           </div>
         )}
 
-        {/* 3. Conclusion agent message — heuristically selected to skip
-            short codas triggered by task-notifications. Same expand
-            pattern as first. */}
-        {finalAgentRow && (
+        {/* 3. Conclusion / in-progress indicator */}
+        {inProgress && finalAgentRow ? (
+          <ExpandableMessage
+            label={`In progress · ${turn.rows.length} step${turn.rows.length === 1 ? "" : "s"} so far`}
+            labelPrefix={
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: "#ef4444",
+                  animation: "cs-live-pulse 1.6s ease-in-out infinite",
+                }}
+              />
+            }
+            row={finalAgentRow as Extract<PresentationRow, { kind: "agent" }>}
+            expanded={lastExpanded}
+            onToggle={(e) => {
+              stop(e);
+              setLastExpanded((v) => !v);
+            }}
+            arrow
+          />
+        ) : finalAgentRow ? (
           <ExpandableMessage
             label="Conclusion"
             row={finalAgentRow as Extract<PresentationRow, { kind: "agent" }>}
@@ -2336,7 +2486,7 @@ function CollapsedTurnRow({
             }}
             arrow
           />
-        )}
+        ) : null}
 
         {/* Bottom bar — explicit "expand full turn" action */}
         <button
@@ -2402,12 +2552,14 @@ function CollapsedTurnRow({
  *  rendering for reading the agent's intent/conclusion in context. */
 function ExpandableMessage({
   label,
+  labelPrefix,
   row,
   expanded,
   onToggle,
   arrow,
 }: {
   label: string;
+  labelPrefix?: React.ReactNode;
   row: Extract<PresentationRow, { kind: "agent" }>;
   expanded: boolean;
   onToggle: (e: React.MouseEvent) => void;
@@ -2447,6 +2599,7 @@ function ExpandableMessage({
           fontWeight: 600,
         }}
       >
+        {labelPrefix}
         {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         {label}
       </div>
@@ -2716,7 +2869,7 @@ function TurnStatsLine({
  *  MAX_INLINE_STEPS items with an overflow indicator. */
 function TurnStepsList({ rows }: { rows: PresentationRow[] }) {
   const overflow = Math.max(0, rows.length - MAX_INLINE_STEPS);
-  const shown = overflow > 0 ? rows.slice(0, MAX_INLINE_STEPS) : rows;
+  const shown = overflow > 0 ? rows.slice(-MAX_INLINE_STEPS) : rows;
 
   return (
     <div
@@ -2729,9 +2882,6 @@ function TurnStepsList({ rows }: { rows: PresentationRow[] }) {
         paddingBlock: 2,
       }}
     >
-      {shown.map((r, i) => (
-        <TurnStepLine key={i} row={r} />
-      ))}
       {overflow > 0 && (
         <div
           style={{
@@ -2739,12 +2889,15 @@ function TurnStepsList({ rows }: { rows: PresentationRow[] }) {
             color: "var(--af-text-tertiary)",
             fontStyle: "italic",
             paddingLeft: 12,
-            paddingTop: 2,
+            paddingBottom: 2,
           }}
         >
-          … {overflow} more step{overflow === 1 ? "" : "s"}
+          {overflow} earlier step{overflow === 1 ? "" : "s"} …
         </div>
       )}
+      {shown.map((r, i) => (
+        <TurnStepLine key={i} row={r} />
+      ))}
     </div>
   );
 }

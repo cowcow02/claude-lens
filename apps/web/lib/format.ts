@@ -60,26 +60,54 @@ export function formatDuration(ms?: number): string {
   return mm ? `${h}h ${mm}m` : `${h}h`;
 }
 
+/**
+ * Estimate USD cost from token usage.
+ * Uses Claude Opus pricing (per million tokens):
+ *   Input: $15, Output: $75, Cache read: $1.50, Cache write: $18.75
+ */
+export function estimateCost(usage: {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}): number {
+  return (
+    (usage.input / 1_000_000) * 15 +
+    (usage.output / 1_000_000) * 75 +
+    (usage.cacheRead / 1_000_000) * 1.5 +
+    (usage.cacheWrite / 1_000_000) * 18.75
+  );
+}
+
+export function formatCost(usd: number): string {
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 1) return `$${usd.toFixed(2)}`;
+  if (usd < 100) return `$${usd.toFixed(2)}`;
+  if (usd < 1000) return `$${usd.toFixed(1)}`;
+  return `$${usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
 /** URL-safe slug for a project dir. */
 export function projectSlug(projectDir: string): string {
   return projectDir;
 }
 
 /**
- * Show just the last path segment as the project name:
- * "/Users/me/Repo/kipwise/agentic-knowledge-system" → "agentic-knowledge-system"
+ * Show the last two path segments as the project name.
+ * If the result exceeds `maxLen`, prefix with "…".
  *
- * For context, use prettyProjectParent() to get the parent segment.
- * Full path is available via title/tooltip on hover.
+ * "/Users/me/Repo/kipwise/agentic-knowledge-system" → "kipwise/agentic-knowledge-system"
+ * A very long result → "…se/agentic-knowledge-system"
  */
-export function prettyProjectName(projectName: string): string {
+export function prettyProjectName(
+  projectName: string,
+  maxLen = 35,
+): string {
   const parts = projectName.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? projectName;
-}
-
-/** The parent segment above the project name, for subtitle display. */
-export function prettyProjectParent(projectName: string): string | undefined {
-  const parts = projectName.split("/").filter(Boolean);
-  if (parts.length < 2) return undefined;
-  return parts[parts.length - 2];
+  const name =
+    parts.length >= 2
+      ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}`
+      : parts[parts.length - 1] ?? projectName;
+  if (name.length <= maxLen) return name;
+  return "…" + name.slice(name.length - maxLen + 1);
 }

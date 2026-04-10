@@ -20,8 +20,8 @@ import { DateRangeFilter } from "@/components/date-range-filter";
 import { LiveBadge } from "@/components/live-badge";
 import { cutoffMs, parseRange } from "@/lib/date-range";
 import { listSessions } from "@/lib/data";
-import { formatDuration, formatTokens, formatRelative, prettyProjectName } from "@/lib/format";
-import { ListTree, Activity, Clock, Zap } from "lucide-react";
+import { formatDuration, formatTokens, formatRelative, prettyProjectName, estimateCost, formatCost } from "@/lib/format";
+import { ListTree, Activity, Clock, Zap, DollarSign } from "lucide-react";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -70,7 +70,15 @@ export default async function DashboardHome({
   const totalInput =
     metrics.totalTokens.input + metrics.totalTokens.cacheRead + metrics.totalTokens.cacheWrite;
 
-  const recentSessions = sessions.slice(0, 6);
+  const LIVE_WINDOW_MS = 45_000;
+  const now = Date.now();
+  const liveSessions = sessions.filter((s) => {
+    if (!s.lastTimestamp) return false;
+    const ms = Date.parse(s.lastTimestamp);
+    return !Number.isNaN(ms) && now - ms <= LIVE_WINDOW_MS;
+  });
+  const liveIds = new Set(liveSessions.map((s) => s.id));
+  const recentSessions = sessions.filter((s) => !liveIds.has(s.id)).slice(0, 6);
 
   return (
     <div
@@ -115,6 +123,92 @@ export default async function DashboardHome({
         <DateRangeFilter current={range} />
       </header>
 
+      {/* Live sessions */}
+      {liveSessions.length > 0 && (
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${Math.min(liveSessions.length, 3)}, 1fr)`,
+            gap: 12,
+          }}
+        >
+          {liveSessions.map((s) => (
+            <Link
+              key={`${s.projectDir}/${s.id}`}
+              href={`/sessions/${s.id}`}
+              className="af-panel"
+              style={{
+                display: "block",
+                padding: "16px 20px",
+                borderLeft: "3px solid #ef4444",
+                transition: "border-color 0.15s",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 8,
+                }}
+              >
+                <LiveBadge mtimeIso={s.lastTimestamp} size="md" />
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: "var(--af-text-tertiary)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  {prettyProjectName(s.projectName)}
+                </span>
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "var(--af-text)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  lineHeight: 1.4,
+                }}
+              >
+                {s.firstUserPreview || (
+                  <em style={{ color: "var(--af-text-tertiary)" }}>(no user message)</em>
+                )}
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--af-text-secondary)",
+                  marginTop: 6,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={s.lastAgentPreview}
+              >
+                {s.lastAgentPreview || <em style={{ color: "var(--af-text-tertiary)" }}>—</em>}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 16,
+                  marginTop: 10,
+                  fontSize: 10,
+                  color: "var(--af-text-tertiary)",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                <span>{s.turnCount ?? 0} turns</span>
+                <span>{formatDuration(s.airTimeMs ?? s.durationMs)}</span>
+                <span>{s.toolCallCount ?? 0} tools</span>
+              </div>
+            </Link>
+          ))}
+        </section>
+      )}
+
       {/* Metric cards */}
       <section
         style={{
@@ -152,11 +246,11 @@ export default async function DashboardHome({
           tooltip="Total tool invocations (Bash, Read, Edit, Write, Grep, Glob, Agent, etc.) across all sessions. Higher counts typically mean more complex tasks."
         />
         <MetricCard
-          label="Input tokens"
-          value={formatTokens(totalInput)}
-          sub={`${formatTokens(metrics.totalTokens.output)} output`}
-          icon={<Activity size={13} />}
-          tooltip="Total input tokens sent to the model (fresh + cache-read + cache-write). Cache reads are billed at ~10% of regular input. Output is tokens the model generated."
+          label="Est. cost"
+          value={formatCost(estimateCost(metrics.totalTokens))}
+          sub={`${formatTokens(totalInput)} in · ${formatTokens(metrics.totalTokens.output)} out`}
+          icon={<DollarSign size={13} />}
+          tooltip={`Estimated spend using Claude Opus pricing.\nInput: ${formatTokens(metrics.totalTokens.input)} ($${((metrics.totalTokens.input / 1e6) * 15).toFixed(2)})\nOutput: ${formatTokens(metrics.totalTokens.output)} ($${((metrics.totalTokens.output / 1e6) * 75).toFixed(2)})\nCache read: ${formatTokens(metrics.totalTokens.cacheRead)} ($${((metrics.totalTokens.cacheRead / 1e6) * 1.5).toFixed(2)})\nCache write: ${formatTokens(metrics.totalTokens.cacheWrite)} ($${((metrics.totalTokens.cacheWrite / 1e6) * 18.75).toFixed(2)})`}
         />
         <MetricCard
           label="Code changes"
@@ -182,11 +276,11 @@ export default async function DashboardHome({
         />
       </section>
 
-      {/* Heatmap + chart */}
+      {/* Heatmap + Daily activity — side by side */}
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr",
+          gridTemplateColumns: "1fr 2fr",
           gap: 16,
         }}
       >

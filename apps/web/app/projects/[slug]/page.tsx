@@ -18,8 +18,10 @@ import {
   formatRelative,
   prettyProjectName,
   shortId,
+  estimateCost,
+  formatCost,
 } from "@/lib/format";
-import { ArrowLeft, Clock, ListTree, Zap, Activity, GitPullRequest } from "lucide-react";
+import { ArrowLeft, Clock, ListTree, Zap, DollarSign, GitPullRequest } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -111,30 +113,51 @@ export default async function ProjectDetail({ params }: { params: Promise<{ slug
           value={metrics.sessionCount.toLocaleString()}
           sub={`${metrics.totalTurns.toLocaleString()} turns`}
           icon={<ListTree size={13} />}
+          tooltip="Total Claude Code sessions in this project. A 'turn' is one user message that starts an agent response cycle."
         />
         <MetricCard
           label="Air-time"
           value={formatDuration(refinedAirMs || metrics.totalAirTimeMs)}
           sub={`avg ${formatDuration(metrics.avgDurationMs)}`}
           icon={<Clock size={13} />}
+          tooltip="Sum of time the agent was actively working. Gaps longer than 3 minutes (user away, laptop lid closed) are excluded — this is NOT wall-clock duration."
         />
         <MetricCard
           label="Tool calls"
           value={metrics.totalToolCalls.toLocaleString()}
           sub={`avg ${Math.round(metrics.totalToolCalls / Math.max(1, metrics.sessionCount))}`}
           icon={<Zap size={13} />}
+          tooltip="Total tool invocations (Bash, Read, Edit, Write, Grep, Glob, Agent, etc.) across all sessions. Higher counts typically mean more complex tasks."
         />
         <MetricCard
-          label="Tokens"
-          value={formatTokens(totalTokens)}
-          sub={`${formatTokens(metrics.totalTokens.output)} output`}
-          icon={<Activity size={13} />}
+          label="Est. cost"
+          value={formatCost(estimateCost(metrics.totalTokens))}
+          sub={`${formatTokens(totalTokens)} in · ${formatTokens(metrics.totalTokens.output)} out`}
+          icon={<DollarSign size={13} />}
+          tooltip={`Estimated spend using Claude Opus pricing.\nInput: ${formatTokens(metrics.totalTokens.input)} ($${((metrics.totalTokens.input / 1e6) * 15).toFixed(2)})\nOutput: ${formatTokens(metrics.totalTokens.output)} ($${((metrics.totalTokens.output / 1e6) * 75).toFixed(2)})\nCache read: ${formatTokens(metrics.totalTokens.cacheRead)} ($${((metrics.totalTokens.cacheRead / 1e6) * 1.5).toFixed(2)})\nCache write: ${formatTokens(metrics.totalTokens.cacheWrite)} ($${((metrics.totalTokens.cacheWrite / 1e6) * 18.75).toFixed(2)})`}
         />
         <MetricCard
           label="PRs shipped"
           value={String(prMarkers.length)}
           sub={prMarkers.length > 0 ? `${sliced.length} sessions scanned` : "scanned recent 50"}
           icon={<GitPullRequest size={13} />}
+          tooltip="PRs detected by scanning for `gh pr create` Bash commands in session transcripts. Only the most recent 50 sessions are scanned."
+        />
+        <MetricCard
+          label="Code changes"
+          value={
+            <span>
+              <span style={{ color: "var(--af-success)" }}>
+                +{metrics.totalLinesAdded.toLocaleString()}
+              </span>
+              {" "}
+              <span style={{ color: "var(--af-danger)" }}>
+                -{metrics.totalLinesRemoved.toLocaleString()}
+              </span>
+            </span>
+          }
+          sub={`${metrics.totalFilesEdited.toLocaleString()} files edited`}
+          tooltip="Total lines added and removed across all Edit + Write tool calls. Files counted are unique file paths touched by the agent."
         />
         <MetricCard
           label="Parallel peaks"
@@ -142,109 +165,133 @@ export default async function ProjectDetail({ params }: { params: Promise<{ slug
             parallelRuns.length > 0 ? String(Math.max(...parallelRuns.map((r) => r.peak))) : "—"
           }
           sub={`${parallelRuns.length} intervals`}
+          tooltip="Maximum number of Claude Code sessions running simultaneously. Detected via sweep-line over session start/end intervals."
         />
       </section>
 
-      {/* Heatmap */}
-      <div className="af-panel">
-        <div className="af-panel-header">
-          <span>Daily activity</span>
-        </div>
-        <div style={{ padding: 18 }}>
-          <Heatmap buckets={buckets} valueKey="sessions" />
-        </div>
-      </div>
-
-      {/* Activity chart */}
-      <div className="af-panel">
-        <div className="af-panel-header">
-          <span>Per-day breakdown</span>
-        </div>
-        <div style={{ padding: 18 }}>
-          <ActivityChart buckets={buckets} />
-        </div>
-      </div>
-
-      {/* PR timeline */}
-      {prMarkers.length > 0 && (
+      {/* Heatmap + Activity chart — side by side */}
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 2fr",
+          gap: 16,
+        }}
+      >
         <div className="af-panel">
           <div className="af-panel-header">
-            <span>Pull requests shipped</span>
-            <span
-              style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontWeight: 400 }}
-            >
-              detected from `gh pr create` calls
+            <span>Contribution heatmap</span>
+            <span style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontWeight: 400 }}>
+              sessions / day
             </span>
           </div>
-          <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 6 }}>
-            {prMarkers
-              .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
-              .slice(0, 25)
-              .map((m, i) => (
-                <Link
-                  key={i}
-                  href={`/sessions/${m.sessionId}`}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "140px 1fr 90px",
-                    gap: 14,
-                    padding: "10px 14px",
-                    border: "1px solid var(--af-border-subtle)",
-                    borderRadius: 8,
-                    background: "var(--af-surface-hover)",
-                    fontSize: 12,
-                    alignItems: "center",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "var(--af-text-secondary)",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    {formatRelative(m.timestamp)}
-                  </div>
-                  <div
-                    style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      color: "var(--af-text)",
-                    }}
-                    title={m.command}
-                  >
-                    {m.title ?? m.command.replace(/^gh pr create /, "").slice(0, 120)}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: "var(--af-text-tertiary)",
-                      fontFamily: "var(--font-mono)",
-                      textAlign: "right",
-                    }}
-                  >
-                    {m.positionInSession !== undefined
-                      ? `${Math.round(m.positionInSession * 100)}% in`
-                      : "—"}
-                  </div>
-                </Link>
-              ))}
+          <div style={{ padding: 18 }}>
+            <Heatmap buckets={buckets} valueKey="sessions" />
           </div>
         </div>
-      )}
 
-      {/* Parallel runs */}
-      {parallelRuns.length > 0 && (
         <div className="af-panel">
           <div className="af-panel-header">
-            <span>Parallel runs</span>
+            <span>Daily activity</span>
+            <span style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontWeight: 400 }}>
+              click a metric to switch
+            </span>
           </div>
-          <div style={{ padding: 14 }}>
-            <ParallelRunsStrip runs={parallelRuns} />
+          <div style={{ padding: 18 }}>
+            <ActivityChart buckets={buckets} />
           </div>
         </div>
-      )}
+      </section>
+
+      {/* PR timeline + Parallel runs — two-column */}
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: prMarkers.length > 0 && parallelRuns.length > 0 ? "1fr 1fr" : "1fr",
+          gap: 16,
+        }}
+      >
+        {prMarkers.length > 0 && (
+          <div className="af-panel">
+            <div className="af-panel-header">
+              <span>Pull requests shipped</span>
+              <span
+                style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontWeight: 400 }}
+              >
+                detected from `gh pr create` calls
+              </span>
+            </div>
+            <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+              {prMarkers
+                .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+                .slice(0, 25)
+                .map((m, i) => (
+                  <Link
+                    key={i}
+                    href={`/sessions/${m.sessionId}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "100px 1fr 70px",
+                      gap: 10,
+                      padding: "10px 14px",
+                      border: "1px solid var(--af-border-subtle)",
+                      borderRadius: 8,
+                      background: "var(--af-surface-hover)",
+                      fontSize: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--af-text-secondary)",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      {formatRelative(m.timestamp)}
+                    </div>
+                    <div
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: "var(--af-text)",
+                      }}
+                      title={m.command}
+                    >
+                      {m.title ?? m.command.replace(/^gh pr create /, "").slice(0, 120)}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        color: "var(--af-text-tertiary)",
+                        fontFamily: "var(--font-mono)",
+                        textAlign: "right",
+                      }}
+                    >
+                      {m.positionInSession !== undefined
+                        ? `${Math.round(m.positionInSession * 100)}% in`
+                        : "—"}
+                    </div>
+                  </Link>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {parallelRuns.length > 0 && (
+          <div className="af-panel">
+            <div className="af-panel-header">
+              <span>Parallel runs</span>
+              <span style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontWeight: 400 }}>
+                ≥ 2 concurrent sessions
+              </span>
+            </div>
+            <div style={{ padding: 14 }}>
+              <ParallelRunsStrip runs={parallelRuns} />
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* Session list */}
       <div className="af-panel">

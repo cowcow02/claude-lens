@@ -1,4 +1,7 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { type ReactNode, useState } from "react";
+import { Info } from "lucide-react";
 
 export function MetricCard({
   label,
@@ -11,11 +14,12 @@ export function MetricCard({
   value: ReactNode;
   sub?: ReactNode;
   icon?: ReactNode;
-  /** Hover explanation — shown as a native title attribute on the card. */
   tooltip?: string;
 }) {
+  const [showTip, setShowTip] = useState(false);
+
   return (
-    <div className="af-card" style={{ padding: "16px 18px" }} title={tooltip}>
+    <div className="af-card" style={{ padding: "16px 18px", position: "relative" }}>
       <div
         style={{
           display: "flex",
@@ -30,6 +34,23 @@ export function MetricCard({
       >
         {icon}
         <span>{label}</span>
+        {tooltip && (
+          <span
+            style={{
+              marginLeft: "auto",
+              cursor: "help",
+              display: "inline-flex",
+              color: "var(--af-text-tertiary)",
+              opacity: 0.5,
+              transition: "opacity 0.12s",
+            }}
+            onMouseEnter={() => setShowTip(true)}
+            onMouseLeave={() => setShowTip(false)}
+            onClick={() => setShowTip((v) => !v)}
+          >
+            <Info size={12} />
+          </span>
+        )}
       </div>
       <div
         style={{
@@ -44,6 +65,29 @@ export function MetricCard({
       </div>
       {sub && (
         <div style={{ fontSize: 11, color: "var(--af-text-secondary)", marginTop: 4 }}>{sub}</div>
+      )}
+      {showTip && tooltip && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            right: 0,
+            zIndex: 50,
+            background: "#0F172A",
+            color: "#F1F5F9",
+            borderRadius: 8,
+            padding: "10px 12px",
+            fontSize: 11,
+            lineHeight: 1.5,
+            boxShadow: "0 6px 24px rgba(15,23,42,0.22)",
+            pointerEvents: "none",
+          }}
+        >
+          {tooltip.split("\n").map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </div>
       )}
     </div>
   );
