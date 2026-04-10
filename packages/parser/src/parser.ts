@@ -253,9 +253,35 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
   let turnCount = 0;
   let firstUserPreview: string | undefined;
   let lastAgentPreview: string | undefined;
+  let linesAdded = 0;
+  let linesRemoved = 0;
+  const filesEdited = new Set<string>();
 
   for (const e of events) {
-    if (e.role === "tool-call") toolCallCount++;
+    if (e.role === "tool-call") {
+      toolCallCount++;
+      // Count lines added/removed from Edit and Write tool calls.
+      const toolBlock = e.blocks.find(
+        (b) => b && (b as { type?: string }).type === "tool_use",
+      ) as { type: "tool_use"; name: string; input?: Record<string, unknown> } | undefined;
+      if (toolBlock) {
+        const input = toolBlock.input ?? {};
+        const fp = typeof input.file_path === "string" ? (input.file_path as string) : undefined;
+        if (toolBlock.name === "Edit" && fp) {
+          filesEdited.add(fp);
+          const oldStr = typeof input.old_string === "string" ? (input.old_string as string) : "";
+          const newStr = typeof input.new_string === "string" ? (input.new_string as string) : "";
+          const oldLines = oldStr ? oldStr.split("\n").length : 0;
+          const newLines = newStr ? newStr.split("\n").length : 0;
+          linesAdded += Math.max(0, newLines - oldLines);
+          linesRemoved += Math.max(0, oldLines - newLines);
+        } else if (toolBlock.name === "Write" && fp) {
+          filesEdited.add(fp);
+          const content = typeof input.content === "string" ? (input.content as string) : "";
+          linesAdded += content ? content.split("\n").length : 0;
+        }
+      }
+    }
     if (e.role === "user" && !firstUserPreview) {
       // Skip slash command, skill injection, task notification prefixes
       const txt = e.preview;
@@ -324,6 +350,9 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       toolCallCount,
       turnCount,
       airTimeMs,
+      linesAdded,
+      linesRemoved,
+      filesEdited: filesEdited.size,
     },
   };
 }

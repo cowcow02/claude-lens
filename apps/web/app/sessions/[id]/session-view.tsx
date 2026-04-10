@@ -2582,25 +2582,26 @@ function TurnStatsLine({
 
   // Build the Ghostty-style summary phrases.
   const phrases: React.ReactNode[] = [];
+  // Build the summary phrases — past tense for completed turns.
   if (editCount > 0 || writeCount > 0) {
     const fileCount = editCount + writeCount;
     phrases.push(
       <span key="edit">
-        <b style={{ fontWeight: 600 }}>Editing {fileCount} file{fileCount === 1 ? "" : "s"}</b>
+        <b style={{ fontWeight: 600 }}>Edited {fileCount} file{fileCount === 1 ? "" : "s"}</b>
       </span>,
     );
   }
   if (readCount > 0) {
     phrases.push(
       <span key="read">
-        reading <b style={{ fontWeight: 600 }}>{readCount}</b> file{readCount === 1 ? "" : "s"}
+        read <b style={{ fontWeight: 600 }}>{readCount}</b> file{readCount === 1 ? "" : "s"}
       </span>,
     );
   }
   if (bashCount > 0) {
     phrases.push(
       <span key="bash">
-        running <b style={{ fontWeight: 600 }}>{bashCount}</b> bash command{bashCount === 1 ? "" : "s"}
+        ran <b style={{ fontWeight: 600 }}>{bashCount}</b> command{bashCount === 1 ? "" : "s"}
       </span>,
     );
   }
@@ -2615,7 +2616,7 @@ function TurnStatsLine({
   if (agentCount > 0) {
     phrases.push(
       <span key="agent">
-        dispatching <b style={{ fontWeight: 600 }}>{agentCount}</b> sub-agent{agentCount === 1 ? "" : "s"}
+        dispatched <b style={{ fontWeight: 600 }}>{agentCount}</b> sub-agent{agentCount === 1 ? "" : "s"}
       </span>,
     );
   }

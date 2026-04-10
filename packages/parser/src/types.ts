@@ -92,6 +92,12 @@ export type SessionMeta = {
   toolCallCount?: number;
   /** derived: number of user↔agent turns (user inputs count) */
   turnCount?: number;
+  /** derived: total lines added across all Edit + Write tool calls */
+  linesAdded?: number;
+  /** derived: total lines removed across all Edit tool calls */
+  linesRemoved?: number;
+  /** derived: number of unique files touched (Edit + Write) */
+  filesEdited?: number;
   /** derived: sum of event-to-event gaps under the idle threshold
    *  (default 3 minutes) — a close approximation of "how long was
    *  the agent actively working" without counting user-away time,

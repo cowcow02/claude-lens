@@ -284,6 +284,9 @@ export type HighLevelMetrics = {
   totalTurns: number;
   avgTurnsPerSession: number;
   avgDurationMs: number;
+  totalLinesAdded: number;
+  totalLinesRemoved: number;
+  totalFilesEdited: number;
 };
 
 /**
@@ -311,6 +314,9 @@ export function highLevelMetrics(sessions: SessionMeta[]): HighLevelMetrics {
     totalTurns: 0,
     avgTurnsPerSession: 0,
     avgDurationMs: 0,
+    totalLinesAdded: 0,
+    totalLinesRemoved: 0,
+    totalFilesEdited: 0,
   };
   for (const s of sessions) {
     totals.totalDurationMs += s.durationMs ?? 0;
@@ -325,6 +331,9 @@ export function highLevelMetrics(sessions: SessionMeta[]): HighLevelMetrics {
     totals.totalTokens.cacheWrite += s.totalUsage.cacheWrite;
     totals.totalToolCalls += s.toolCallCount ?? 0;
     totals.totalTurns += s.turnCount ?? 0;
+    totals.totalLinesAdded += s.linesAdded ?? 0;
+    totals.totalLinesRemoved += s.linesRemoved ?? 0;
+    totals.totalFilesEdited += s.filesEdited ?? 0;
   }
   if (sessions.length > 0) {
     totals.avgTurnsPerSession = totals.totalTurns / sessions.length;

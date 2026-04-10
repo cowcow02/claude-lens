@@ -159,10 +159,20 @@ export default async function DashboardHome({
           tooltip="Total input tokens sent to the model (fresh + cache-read + cache-write). Cache reads are billed at ~10% of regular input. Output is tokens the model generated."
         />
         <MetricCard
-          label="Avg turns"
-          value={metrics.avgTurnsPerSession.toFixed(1)}
-          sub="per session"
-          tooltip="Average number of user↔agent turns per session. More turns = more interactive; fewer turns = more autonomous (the agent did more per user prompt)."
+          label="Code changes"
+          value={
+            <span>
+              <span style={{ color: "var(--af-success)" }}>
+                +{metrics.totalLinesAdded.toLocaleString()}
+              </span>
+              {" "}
+              <span style={{ color: "var(--af-danger)" }}>
+                -{metrics.totalLinesRemoved.toLocaleString()}
+              </span>
+            </span>
+          }
+          sub={`${metrics.totalFilesEdited.toLocaleString()} files edited`}
+          tooltip="Total lines added and removed across all Edit + Write tool calls. Files counted are unique file paths touched by the agent."
         />
         <MetricCard
           label="Parallel peaks"
