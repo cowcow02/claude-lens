@@ -66,12 +66,20 @@ export function projectSlug(projectDir: string): string {
 }
 
 /**
- * Show just the last 2 path segments: "kipwise/agentic-knowledge-system".
- * Cleaner than the full path for dashboard display. Full path is still
- * available via title/tooltip on hover.
+ * Show just the last path segment as the project name:
+ * "/Users/me/Repo/kipwise/agentic-knowledge-system" → "agentic-knowledge-system"
+ *
+ * For context, use prettyProjectParent() to get the parent segment.
+ * Full path is available via title/tooltip on hover.
  */
 export function prettyProjectName(projectName: string): string {
   const parts = projectName.split("/").filter(Boolean);
-  if (parts.length <= 2) return parts.join("/");
-  return parts.slice(-2).join("/");
+  return parts[parts.length - 1] ?? projectName;
+}
+
+/** The parent segment above the project name, for subtitle display. */
+export function prettyProjectParent(projectName: string): string | undefined {
+  const parts = projectName.split("/").filter(Boolean);
+  if (parts.length < 2) return undefined;
+  return parts[parts.length - 2];
 }

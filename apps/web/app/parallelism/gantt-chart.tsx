@@ -387,13 +387,13 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
           })}
         </svg>
 
-        {/* Hover tooltip */}
+        {/* Hover tooltip — clamped within the chart bounds */}
         {hover && (
           <div
             style={{
               position: "absolute",
-              left: Math.min(hover.x, totalWidth - 320),
-              top: hover.y,
+              left: Math.max(8, Math.min(hover.x, totalWidth - 340)),
+              top: Math.min(hover.y, totalHeight - 100),
               zIndex: 50,
               background: "var(--af-surface-elevated)",
               border: "1px solid var(--af-border-subtle)",
@@ -403,7 +403,7 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
               color: "var(--af-text)",
               pointerEvents: "none",
               boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-              maxWidth: 360,
+              maxWidth: 340,
               lineHeight: 1.45,
             }}
           >
