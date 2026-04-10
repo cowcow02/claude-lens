@@ -1,7 +1,7 @@
 /**
  * Dashboard home — high-level metrics across all Claude Code sessions.
  *
- * Everything here is server-rendered from @claude-sessions/parser/fs, then
+ * Everything here is server-rendered from @claude-lens/parser/fs, then
  * passed down to small interactive client components (heatmap, chart).
  */
 
@@ -11,7 +11,7 @@ import {
   groupByProject,
   highLevelMetrics,
   type SessionMeta,
-} from "@claude-sessions/parser";
+} from "@claude-lens/parser";
 import { Heatmap } from "@/components/heatmap";
 import { ActivityChart } from "@/components/activity-chart";
 import { MetricCard } from "@/components/metric-card";

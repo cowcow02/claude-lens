@@ -23,7 +23,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@claude-sessions/parser':
+      '@claude-lens/parser':
         specifier: workspace:*
         version: link:../../packages/parser
       '@tanstack/react-virtual':

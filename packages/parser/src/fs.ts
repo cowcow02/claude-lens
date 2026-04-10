@@ -1,7 +1,7 @@
 /**
  * Server-side filesystem scanner for Claude Code JSONL transcripts.
  *
- * Lives in its own subpath (`@claude-sessions/parser/fs`) so pure browser
+ * Lives in its own subpath (`@claude-lens/parser/fs`) so pure browser
  * consumers can use the rest of the package without importing node:fs.
  *
  * ----------------------------------------------------------------------

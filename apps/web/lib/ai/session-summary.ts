@@ -36,9 +36,8 @@ import {
   buildPresentation,
   buildMegaRows,
   type SessionDetail,
-  type MegaRow,
   type PresentationRow,
-} from "@claude-sessions/parser";
+} from "@claude-lens/parser";
 import { formatOffset, formatDuration, formatTokens } from "@/lib/format";
 
 /** Max rows from the turn stream to include — guards against absurdly long sessions. */
@@ -75,6 +74,8 @@ function rowPreview(r: PresentationRow): string {
       return `ERROR: ${r.message}`;
     case "task-notification":
       return `BG task ${r.status}: ${r.summary}`;
+    default:
+      return "";
   }
 }
 
@@ -103,7 +104,7 @@ export function summarizeSessionForAI(session: SessionDetail): string {
 
   // Find first user message (skipping slash commands)
   const firstUserRow = rows.find(
-    (r) =>
+    (r: PresentationRow) =>
       r.kind === "user" &&
       !(r.event.preview.startsWith("<command-name>")) &&
       !(r.event.preview.startsWith("Base directory for this skill:")),
@@ -112,22 +113,19 @@ export function summarizeSessionForAI(session: SessionDetail): string {
     firstUserRow?.kind === "user"
       ? firstUserRow.displayBlocks?.[0]?.type === "text"
         ? firstUserRow.displayBlocks[0].text
-        : firstUserRow.event.blocks.find(
-            (b) => b && (b as { type?: string }).type === "text",
-          )?.type === "text"
-          ? (
-              firstUserRow.event.blocks.find(
-                (b) => b && (b as { type?: string }).type === "text",
-              ) as { text: string }
-            ).text
-          : firstUserRow.event.preview
+        : (() => {
+            const tb = firstUserRow.event.blocks.find(
+              (b: { type?: string }) => b?.type === "text",
+            ) as { type: "text"; text: string } | undefined;
+            return tb?.text ?? firstUserRow.event.preview;
+          })()
       : "";
 
   // Errors
-  const errorRows = rows.filter((r) => r.kind === "error");
+  const errorRows = rows.filter((r): r is Extract<PresentationRow, { kind: "error" }> => r.kind === "error");
   const errorSection =
     errorRows.length > 0
-      ? `${errorRows.length} errors, first: "${trunc(errorRows[0]!.kind === "error" ? errorRows[0]!.message : "", 160)}"`
+      ? `${errorRows.length} errors, first: "${trunc(errorRows[0]!.message, 160)}"`
       : "none";
 
   // PR markers (scan events for `gh pr create`)
@@ -137,7 +135,7 @@ export function summarizeSessionForAI(session: SessionDetail): string {
   for (const e of session.events) {
     if (e.role !== "tool-call" || e.toolName !== "Bash") continue;
     const tb = e.blocks.find(
-      (b) => b && (b as { type?: string }).type === "tool_use",
+      (b: unknown) => b && (b as { type?: string }).type === "tool_use",
     ) as { type: "tool_use"; input?: Record<string, unknown> } | undefined;
     const cmd =
       typeof tb?.input?.command === "string" ? (tb.input.command as string) : "";
@@ -161,7 +159,7 @@ export function summarizeSessionForAI(session: SessionDetail): string {
       const r = m.rows[idx];
       if (r?.kind === "agent") {
         const textBlock = r.event.blocks.find(
-          (b) => b && (b as { type?: string }).type === "text",
+          (b: unknown) => b && (b as { type?: string }).type === "text",
         ) as { type: "text"; text: string } | undefined;
         finalText = textBlock?.text ?? r.event.preview;
         break;
@@ -189,7 +187,7 @@ export function summarizeSessionForAI(session: SessionDetail): string {
       const same = first && final && first === final;
       const topToolsInTurn = s.toolNames
         .slice(0, 3)
-        .map((t) => (t.count > 1 ? `${t.name}×${t.count}` : t.name))
+        .map((t: { name: string; count: number }) => (t.count > 1 ? `${t.name}×${t.count}` : t.name))
         .join(", ");
       const stats = `${s.agentMessages} msg, ${s.toolCalls} tools${s.errors > 0 ? `, ${s.errors} err` : ""}`;
       const body = same || !final ? first : `${first} → ${final}`;

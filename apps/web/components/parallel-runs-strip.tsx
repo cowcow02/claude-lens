@@ -1,4 +1,4 @@
-import type { ParallelRun } from "@claude-sessions/parser";
+import type { ParallelRun } from "@claude-lens/parser";
 import { formatDuration } from "@/lib/format";
 
 export function ParallelRunsStrip({ runs }: { runs: ParallelRun[] }) {

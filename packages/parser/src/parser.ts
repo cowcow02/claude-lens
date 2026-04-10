@@ -185,7 +185,7 @@ export type ParseResult = {
 
 /**
  * Parse an array of already-JSON-parsed JSONL lines into events + aggregate
- * metadata. Use `readJsonlFile()` from `@claude-sessions/parser/fs` to get
+ * metadata. Use `readJsonlFile()` from `@claude-lens/parser/fs` to get
  * the raw lines from a file on disk.
  */
 export function parseTranscript(rawLines: unknown[]): ParseResult {

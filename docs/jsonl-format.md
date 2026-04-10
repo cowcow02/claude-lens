@@ -3,7 +3,7 @@
 > **Unofficial, reverse-engineered.** This is the shape Claude Code writes to
 > `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`. It is not documented
 > by Anthropic and may change between Claude Code versions. The parser in
-> `@claude-sessions/parser` is defensive against missing fields.
+> `@claude-lens/parser` is defensive against missing fields.
 
 ## File layout
 

@@ -1,11 +1,11 @@
-# @claude-sessions/parser
+# @claude-lens/parser
 
 Parse [Claude Code](https://claude.com/claude-code) JSONL transcripts into structured event streams — with analytics and presentation helpers for building dashboards.
 
 ## Install
 
 ```bash
-pnpm add @claude-sessions/parser
+pnpm add @claude-lens/parser
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ pnpm add @claude-sessions/parser
 ### Parse raw JSONL lines
 
 ```ts
-import { parseTranscript } from "@claude-sessions/parser";
+import { parseTranscript } from "@claude-lens/parser";
 
 const lines = rawJsonl.split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const { meta, events } = parseTranscript(lines);
@@ -25,7 +25,7 @@ console.log(events[0]?.preview); // one-line summary of the first event
 ### Read sessions from `~/.claude/projects/` (Node)
 
 ```ts
-import { listSessions, getSession } from "@claude-sessions/parser/fs";
+import { listSessions, getSession } from "@claude-lens/parser/fs";
 
 const recent = await listSessions({ limit: 50 });
 const detail = await getSession(recent[0].id);
@@ -34,7 +34,7 @@ const detail = await getSession(recent[0].id);
 ### Transform into presentation rows for a transcript UI
 
 ```ts
-import { buildPresentation, buildMegaRows } from "@claude-sessions/parser";
+import { buildPresentation, buildMegaRows } from "@claude-lens/parser";
 
 const rows = buildPresentation(events); // noise hidden, tool calls merged
 const megaRows = buildMegaRows(rows); // collapse agent loops into turns
@@ -48,7 +48,7 @@ import {
   detectParallelRuns,
   highLevelMetrics,
   groupByProject,
-} from "@claude-sessions/parser";
+} from "@claude-lens/parser";
 
 const buckets = dailyActivity(sessions); // one entry per day, for heatmaps/charts
 const runs = detectParallelRuns(sessions); // periods where multiple sessions ran in parallel
@@ -66,8 +66,8 @@ const overall = highLevelMetrics(sessions);
 
 ## Exports
 
-- `@claude-sessions/parser` — types, parser, presentation, analytics (pure)
-- `@claude-sessions/parser/fs` — filesystem scanner (node:fs only)
+- `@claude-lens/parser` — types, parser, presentation, analytics (pure)
+- `@claude-lens/parser/fs` — filesystem scanner (node:fs only)
 
 ## License
 

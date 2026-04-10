@@ -6,7 +6,7 @@ import Script from "next/script";
 
 type Theme = "light" | "dark";
 
-const STORAGE_KEY = "claude-sessions:theme";
+const STORAGE_KEY = "claude-lens:theme";
 
 function readStoredTheme(): Theme | null {
   if (typeof window === "undefined") return null;
@@ -125,7 +125,7 @@ export function ThemeScript() {
 })();
 `;
   return (
-    <Script id="claude-sessions-theme-init" strategy="beforeInteractive">
+    <Script id="claude-lens-theme-init" strategy="beforeInteractive">
       {code}
     </Script>
   );

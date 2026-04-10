@@ -1,5 +1,5 @@
 /**
- * @claude-sessions/parser
+ * @claude-lens/parser
  *
  * Parse Claude Code JSONL transcripts into structured event streams.
  * Pure — no fs, no network. Use the `/fs` subpath for filesystem scanning.

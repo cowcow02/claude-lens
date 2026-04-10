@@ -1,5 +1,5 @@
 {
-  "name": "@claude-sessions/web",
+  "name": "@claude-lens/web",
   "version": "0.1.0",
   "private": true,
   "description": "Local-only dashboard for Claude Code sessions. Reads ~/.claude/projects/*.jsonl and visualizes agent activity.",
@@ -14,7 +14,7 @@
     "clean": "rm -rf .next .turbo dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@claude-sessions/parser": "workspace:*",
+    "@claude-lens/parser": "workspace:*",
     "@tanstack/react-virtual": "^3.13.23",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",

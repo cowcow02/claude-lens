@@ -22,7 +22,7 @@ export type ProjectRef = {
   lastActiveMs?: number;
 };
 
-const PINS_KEY = "claude-sessions:pinned-projects:v1";
+const PINS_KEY = "claude-lens:pinned-projects:v1";
 
 function loadPins(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -118,7 +118,7 @@ export function Sidebar({
           </div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-0.01em" }}>
-              Claude Sessions
+              Claude Lens
             </div>
             <div style={{ fontSize: 11, color: "var(--af-text-tertiary)" }}>local dashboard</div>
           </div>

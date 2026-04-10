@@ -22,7 +22,7 @@ import type {
   SessionDetail,
   SessionEvent,
   SubagentRun,
-} from "@claude-sessions/parser";
+} from "@claude-lens/parser";
 import {
   buildPresentation,
   buildMegaRows,
@@ -32,7 +32,7 @@ import {
   type PresentationRowKind,
   type TurnMegaRow,
   type TurnSummary,
-} from "@claude-sessions/parser";
+} from "@claude-lens/parser";
 import { formatGap, formatOffset, formatRelative, formatTokens, shortId } from "@/lib/format";
 import { LiveBadge } from "@/components/live-badge";
 import { AskClaudeButton, AskClaudeDrawer } from "@/components/ask-claude";

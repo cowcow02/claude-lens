@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import type { SessionMeta } from "@claude-sessions/parser";
+import type { SessionMeta } from "@claude-lens/parser";
 import {
   formatDuration,
   formatRelative,

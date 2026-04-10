@@ -113,7 +113,7 @@ async function main() {
   const up = await waitForServer();
   if (!up) {
     console.log(`${RED}✗ dev server not reachable at ${BASE}${RESET}`);
-    console.log(`  start it with:  pnpm -F @claude-sessions/web dev`);
+    console.log(`  start it with:  pnpm -F @claude-lens/web dev`);
     process.exit(1);
   }
 

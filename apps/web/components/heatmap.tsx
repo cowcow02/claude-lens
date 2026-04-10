@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import type { DailyBucket } from "@claude-sessions/parser";
+import type { DailyBucket } from "@claude-lens/parser";
 
 /**
  * GitHub-style contribution heatmap.

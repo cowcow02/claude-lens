@@ -1,4 +1,4 @@
-# Claude Sessions
+# Claude Lens
 
 **Local-only, open-source dashboard for [Claude Code](https://claude.com/claude-code) sessions.**
 
@@ -52,8 +52,8 @@ Modeled on Claude's managed-agents Sessions view:
 Requires [pnpm](https://pnpm.io) and Node 20+.
 
 ```bash
-git clone https://github.com/<your-handle>/claude-sessions.git
-cd claude-sessions
+git clone https://github.com/cowcow02/claude-lens.git
+cd claude-lens
 pnpm install
 pnpm dev
 # open http://localhost:3321
@@ -66,23 +66,23 @@ That's it. The app reads `~/.claude/projects/*.jsonl` directly — no database, 
 This is a small pnpm/turbo monorepo:
 
 ```
-claude-sessions/
+claude-lens/
 ├── packages/
-│   └── parser/        # @claude-sessions/parser — pure JSONL parser + analytics
+│   └── parser/        # @claude-lens/parser — pure JSONL parser + analytics
 └── apps/
     └── web/           # Next.js 16 + React 19 + Tailwind v4 dashboard
 ```
 
 ### The parser package
 
-[`@claude-sessions/parser`](./packages/parser/README.md) is a standalone npm package (not yet published) that turns raw Claude Code JSONL lines into:
+[`@claude-lens/parser`](./packages/parser/README.md) is a standalone npm package (not yet published) that turns raw Claude Code JSONL lines into:
 
 - **Structured events** (`SessionEvent[]`) with roles, timestamps, offsets, token usage
 - **Presentation rows** (`PresentationRow[]`) — noise filtered, tool calls merged, task notifications parsed
 - **Mega rows** (`MegaRow[]`) — collapsing agent loops into "turns" between user inputs
 - **Analytics** — daily buckets, parallel-run detection, PR detection, high-level metrics, project rollups
 
-It's pure (no fs, no network), so you can use it in any JS runtime. A filesystem subpath at `@claude-sessions/parser/fs` scans `~/.claude/projects` in Node.
+It's pure (no fs, no network), so you can use it in any JS runtime. A filesystem subpath at `@claude-lens/parser/fs` scans `~/.claude/projects` in Node.
 
 ### The viewer app
 
@@ -116,14 +116,14 @@ Projects you pin (star-button in the sidebar) get promoted to a "Pinned" section
 
 ## Configuration
 
-Zero config by default. The scanner reads `~/.claude/projects` via `DEFAULT_ROOT` in `@claude-sessions/parser/fs`; if your setup is different, fork and override.
+Zero config by default. The scanner reads `~/.claude/projects` via `DEFAULT_ROOT` in `@claude-lens/parser/fs`; if your setup is different, fork and override.
 
 ## Development
 
 ```bash
 pnpm install
 pnpm dev                      # start the web app (port 3321)
-pnpm -F @claude-sessions/parser test        # run parser tests
+pnpm -F @claude-lens/parser test        # run parser tests
 pnpm typecheck                # typecheck everything
 pnpm build                    # build the web app + parser
 ```
@@ -153,10 +153,10 @@ Informed by a scan of the Claude Code dashboard ecosystem ([ccusage](https://git
 - [ ] Audit log for credential leaks / destructive commands — *borrowed from ccboard*
 - [ ] Git commit correlation: interleave commits with session messages — *borrowed from amac0/ClaudeCodeJSONLParser, simonw/claude-code-transcripts*
 - [ ] Live status badges via hook injection (Running / WaitingInput / Stopped) — *borrowed from ccboard, agents-observe*
-- [ ] `npx @claude-sessions/web` distribution — *borrowed from ccusage pattern*
+- [ ] `npx @claude-lens/web` distribution — *borrowed from ccusage pattern*
 
 **Infrastructure**
-- [ ] SQLite cache at `~/.claude/claude-sessions.db` with mtime-based incremental scan (ccboard reports 89x speedup over raw rescans)
+- [ ] SQLite cache at `~/.claude/claude-lens.db` with mtime-based incremental scan (ccboard reports 89x speedup over raw rescans)
 - [ ] Scan additional session paths: `~/Library/Developer/Xcode/CodingAssistant/ClaudeAgentConfig/projects/` (phuryn does this)
 - [ ] Command palette (`⌘K`) for quick session lookup
 - [ ] Compare two sessions side-by-side

@@ -14,7 +14,7 @@
  * changed file so the next RSC render re-parses fresh data.
  */
 
-import { invalidateFile, DEFAULT_ROOT } from "@claude-sessions/parser/fs";
+import { invalidateFile, DEFAULT_ROOT } from "@claude-lens/parser/fs";
 import { watch, promises as fs } from "node:fs";
 import path from "node:path";
 

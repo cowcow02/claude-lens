@@ -1,5 +1,5 @@
 import { listSessions } from "@/lib/data";
-import { groupByProject } from "@claude-sessions/parser";
+import { groupByProject } from "@claude-lens/parser";
 import { formatDuration, formatRelative, formatTokens, prettyProjectName } from "@/lib/format";
 import Link from "next/link";
 

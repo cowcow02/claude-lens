@@ -1,5 +1,5 @@
 {
-  "name": "@claude-sessions/parser",
+  "name": "@claude-lens/parser",
   "version": "0.1.0",
   "description": "Parse Claude Code JSONL transcripts into structured, displayable events. Includes analytics helpers for dashboards.",
   "license": "MIT",

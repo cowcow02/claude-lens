@@ -7,7 +7,7 @@ import {
   detectPrMarkers,
   highLevelMetrics,
   sessionAirTimeMs,
-} from "@claude-sessions/parser";
+} from "@claude-lens/parser";
 import { Heatmap } from "@/components/heatmap";
 import { ActivityChart } from "@/components/activity-chart";
 import { MetricCard } from "@/components/metric-card";

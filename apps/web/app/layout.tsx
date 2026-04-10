@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeScript } from "@/components/theme-toggle";
 import { LiveRefresher } from "@/components/live-refresher";
-import { listProjects, walkJsonlFiles } from "@claude-sessions/parser/fs";
+import { listProjects, walkJsonlFiles } from "@claude-lens/parser/fs";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Claude Sessions",
+  title: "Claude Lens",
   description: "Local-only dashboard for Claude Code sessions.",
 };
 
