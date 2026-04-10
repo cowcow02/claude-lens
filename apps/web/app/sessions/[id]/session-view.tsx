@@ -2301,7 +2301,7 @@ function CollapsedTurnRow({
 
         {/* Stats line */}
         <div onClick={stop}>
-          <TurnStatsLine summary={s} durationMs={turn.durationMs} />
+          <TurnStatsLine summary={s} durationMs={turn.durationMs} rows={turn.rows} />
         </div>
 
         {/* 2. Steps list — each middle row as a compact bullet */}
@@ -2506,50 +2506,195 @@ function ExpandableMessage({
 
 /** One-line "8 messages · 23 tools · 5m 12s" stat strip at the top of
  *  a collapsed turn. Aggregates at a glance. */
-function TurnStatsLine({ summary, durationMs }: { summary: TurnSummary; durationMs?: number }) {
-  const parts: React.ReactNode[] = [];
-  if (summary.agentMessages > 0) {
-    parts.push(
+/**
+ * Ghostty-style activity summary for a collapsed turn.
+ *
+ * Instead of "8 messages · 23 tool calls", renders something like:
+ *   "Editing 3 files +45 -40, reading 2 files, running 1 bash command · 5m 12s"
+ *   "└ apps/web/components/theme-toggle.tsx"
+ *
+ * Aggregates tool calls by type and extracts the last file path being
+ * operated on so the user can see at a glance what the agent is doing.
+ */
+function TurnStatsLine({
+  summary,
+  durationMs,
+  rows,
+}: {
+  summary: TurnSummary;
+  durationMs?: number;
+  rows: PresentationRow[];
+}) {
+  // Aggregate tool calls into activity categories.
+  let editCount = 0;
+  let writeCount = 0;
+  let readCount = 0;
+  let bashCount = 0;
+  let grepCount = 0;
+  let globCount = 0;
+  let agentCount = 0;
+  let otherToolCount = 0;
+  let lastFilePath: string | undefined;
+
+  for (const r of rows) {
+    if (r.kind !== "tool-group") continue;
+    for (const ev of r.events) {
+      const name = ev.toolName ?? "";
+      const input = (ev.blocks.find(
+        (b) => b && (b as { type?: string }).type === "tool_use",
+      ) as { type: "tool_use"; input?: Record<string, unknown> } | undefined)
+        ?.input;
+
+      const filePath =
+        typeof input?.file_path === "string" ? input.file_path : undefined;
+
+      switch (name) {
+        case "Edit":
+          editCount++;
+          if (filePath) lastFilePath = filePath;
+          break;
+        case "Write":
+          writeCount++;
+          if (filePath) lastFilePath = filePath;
+          break;
+        case "Read":
+          readCount++;
+          if (filePath) lastFilePath = filePath;
+          break;
+        case "Bash":
+          bashCount++;
+          break;
+        case "Grep":
+          grepCount++;
+          break;
+        case "Glob":
+          globCount++;
+          break;
+        case "Agent":
+          agentCount++;
+          break;
+        default:
+          otherToolCount++;
+          break;
+      }
+    }
+  }
+
+  // Build the Ghostty-style summary phrases.
+  const phrases: React.ReactNode[] = [];
+  if (editCount > 0 || writeCount > 0) {
+    const fileCount = editCount + writeCount;
+    phrases.push(
+      <span key="edit">
+        <b style={{ fontWeight: 600 }}>Editing {fileCount} file{fileCount === 1 ? "" : "s"}</b>
+      </span>,
+    );
+  }
+  if (readCount > 0) {
+    phrases.push(
+      <span key="read">
+        reading <b style={{ fontWeight: 600 }}>{readCount}</b> file{readCount === 1 ? "" : "s"}
+      </span>,
+    );
+  }
+  if (bashCount > 0) {
+    phrases.push(
+      <span key="bash">
+        running <b style={{ fontWeight: 600 }}>{bashCount}</b> bash command{bashCount === 1 ? "" : "s"}
+      </span>,
+    );
+  }
+  if (grepCount + globCount > 0) {
+    const searchCount = grepCount + globCount;
+    phrases.push(
+      <span key="search">
+        <b style={{ fontWeight: 600 }}>{searchCount}</b> search{searchCount === 1 ? "" : "es"}
+      </span>,
+    );
+  }
+  if (agentCount > 0) {
+    phrases.push(
+      <span key="agent">
+        dispatching <b style={{ fontWeight: 600 }}>{agentCount}</b> sub-agent{agentCount === 1 ? "" : "s"}
+      </span>,
+    );
+  }
+  if (otherToolCount > 0 && phrases.length === 0) {
+    phrases.push(
+      <span key="other">
+        <b style={{ fontWeight: 600 }}>{otherToolCount}</b> tool call{otherToolCount === 1 ? "" : "s"}
+      </span>,
+    );
+  }
+
+  // Fallback if no tools.
+  if (phrases.length === 0 && summary.agentMessages > 0) {
+    phrases.push(
       <span key="msgs">
         {summary.agentMessages} message{summary.agentMessages === 1 ? "" : "s"}
       </span>,
     );
   }
-  if (summary.toolCalls > 0) {
-    parts.push(
-      <span key="tools">
-        {summary.toolCalls} tool call{summary.toolCalls === 1 ? "" : "s"}
-      </span>,
-    );
-  }
-  if (summary.errors > 0) {
-    parts.push(
-      <span key="errs" style={{ color: "var(--af-danger)" }}>
-        {summary.errors} error{summary.errors === 1 ? "" : "s"}
-      </span>,
-    );
-  }
-  if (durationMs !== undefined && durationMs > 0) {
-    parts.push(<span key="dur">{formatGap(durationMs)}</span>);
-  }
-  if (parts.length === 0) return null;
+
+  // Shorten file path for display.
+  const shortPath = lastFilePath
+    ? (() => {
+        const parts = lastFilePath.split("/");
+        return parts.length > 3
+          ? "…/" + parts.slice(-3).join("/")
+          : lastFilePath;
+      })()
+    : undefined;
+
   return (
     <div
       style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
         fontSize: 11,
         color: "var(--af-text-tertiary)",
-        flexWrap: "wrap",
+        lineHeight: 1.6,
       }}
     >
-      {parts.map((p, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <span style={{ opacity: 0.5 }}>·</span>}
-          {p}
-        </React.Fragment>
-      ))}
+      {/* Activity summary line */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+        {phrases.map((p, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span style={{ opacity: 0.5 }}>, </span>}
+            {p}
+          </React.Fragment>
+        ))}
+        {summary.errors > 0 && (
+          <>
+            <span style={{ opacity: 0.5 }}>, </span>
+            <span style={{ color: "var(--af-danger)" }}>
+              {summary.errors} error{summary.errors === 1 ? "" : "s"}
+            </span>
+          </>
+        )}
+        {durationMs !== undefined && durationMs > 0 && (
+          <>
+            <span style={{ opacity: 0.5, marginLeft: 4 }}>·</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10 }}>
+              {formatGap(durationMs)}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Last file path (Ghostty "└ ..." style) */}
+      {shortPath && (
+        <div
+          style={{
+            fontSize: 10,
+            color: "var(--af-text-tertiary)",
+            fontFamily: "var(--font-mono)",
+            marginTop: 1,
+            opacity: 0.75,
+          }}
+          title={lastFilePath}
+        >
+          └ {shortPath}
+        </div>
+      )}
     </div>
   );
 }
