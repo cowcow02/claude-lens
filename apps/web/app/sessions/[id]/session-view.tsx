@@ -35,6 +35,7 @@ import {
 import { formatGap, formatOffset, formatRelative, formatTokens, shortId } from "@/lib/format";
 import { LiveBadge } from "@/components/live-badge";
 import { AskClaudeButton, AskClaudeDrawer } from "@/components/ask-claude";
+import { TailMode } from "@/components/tail-mode";
 
 /* ------------------------------------------------------------------ */
 /*  Constants + theming                                               */
@@ -222,6 +223,13 @@ export function SessionView({ session }: { session: SessionDetail }) {
 
   const { events, durationMs, totalUsage, model, eventCount, projectName } = session;
   const airTimeMs = session.airTimeMs ?? durationMs;
+
+  // A session is "live" if its last event was within 45 seconds.
+  const isSessionLive = (() => {
+    if (!session.lastTimestamp) return false;
+    const ms = Date.parse(session.lastTimestamp);
+    return !Number.isNaN(ms) && Date.now() - ms < 45_000;
+  })();
 
   /** Build the full presentation stream once. */
   const allRows = useMemo(() => buildPresentation(events), [events]);
@@ -661,6 +669,9 @@ export function SessionView({ session }: { session: SessionDetail }) {
           />
         </aside>
       )}
+
+      {/* Tail mode FAB — auto-scroll to follow live events */}
+      <TailMode isLive={isSessionLive} />
     </div>
   );
 }

@@ -9,8 +9,13 @@ import type { ContentBlock, EventRole, SessionEvent, SessionMeta, Usage } from "
 
 const BLANK_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+/** Strip XML tags and collapse whitespace for clean preview text. */
+function cleanText(s: string): string {
+  return s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
 function truncate(s: string, n = 200): string {
-  const one = s.replace(/\s+/g, " ").trim();
+  const one = cleanText(s);
   return one.length > n ? one.slice(0, n - 1) + "…" : one;
 }
 
