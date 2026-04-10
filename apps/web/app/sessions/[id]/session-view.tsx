@@ -11,7 +11,6 @@ import {
   Copy,
   Cpu,
   Folder,
-  Search,
   Wrench,
   X,
 } from "lucide-react";
@@ -445,20 +444,6 @@ export function SessionView({ session }: { session: SessionDetail }) {
               </option>
             ))}
           </select>
-
-          <button
-            title="Search"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--af-border-subtle)",
-              borderRadius: 6,
-              padding: 6,
-              cursor: "pointer",
-              color: "var(--af-text-secondary)",
-            }}
-          >
-            <Search size={14} />
-          </button>
 
           <span
             style={{
@@ -2245,16 +2230,9 @@ function CollapsedTurnRow({
         scrollMarginTop: stickyOffset,
       }}
     >
-      {/* Col 1 — Chevron (grid column 1). Aligns with the 20px empty
-          slot in TranscriptRow so role pills share the same x-offset. */}
-      <span
-        style={{
-          color: "var(--af-text-tertiary)",
-          paddingTop: 2,
-        }}
-      >
-        <ChevronRight size={16} />
-      </span>
+      {/* Col 1 — empty spacer to keep the Agent pill aligned with
+          TranscriptRow's pill column (which also has an empty 20px slot). */}
+      <span />
 
       {/* Col 2 — "Agent" role pill */}
       <span

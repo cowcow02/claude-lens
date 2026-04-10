@@ -5,14 +5,17 @@ export function MetricCard({
   value,
   sub,
   icon,
+  tooltip,
 }: {
   label: string;
   value: ReactNode;
   sub?: ReactNode;
   icon?: ReactNode;
+  /** Hover explanation — shown as a native title attribute on the card. */
+  tooltip?: string;
 }) {
   return (
-    <div className="af-card" style={{ padding: "16px 18px" }}>
+    <div className="af-card" style={{ padding: "16px 18px" }} title={tooltip}>
       <div
         style={{
           display: "flex",

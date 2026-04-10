@@ -128,6 +128,7 @@ export default async function DashboardHome({
           value={metrics.sessionCount.toLocaleString()}
           sub={`${metrics.totalTurns.toLocaleString()} turns total`}
           icon={<ListTree size={13} />}
+          tooltip="Total Claude Code sessions (one JSONL file = one session). A 'turn' is one user message that starts an agent response cycle."
         />
         <MetricCard
           label="Active time"
@@ -141,28 +142,33 @@ export default async function DashboardHome({
               : "no activity"
           }
           icon={<Clock size={13} />}
+          tooltip="Sum of time the agent was actively working across all sessions. Gaps longer than 3 minutes (user away, laptop lid closed) are excluded. This is NOT wall-clock duration."
         />
         <MetricCard
           label="Tool calls"
           value={metrics.totalToolCalls.toLocaleString()}
           sub={`avg ${metrics.sessionCount ? Math.round(metrics.totalToolCalls / metrics.sessionCount) : 0} / session`}
           icon={<Zap size={13} />}
+          tooltip="Total tool invocations (Bash, Read, Edit, Write, Grep, Glob, Agent, etc.) across all sessions. Higher counts typically mean more complex tasks."
         />
         <MetricCard
           label="Input tokens"
           value={formatTokens(totalInput)}
           sub={`${formatTokens(metrics.totalTokens.output)} output`}
           icon={<Activity size={13} />}
+          tooltip="Total input tokens sent to the model (fresh + cache-read + cache-write). Cache reads are billed at ~10% of regular input. Output is tokens the model generated."
         />
         <MetricCard
           label="Avg turns"
           value={metrics.avgTurnsPerSession.toFixed(1)}
           sub="per session"
+          tooltip="Average number of user↔agent turns per session. More turns = more interactive; fewer turns = more autonomous (the agent did more per user prompt)."
         />
         <MetricCard
           label="Parallel peaks"
           value={parallelRuns.length > 0 ? String(Math.max(...parallelRuns.map((r) => r.peak))) : "—"}
           sub={`${parallelRuns.length} intervals`}
+          tooltip="Maximum number of Claude Code sessions running simultaneously. Detected via sweep-line over session start/end intervals. Useful for measuring multi-agent fleet parallelism."
         />
       </section>
 
