@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   ListTree,
   FolderOpen,
+  GitBranch,
   Pin,
   PinOff,
   Search,
@@ -145,6 +146,13 @@ export function Sidebar({
           trailing={projects.length > 0 ? String(projects.length) : undefined}
         >
           Projects
+        </NavLink>
+        <NavLink
+          href="/parallelism"
+          active={pathname === "/parallelism"}
+          icon={<GitBranch size={15} />}
+        >
+          Parallelism
         </NavLink>
       </nav>
 
