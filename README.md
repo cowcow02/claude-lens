@@ -49,14 +49,18 @@ Modeled on Claude's managed-agents Sessions view:
 
 ## Quickstart
 
-Requires [pnpm](https://pnpm.io) and Node 20+.
+**One-liner** (checks Node/pnpm, clones, installs, opens browser):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cowcow02/claude-lens/master/install.sh | bash
+```
+
+**Or manually** (requires [pnpm](https://pnpm.io) and Node 20+):
 
 ```bash
 git clone https://github.com/cowcow02/claude-lens.git
-cd claude-lens
-pnpm install
-pnpm dev
-# open http://localhost:3321
+cd claude-lens && pnpm install && pnpm dev
+# → http://localhost:3321
 ```
 
 That's it. The app reads `~/.claude/projects/*.jsonl` directly — no database, no auth, no cloud.
