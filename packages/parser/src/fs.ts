@@ -186,6 +186,78 @@ export function sessionIdFromFileName(fileName: string): string {
 /*  Meta / detail loaders with caching                               */
 /* ================================================================= */
 
+/**
+ * Aggregate token usage from a JSONL file's raw lines, sharing a dedup set
+ * so the same message:requestId pair is only counted once across parent +
+ * subagent files (matching ccusage's approach).
+ */
+function aggregateUsageFromLines(
+  lines: unknown[],
+  seenKeys: Set<string>,
+  usage: Usage,
+): void {
+  for (const raw of lines) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    if (r.type !== "assistant") continue;
+    const m = r.message as Record<string, unknown> | undefined;
+    if (!m) continue;
+    const mid = typeof m.id === "string" ? m.id : undefined;
+    const rid = typeof r.requestId === "string" ? r.requestId : undefined;
+    const key = mid != null && rid != null ? `${mid}:${rid}` : undefined;
+    if (key && seenKeys.has(key)) continue;
+    if (key) seenKeys.add(key);
+    const u = m.usage as Record<string, unknown> | undefined;
+    if (u) {
+      const toNum = (v: unknown) => (typeof v === "number" ? v : 0);
+      usage.input += toNum(u.input_tokens);
+      usage.output += toNum(u.output_tokens);
+      usage.cacheRead += toNum(u.cache_read_input_tokens);
+      usage.cacheWrite += toNum(u.cache_creation_input_tokens);
+    }
+  }
+}
+
+/**
+ * Compute total token usage across a parent session's JSONL + its subagent
+ * JSONL files, using a shared dedup set so no message is counted twice.
+ * This matches ccusage's global dedup approach.
+ */
+async function computeSessionUsageWithSubagents(
+  parentLines: unknown[],
+  projectDirPath: string,
+  sessionId: string,
+): Promise<Usage> {
+  const usage: Usage = { ...BLANK_USAGE };
+  const seenKeys = new Set<string>();
+
+  // 1. Parent session
+  aggregateUsageFromLines(parentLines, seenKeys, usage);
+
+  // 2. Subagent files
+  const subagentsDir = path.join(projectDirPath, sessionId, "subagents");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(subagentsDir);
+  } catch {
+    return usage;
+  }
+  const jsonlFiles = entries.filter((f) => f.endsWith(".jsonl"));
+  if (jsonlFiles.length === 0) return usage;
+
+  await Promise.all(
+    jsonlFiles.map(async (f) => {
+      try {
+        const lines = await readJsonlFile(path.join(subagentsDir, f));
+        aggregateUsageFromLines(lines, seenKeys, usage);
+      } catch {
+        /* skip unreadable files */
+      }
+    }),
+  );
+  return usage;
+}
+
 /** Load (or reuse) the SessionMeta for a single file ref. */
 async function getCachedMeta(f: FileRef): Promise<SessionMeta | null> {
   const cached = metaCache.get(f.fullPath);
@@ -195,11 +267,22 @@ async function getCachedMeta(f: FileRef): Promise<SessionMeta | null> {
   try {
     const rawLines = await readJsonlFile(f.fullPath);
     const { meta } = parseTranscript(rawLines);
+
+    // Recompute usage across parent + subagents with shared dedup
+    // so cost estimates match ccusage.
+    const sessionId = sessionIdFromFileName(f.fileName);
+    const projectDirPath = path.dirname(f.fullPath);
+    meta.totalUsage = await computeSessionUsageWithSubagents(
+      rawLines,
+      projectDirPath,
+      sessionId,
+    );
+
     // Use the real cwd from the JSONL when available — the decoded
     // dir name is lossy (dashes in folder names become slashes).
     const full: SessionMeta = {
       ...meta,
-      id: sessionIdFromFileName(f.fileName),
+      id: sessionId,
       filePath: f.fullPath,
       projectDir: f.projectDir,
       projectName: meta.cwd ?? decodeProjectName(f.projectDir),
@@ -373,10 +456,12 @@ function summarizeSubagentLines(lines: unknown[]): {
       // First seen model wins.
       if (!model && typeof m.model === "string") model = m.model;
 
-      // Token dedup by message.id (same fix as the main parser).
+      // Token dedup by message.id + requestId (matches ccusage).
       const mid = typeof m.id === "string" ? m.id : undefined;
-      const fresh = mid ? !seenMessageIds.has(mid) : true;
-      if (mid && fresh) seenMessageIds.add(mid);
+      const rid = typeof r.requestId === "string" ? r.requestId : undefined;
+      const dedupKey = mid != null && rid != null ? `${mid}:${rid}` : undefined;
+      const fresh = dedupKey ? !seenMessageIds.has(dedupKey) : true;
+      if (dedupKey && fresh) seenMessageIds.add(dedupKey);
 
       if (fresh) {
         assistantMessageCount++;

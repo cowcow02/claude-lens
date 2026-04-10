@@ -60,15 +60,18 @@ export function formatDuration(ms?: number): string {
   return mm ? `${h}h ${mm}m` : `${h}h`;
 }
 
-/** Per-MTok pricing by model family (API pricing, not Max plan). */
+/**
+ * Per-MTok pricing by model family.
+ * Sourced from LiteLLM / Anthropic API pricing (as of 2025).
+ */
 const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-  haiku:  { input: 0.80, output: 4,  cacheRead: 0.08, cacheWrite: 1 },
-  sonnet: { input: 3,    output: 15, cacheRead: 0.30, cacheWrite: 3.75 },
-  opus:   { input: 15,   output: 75, cacheRead: 1.50, cacheWrite: 18.75 },
+  haiku:  { input: 1,  output: 5,  cacheRead: 0.1,  cacheWrite: 1.25 },
+  sonnet: { input: 3,  output: 15, cacheRead: 0.3,  cacheWrite: 3.75 },
+  opus:   { input: 5,  output: 25, cacheRead: 0.5,  cacheWrite: 6.25 },
 };
 
 function modelRate(model?: string) {
-  if (!model) return MODEL_PRICING.sonnet; // conservative default
+  if (!model) return MODEL_PRICING.opus;
   const m = model.toLowerCase();
   if (m.includes("haiku")) return MODEL_PRICING.haiku;
   if (m.includes("sonnet")) return MODEL_PRICING.sonnet;
@@ -93,8 +96,6 @@ export function estimateCost(
 
 /**
  * Estimate cost across multiple sessions, using each session's model for pricing.
- * Note: sessions may contain mixed-model traffic (e.g. Opus main + Haiku tools),
- * but we only have the primary model per session, so this is an upper-bound estimate.
  */
 export function estimateCostMulti(
   sessions: Array<{ totalUsage: { input: number; output: number; cacheRead: number; cacheWrite: number }; model?: string }>,

@@ -323,9 +323,12 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       const m = o.message as Record<string, unknown> | undefined;
       if (m) {
         if (typeof m.model === "string" && !model) model = m.model;
+        // Dedup by message.id + requestId (matches ccusage).
         const mid = typeof m.id === "string" ? m.id : undefined;
-        if (mid && seenMessageIds.has(mid)) continue;
-        if (mid) seenMessageIds.add(mid);
+        const rid = typeof o.requestId === "string" ? o.requestId : undefined;
+        const dedupKey = mid != null && rid != null ? `${mid}:${rid}` : undefined;
+        if (dedupKey && seenMessageIds.has(dedupKey)) continue;
+        if (dedupKey) seenMessageIds.add(dedupKey);
         const u = extractUsage(m.usage);
         if (u) {
           totalUsage.input += u.input;
