@@ -138,4 +138,5 @@ echo ""
 # Run production server in foreground so Ctrl+C stops it cleanly.
 # `next start` serves the pre-built .next output — no Turbopack
 # compilation per request, optimized React bundles, ~3x faster.
-pnpm -F @claude-lens/web start -- -p "$PORT"
+cd "$INSTALL_DIR/apps/web"
+npx next start -p "$PORT"
