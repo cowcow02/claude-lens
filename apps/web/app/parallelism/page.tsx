@@ -57,12 +57,17 @@ export default async function TimelinePage({
   const gantt: GanttDay = buildGanttDay(details, date);
 
   // Find available days (for prev/next navigation).
-  const daysWithActivity = new Set(
-    allSessions
-      .filter((s) => s.firstTimestamp)
-      .map((s) => toLocalDay(Date.parse(s.firstTimestamp!))),
-  );
-  const sortedDays = Array.from(daysWithActivity).sort();
+  // Count sessions per day for the calendar heatmap.
+  const daySessionCounts = new Map<string, number>();
+  for (const s of allSessions) {
+    if (!s.firstTimestamp) continue;
+    const day = toLocalDay(Date.parse(s.firstTimestamp));
+    daySessionCounts.set(day, (daySessionCounts.get(day) ?? 0) + 1);
+  }
+  const dayStats = Array.from(daySessionCounts.entries())
+    .map(([date, sessions]) => ({ date, sessions }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const sortedDays = dayStats.map((d) => d.date);
   const currentIdx = sortedDays.indexOf(date);
   const prevDay = currentIdx > 0 ? sortedDays[currentIdx - 1] : undefined;
   const nextDay =
@@ -111,7 +116,7 @@ export default async function TimelinePage({
           </p>
         </div>
 
-        <DateNav date={date} today={today} prevDay={prevDay} nextDay={nextDay} />
+        <DateNav date={date} today={today} prevDay={prevDay} nextDay={nextDay} dayStats={dayStats} />
       </header>
 
       {gantt.sessions.length === 0 ? (

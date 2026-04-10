@@ -155,8 +155,8 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
           return (
             <span
               key={p.name}
-              style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-              title={p.name}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "default" }}
+              title={`${p.name} — ${p.count} session${p.count === 1 ? "" : "s"} on this day`}
             >
               <span
                 style={{
@@ -183,7 +183,9 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
             gap: 5,
             marginLeft: 8,
             color: "var(--af-text-tertiary)",
+            cursor: "default",
           }}
+          title="Idle gap — the session was open but the agent was not actively working (gap > 3 minutes between events)"
         >
           <span
             style={{
