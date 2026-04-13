@@ -27,49 +27,32 @@ export default function UsagePage() {
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 28,
+        gap: 18,
         maxWidth: 1400,
-        padding: "32px 40px",
+        padding: "20px 32px",
       }}
     >
       {/* Header */}
-      <header>
+      <header
+        style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}
+      >
         <h1
           style={{
-            fontSize: 26,
+            fontSize: 20,
             fontWeight: 700,
             letterSpacing: "-0.02em",
             margin: 0,
             display: "flex",
             alignItems: "center",
-            gap: 10,
+            gap: 8,
           }}
         >
-          <Activity size={22} />
+          <Activity size={18} />
           Usage history
         </h1>
-        <p
-          style={{
-            fontSize: 12,
-            color: "var(--af-text-tertiary)",
-            marginTop: 6,
-            maxWidth: 720,
-          }}
-        >
-          Historical plan utilization derived from the{" "}
-          <code
-            style={{
-              background: "var(--af-surface)",
-              padding: "1px 6px",
-              borderRadius: 4,
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-            }}
-          >
-            cclens
-          </code>{" "}
-          daemon&apos;s snapshot log. Current utilization is always visible in the sidebar.
-        </p>
+        <span style={{ fontSize: 11, color: "var(--af-text-tertiary)" }}>
+          historical plan utilization · current usage in sidebar
+        </span>
       </header>
 
       {!latest ? (
@@ -77,7 +60,7 @@ export default function UsagePage() {
       ) : (
         <>
           {/* 7-day window — primary leadership metric */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <SectionLabel>7-day cycle — the real license signal</SectionLabel>
             <UsageChart
               snapshots={snapshots}
@@ -89,7 +72,7 @@ export default function UsagePage() {
           </section>
 
           {/* 5h burst control — collapsible, tactical */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <SectionLabel>5-hour burst control</SectionLabel>
             <UsageChart
               snapshots={snapshots}
@@ -101,7 +84,7 @@ export default function UsagePage() {
           </section>
 
           {/* Sonnet — rarely useful, hidden by default */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <OptionalChart storageKey="cclens:usage:show-sonnet" label="Sonnet 7-day window">
               <UsageChart
                 snapshots={snapshots}
@@ -134,11 +117,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div
       style={{
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: 600,
         color: "var(--af-text-tertiary)",
         textTransform: "uppercase",
         letterSpacing: "0.06em",
+        marginBottom: 2,
       }}
     >
       {children}

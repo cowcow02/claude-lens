@@ -32,12 +32,12 @@ export function UsageChart({
   /** CSS variable for this window's color (e.g. 'var(--af-success)') */
   colorVar: string;
 }) {
-  // ViewBox dimensions chosen to match a typical full-width landscape
-  // chart so text renders without horizontal distortion when the SVG
-  // is scaled. Aspect is ~5.3:1 which matches a ~1280px wide page.
+  // ViewBox dimensions chosen for a wide, compact chart that fits two
+  // per MBP screen without scrolling. ~8:1 aspect matches typical
+  // full-width display. Text renders undistorted via aspect-ratio CSS.
   const width = 1280;
-  const height = 240;
-  const padding = { top: 24, right: 24, bottom: 44, left: 56 };
+  const height = 160;
+  const padding = { top: 16, right: 24, bottom: 34, left: 56 };
 
   const computed = useMemo(() => {
     const valid = snapshots
@@ -157,95 +157,65 @@ export function UsageChart({
   };
 
   return (
-    <div className="af-card" style={{ padding: "20px 24px" }}>
-      {/* Header */}
+    <div className="af-card" style={{ padding: "14px 18px" }}>
+      {/* Compact inline header: title + big pct + delta + reset, all one row */}
       <div
         style={{
           display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          gap: 16,
-          marginBottom: 14,
+          alignItems: "baseline",
+          gap: 14,
+          flexWrap: "wrap",
+          marginBottom: 8,
         }}
       >
-        <div>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: "var(--af-text)",
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-            }}
-          >
-            {title}
-          </div>
-          <div
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: "var(--af-text)",
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            fontSize: 18,
+            fontWeight: 700,
+            letterSpacing: "-0.01em",
+            color: colorVar,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {currentRemaining.toFixed(1)}%
+          <span
             style={{
               fontSize: 11,
+              fontWeight: 500,
               color: "var(--af-text-tertiary)",
-              marginTop: 4,
-            }}
-            suppressHydrationWarning
-          >
-            Window: {formatWindowSize(windowMs)} · resets{" "}
-            {formatRelative(new Date(windowEnd).toISOString())}
-          </div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div
-            style={{
-              fontSize: 26,
-              fontWeight: 700,
-              letterSpacing: "-0.02em",
-              color: colorVar,
-              fontVariantNumeric: "tabular-nums",
-              lineHeight: 1.1,
+              marginLeft: 4,
+              letterSpacing: 0,
             }}
           >
-            {currentRemaining.toFixed(1)}%
-          </div>
-          <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", marginTop: 2 }}>
             remaining
-          </div>
-          <div style={{ fontSize: 11, color: toneColor, marginTop: 4, fontWeight: 500 }}>
-            {toneLabel} ({delta >= 0 ? "+" : ""}
-            {delta.toFixed(1)}%)
-          </div>
+          </span>
         </div>
-      </div>
-
-      {/* Legend */}
-      <div
-        style={{
-          display: "flex",
-          gap: 16,
-          marginBottom: 6,
-          fontSize: 11,
-          color: "var(--af-text-tertiary)",
-        }}
-      >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <svg width="22" height="6">
-            <line
-              x1="0"
-              y1="3"
-              x2="22"
-              y2="3"
-              stroke="currentColor"
-              strokeDasharray="4 3"
-              strokeOpacity="0.5"
-              strokeWidth="1.5"
-            />
-          </svg>
-          Ideal (sustainable burn)
-        </span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <svg width="22" height="6">
-            <line x1="0" y1="3" x2="22" y2="3" stroke={colorVar} strokeWidth="2.5" />
-          </svg>
-          Actual
-        </span>
+        <div style={{ fontSize: 11, color: toneColor, fontWeight: 500 }}>
+          {toneLabel} ({delta >= 0 ? "+" : ""}
+          {delta.toFixed(1)}%)
+        </div>
+        <div
+          suppressHydrationWarning
+          style={{
+            fontSize: 11,
+            color: "var(--af-text-tertiary)",
+            marginLeft: "auto",
+          }}
+        >
+          {formatWindowSize(windowMs)} · resets{" "}
+          {formatRelative(new Date(windowEnd).toISOString())}
+        </div>
       </div>
 
       {/* Chart + tooltip */}
@@ -454,23 +424,19 @@ export function UsageChart({
         )}
       </div>
 
-      {/* Footer */}
+      {/* Footer — minimal: only the snapshot count & recency */}
       <div
         style={{
-          marginTop: 10,
-          display: "flex",
-          justifyContent: "space-between",
-          fontSize: 10,
+          marginTop: 4,
+          fontSize: 9,
           color: "var(--af-text-tertiary)",
           fontFamily: "var(--font-mono)",
+          textAlign: "right",
         }}
+        suppressHydrationWarning
       >
-        <span suppressHydrationWarning>{new Date(windowStart).toLocaleString()}</span>
-        <span suppressHydrationWarning>
-          {points.length} snapshot{points.length === 1 ? "" : "s"} · last{" "}
-          {formatRelative(new Date(latest.capturedAt).toISOString())}
-        </span>
-        <span suppressHydrationWarning>{new Date(windowEnd).toLocaleString()}</span>
+        {points.length} snapshot{points.length === 1 ? "" : "s"} · last{" "}
+        {formatRelative(new Date(latest.capturedAt).toISOString())}
       </div>
     </div>
   );
