@@ -6,12 +6,11 @@ export function UsageGauges({ snapshot }: { snapshot: UsageSnapshot }) {
   const rows: Row[] = [
     { label: "5 hour", window: snapshot.five_hour },
     { label: "7 day (all)", window: snapshot.seven_day },
-    { label: "7 day Opus", window: snapshot.seven_day_opus },
     { label: "7 day Sonnet", window: snapshot.seven_day_sonnet },
   ];
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3 sm:grid-cols-3">
       {rows.map((row) => (
         <Gauge key={row.label} {...row} />
       ))}
