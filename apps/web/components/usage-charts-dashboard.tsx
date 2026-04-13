@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import type { UsageSnapshot } from "@/lib/usage-data";
 import { UsageChart } from "@/components/usage-chart";
@@ -119,7 +119,26 @@ function ExpandedModal({
   onClose: () => void;
 }) {
   const [range, setRange] = useState<DateRange>({ preset: "current" });
-  const resolved = resolveRange(range);
+
+  // "Current cycle" → snap the range to the latest known cycle boundaries
+  // so the same chart component can render it using the same layout as
+  // all the other presets.
+  const currentCycleBounds = useMemo(() => {
+    for (let i = snapshots.length - 1; i >= 0; i--) {
+      const w = snapshots[i]![config.key];
+      if (w && w.resets_at) {
+        const endMs = new Date(w.resets_at).getTime();
+        return { startMs: endMs - config.windowMs, endMs };
+      }
+    }
+    return null;
+  }, [snapshots, config.key, config.windowMs]);
+
+  const resolvedBase = resolveRange(range);
+  const resolved =
+    range.preset === "current" && currentCycleBounds
+      ? currentCycleBounds
+      : resolvedBase;
 
   return (
     <div
@@ -200,7 +219,8 @@ function ExpandedModal({
           </button>
         </div>
 
-        {/* Modal body: either single-cycle burndown or multi-cycle line */}
+        {/* Modal body — unified: UsageChartRange for every preset, with
+            'Current cycle' mapped to the latest cycle's exact bounds. */}
         <div
           style={{
             padding: 20,
@@ -208,14 +228,7 @@ function ExpandedModal({
             flex: 1,
           }}
         >
-          {range.preset === "current" || !resolved.startMs || !resolved.endMs ? (
-            <UsageChart
-              snapshots={snapshots}
-              seriesKey={config.key}
-              windowMs={config.windowMs}
-              colorVar={config.colorVar}
-            />
-          ) : (
+          {resolved.startMs && resolved.endMs ? (
             <UsageChartRange
               snapshots={snapshots}
               seriesKey={config.key}
@@ -224,6 +237,18 @@ function ExpandedModal({
               windowMs={config.windowMs}
               colorVar={config.colorVar}
             />
+          ) : (
+            <div
+              className="af-card"
+              style={{
+                padding: "40px 32px",
+                textAlign: "center",
+                fontSize: 12,
+                color: "var(--af-text-tertiary)",
+              }}
+            >
+              No data available for this window.
+            </div>
           )}
         </div>
       </div>
