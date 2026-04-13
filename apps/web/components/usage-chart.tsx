@@ -21,13 +21,11 @@ type SeriesKey = "five_hour" | "seven_day" | "seven_day_sonnet";
 export function UsageChart({
   snapshots,
   seriesKey,
-  title,
   windowMs,
   colorVar,
 }: {
   snapshots: UsageSnapshot[];
   seriesKey: SeriesKey;
-  title: string;
   windowMs: number;
   /** CSS variable for this window's color (e.g. 'var(--af-success)') */
   colorVar: string;
@@ -73,28 +71,16 @@ export function UsageChart({
 
   if (!computed) {
     return (
-      <div className="af-card" style={{ padding: "20px 24px" }}>
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: "var(--af-text)",
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
-          }}
-        >
-          {title}
-        </div>
-        <div
-          style={{
-            marginTop: 16,
-            textAlign: "center",
-            fontSize: 12,
-            color: "var(--af-text-tertiary)",
-          }}
-        >
-          No data for this window yet.
-        </div>
+      <div
+        className="af-card"
+        style={{
+          padding: "14px 18px",
+          textAlign: "center",
+          fontSize: 12,
+          color: "var(--af-text-tertiary)",
+        }}
+      >
+        No data for this window yet.
       </div>
     );
   }
@@ -158,7 +144,7 @@ export function UsageChart({
 
   return (
     <div className="af-card" style={{ padding: "14px 18px" }}>
-      {/* Compact inline header: title + big pct + delta + reset, all one row */}
+      {/* Compact inline header: big pct + delta + reset, all one row (no title — provided by section label outside) */}
       <div
         style={{
           display: "flex",
@@ -168,17 +154,6 @@ export function UsageChart({
           marginBottom: 8,
         }}
       >
-        <div
-          style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: "var(--af-text)",
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
-          }}
-        >
-          {title}
-        </div>
         <div
           style={{
             fontSize: 18,
