@@ -10,7 +10,13 @@ export function UsageGauges({ snapshot }: { snapshot: UsageSnapshot }) {
   ];
 
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+        gap: 12,
+      }}
+    >
       {rows.map((row) => (
         <Gauge key={row.label} {...row} />
       ))}
@@ -22,24 +28,69 @@ function Gauge({ label, window }: Row) {
   const pct = window?.utilization ?? null;
   const hasData = pct !== null;
   const clamped = hasData ? Math.max(0, Math.min(100, pct!)) : 0;
-  const tone = clamped >= 90 ? "bg-red-500" : clamped >= 70 ? "bg-amber-500" : "bg-emerald-500";
+  const toneVar =
+    clamped >= 90
+      ? "var(--af-danger)"
+      : clamped >= 70
+        ? "var(--af-warning)"
+        : "var(--af-success)";
 
   return (
-    <div className="rounded-lg border border-af-border bg-af-surface p-4">
-      <div className="flex items-baseline justify-between">
-        <div className="text-sm text-af-muted">{label}</div>
-        <div className="text-2xl font-semibold tabular-nums">
-          {hasData ? `${clamped.toFixed(1)}%` : "—"}
-        </div>
+    <div className="af-card" style={{ padding: "16px 18px" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: 11,
+          color: "var(--af-text-tertiary)",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          fontWeight: 600,
+        }}
+      >
+        <span>{label}</span>
       </div>
-      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-af-border/40">
+      <div
+        style={{
+          fontSize: 28,
+          fontWeight: 700,
+          marginTop: 8,
+          letterSpacing: "-0.02em",
+          lineHeight: 1.1,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {hasData ? `${clamped.toFixed(1)}%` : "—"}
+      </div>
+      <div
+        style={{
+          marginTop: 10,
+          height: 6,
+          width: "100%",
+          background: "var(--af-border-subtle)",
+          borderRadius: 999,
+          overflow: "hidden",
+        }}
+      >
         <div
-          className={`h-full ${tone} transition-all`}
-          style={{ width: hasData ? `${clamped}%` : "0%" }}
+          style={{
+            height: "100%",
+            width: hasData ? `${clamped}%` : "0%",
+            background: toneVar,
+            borderRadius: 999,
+            transition: "width 0.24s ease",
+          }}
         />
       </div>
       {window?.resets_at && (
-        <div className="mt-2 text-xs text-af-muted">
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--af-text-tertiary)",
+            marginTop: 8,
+          }}
+        >
           Resets {formatRelative(window.resets_at)}
         </div>
       )}

@@ -1,5 +1,5 @@
 /**
- * Claude Code usage page — 5h/7d utilization gauges + per-window time series.
+ * Claude Code usage page — 5h/7d utilization gauges + per-window burndown charts.
  *
  * Reads from ~/.cclens/usage.jsonl (written by the cclens daemon).
  * No API endpoint — direct file read on the server.
@@ -21,63 +21,113 @@ export default function UsagePage() {
   const latest = latestUsageSnapshot();
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-6">
-      <Link
-        href="/"
-        className="mb-4 inline-flex items-center gap-1 text-sm text-af-muted hover:text-af-fg"
-      >
-        <ArrowLeft className="h-4 w-4" /> Back to dashboard
-      </Link>
-
-      <div className="mb-6">
-        <h1 className="flex items-center gap-2 text-2xl font-semibold">
-          <Activity className="h-6 w-6" /> Claude Code Usage
-        </h1>
-        <p className="mt-1 text-sm text-af-muted">
-          Plan utilization over rolling 5-hour and 7-day windows. Same numbers Claude Code&apos;s{" "}
-          <code className="rounded bg-af-surface px-1">/usage</code> slash command shows.
-        </p>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 28,
+        maxWidth: 1280,
+        padding: "32px 40px",
+      }}
+    >
+      {/* Breadcrumb */}
+      <div style={{ fontSize: 12, color: "var(--af-text-tertiary)" }}>
+        <Link
+          href="/"
+          style={{
+            color: "var(--af-text-tertiary)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <ArrowLeft size={12} /> Dashboard
+        </Link>
       </div>
+
+      {/* Header */}
+      <header>
+        <h1
+          style={{
+            fontSize: 26,
+            fontWeight: 700,
+            letterSpacing: "-0.02em",
+            margin: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <Activity size={22} />
+          Claude Code Usage
+        </h1>
+        <p
+          style={{
+            fontSize: 12,
+            color: "var(--af-text-tertiary)",
+            marginTop: 6,
+            maxWidth: 720,
+          }}
+        >
+          Plan utilization over rolling 5-hour and 7-day windows. Same numbers Claude Code&apos;s{" "}
+          <code
+            style={{
+              background: "var(--af-surface)",
+              padding: "1px 6px",
+              borderRadius: 4,
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+            }}
+          >
+            /usage
+          </code>{" "}
+          slash command shows.
+        </p>
+      </header>
 
       {!latest ? (
         <EmptyState />
       ) : (
         <>
-          <section className="mb-6">
-            <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-af-muted">
-              Current
-            </h2>
+          <section>
+            <SectionLabel>Current</SectionLabel>
             <UsageGauges snapshot={latest} />
           </section>
 
-          <section className="mb-6 space-y-4">
-            <h2 className="text-sm font-medium uppercase tracking-wide text-af-muted">
-              History
-            </h2>
+          <section
+            style={{ display: "flex", flexDirection: "column", gap: 16 }}
+          >
+            <SectionLabel>History</SectionLabel>
             <UsageChart
               snapshots={snapshots}
               seriesKey="five_hour"
               title="5 hour window"
               windowMs={5 * HOUR}
-              color="#22c55e"
+              colorVar="var(--af-success)"
             />
             <UsageChart
               snapshots={snapshots}
               seriesKey="seven_day"
               title="7 day window (all)"
               windowMs={7 * DAY}
-              color="#3b82f6"
+              colorVar="var(--af-accent)"
             />
             <UsageChart
               snapshots={snapshots}
               seriesKey="seven_day_sonnet"
               title="7 day window (Sonnet)"
               windowMs={7 * DAY}
-              color="#f59e0b"
+              colorVar="var(--af-warning)"
             />
           </section>
 
-          <section className="text-xs text-af-muted">
+          <section
+            style={{
+              fontSize: 11,
+              color: "var(--af-text-tertiary)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
             Last updated: {new Date(latest.captured_at).toLocaleString()}
           </section>
         </>
@@ -86,19 +136,84 @@ export default function UsagePage() {
   );
 }
 
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        fontWeight: 600,
+        color: "var(--af-text-tertiary)",
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        marginBottom: 12,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function EmptyState() {
   return (
-    <div className="rounded-lg border border-af-border bg-af-surface p-8 text-center">
-      <h2 className="text-lg font-medium">No usage data yet</h2>
-      <p className="mt-2 text-sm text-af-muted">
+    <div
+      className="af-card"
+      style={{
+        padding: "48px 32px",
+        textAlign: "center",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 15,
+          fontWeight: 600,
+          color: "var(--af-text)",
+        }}
+      >
+        No usage data yet
+      </div>
+      <p
+        style={{
+          fontSize: 12,
+          color: "var(--af-text-tertiary)",
+          marginTop: 8,
+        }}
+      >
         Start the polling daemon to begin collecting metrics every 5 minutes:
       </p>
-      <pre className="mt-4 inline-block rounded bg-af-bg px-4 py-2 text-left text-sm">
+      <pre
+        style={{
+          display: "inline-block",
+          marginTop: 14,
+          background: "var(--background)",
+          border: "1px solid var(--af-border-subtle)",
+          padding: "8px 16px",
+          borderRadius: 6,
+          fontSize: 13,
+          fontFamily: "var(--font-mono)",
+          color: "var(--af-text)",
+        }}
+      >
         cclens daemon start
       </pre>
-      <p className="mt-4 text-xs text-af-muted">
+      <p
+        style={{
+          fontSize: 11,
+          color: "var(--af-text-tertiary)",
+          marginTop: 16,
+        }}
+      >
         For a one-shot snapshot without the daemon, run{" "}
-        <code className="rounded bg-af-bg px-1">cclens usage</code>.
+        <code
+          style={{
+            background: "var(--background)",
+            padding: "1px 6px",
+            borderRadius: 4,
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          cclens usage
+        </code>
+        .
       </p>
     </div>
   );

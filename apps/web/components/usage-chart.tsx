@@ -15,23 +15,22 @@ type SeriesKey = "five_hour" | "seven_day" | "seven_day_sonnet";
  *   — the "sustainable burn" trajectory
  * Actual line: solid, plots (100 - utilization) at each snapshot's captured_at
  *
- * ABOVE the ideal line = saving budget (more left than expected, good)
- * BELOW the ideal line = burning faster than sustainable (bad)
+ * ABOVE the ideal line = saving budget (on track)
+ * BELOW the ideal line = burning faster than sustainable (behind schedule)
  */
 export function UsageChart({
   snapshots,
   seriesKey,
   title,
   windowMs,
-  color,
+  colorVar,
 }: {
   snapshots: UsageSnapshot[];
   seriesKey: SeriesKey;
   title: string;
-  /** Rolling window duration in milliseconds (5h, 7d, etc.). */
   windowMs: number;
-  /** Actual-line color for this window. */
-  color: string;
+  /** CSS variable for this window's color (e.g. 'var(--af-success)') */
+  colorVar: string;
 }) {
   const width = 800;
   const height = 260;
@@ -55,7 +54,6 @@ export function UsageChart({
     const now = Date.now();
     const currentRemaining = 100 - (latest.window.utilization ?? 0);
 
-    // Plot (captured_at, remaining = 100 - utilization) within the window
     const points = valid
       .filter((x) => x.capturedAt >= windowStart && x.capturedAt <= resetsAt)
       .map((x) => [x.capturedAt, 100 - (x.window.utilization ?? 0)] as const);
@@ -72,9 +70,28 @@ export function UsageChart({
 
   if (!computed) {
     return (
-      <div className="rounded-lg border border-af-border bg-af-surface p-6">
-        <div className="text-sm font-medium">{title}</div>
-        <div className="mt-4 text-center text-xs text-af-muted">No data for this window yet.</div>
+      <div className="af-card" style={{ padding: "20px 24px" }}>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "var(--af-text)",
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            marginTop: 16,
+            textAlign: "center",
+            fontSize: 12,
+            color: "var(--af-text-tertiary)",
+          }}
+        >
+          No data for this window yet.
+        </div>
       </div>
     );
   }
@@ -87,18 +104,19 @@ export function UsageChart({
   const unXScale = (x: number): number =>
     windowStart + ((x - padding.left) / plotW) * (windowEnd - windowStart);
 
-  // Ideal line: 100% remaining at windowStart → 0% remaining at resetsAt
   const idealAt = (t: number): number => {
     const pctThroughWindow = (t - windowStart) / (windowEnd - windowStart);
     return Math.max(0, Math.min(100, 100 - pctThroughWindow * 100));
   };
 
-  // Actual remaining at "now" (interpolated from the closest data point — latest)
   const nowIdeal = idealAt(now);
   const delta = currentRemaining - nowIdeal;
-  // Positive delta = MORE remaining than ideal = ahead of schedule (good)
-  const tone =
-    delta < -10 ? "text-red-500" : delta < 0 ? "text-amber-500" : "text-emerald-500";
+  const toneColor =
+    delta < -10
+      ? "var(--af-danger)"
+      : delta < 0
+        ? "var(--af-warning)"
+        : "var(--af-success)";
   const toneLabel =
     delta < -10 ? "behind schedule" : delta < 0 ? "slightly behind" : "on track";
 
@@ -109,7 +127,6 @@ export function UsageChart({
           .join(" ")
       : "";
 
-  // Area under the actual line — fill to show "saved budget" vs ideal
   const areaPath =
     points.length > 0
       ? `${linePath} L ${xScale(points[points.length - 1]![0]).toFixed(1)} ${yScale(0).toFixed(1)} L ${xScale(points[0]![0]).toFixed(1)} ${yScale(0).toFixed(1)} Z`
@@ -124,7 +141,6 @@ export function UsageChart({
       return;
     }
     const t = unXScale(svgX);
-    // Find nearest actual data point
     let nearest = points[0]!;
     let nearestDist = Math.abs(nearest[0] - t);
     for (const p of points) {
@@ -138,20 +154,57 @@ export function UsageChart({
   };
 
   return (
-    <div className="rounded-lg border border-af-border bg-af-surface p-4">
-      <div className="mb-3 flex items-baseline justify-between">
+    <div className="af-card" style={{ padding: "20px 24px" }}>
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 14,
+        }}
+      >
         <div>
-          <div className="text-sm font-medium">{title}</div>
-          <div className="text-xs text-af-muted">
-            Window: {formatWindowSize(windowMs)} · resets {formatRelative(new Date(windowEnd).toISOString())}
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "var(--af-text)",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            {title}
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--af-text-tertiary)",
+              marginTop: 4,
+            }}
+          >
+            Window: {formatWindowSize(windowMs)} · resets{" "}
+            {formatRelative(new Date(windowEnd).toISOString())}
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-2xl font-semibold tabular-nums" style={{ color }}>
+        <div style={{ textAlign: "right" }}>
+          <div
+            style={{
+              fontSize: 26,
+              fontWeight: 700,
+              letterSpacing: "-0.02em",
+              color: colorVar,
+              fontVariantNumeric: "tabular-nums",
+              lineHeight: 1.1,
+            }}
+          >
             {currentRemaining.toFixed(1)}%
           </div>
-          <div className="text-xs text-af-muted">remaining</div>
-          <div className={`text-xs ${tone}`}>
+          <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", marginTop: 2 }}>
+            remaining
+          </div>
+          <div style={{ fontSize: 11, color: toneColor, marginTop: 4, fontWeight: 500 }}>
             {toneLabel} ({delta >= 0 ? "+" : ""}
             {delta.toFixed(1)}%)
           </div>
@@ -159,25 +212,43 @@ export function UsageChart({
       </div>
 
       {/* Legend */}
-      <div className="mb-2 flex gap-4 text-[11px] text-af-muted">
-        <span className="flex items-center gap-1.5">
-          <svg width="18" height="6">
-            <line x1="0" y1="3" x2="18" y2="3" stroke="currentColor" strokeDasharray="3 2" strokeOpacity="0.5" />
+      <div
+        style={{
+          display: "flex",
+          gap: 16,
+          marginBottom: 6,
+          fontSize: 11,
+          color: "var(--af-text-tertiary)",
+        }}
+      >
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <svg width="22" height="6">
+            <line
+              x1="0"
+              y1="3"
+              x2="22"
+              y2="3"
+              stroke="currentColor"
+              strokeDasharray="4 3"
+              strokeOpacity="0.5"
+              strokeWidth="1.5"
+            />
           </svg>
           Ideal (sustainable burn)
         </span>
-        <span className="flex items-center gap-1.5">
-          <svg width="18" height="6">
-            <line x1="0" y1="3" x2="18" y2="3" stroke={color} strokeWidth="2" />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <svg width="22" height="6">
+            <line x1="0" y1="3" x2="22" y2="3" stroke={colorVar} strokeWidth="2.5" />
           </svg>
           Actual
         </span>
       </div>
 
-      <div className="relative">
+      {/* Chart + tooltip */}
+      <div style={{ position: "relative" }}>
         <svg
           viewBox={`0 0 ${width} ${height}`}
-          className="h-56 w-full"
+          style={{ width: "100%", height: 240, display: "block" }}
           preserveAspectRatio="none"
           onMouseMove={handleMouseMove}
           onMouseLeave={() => setHover(null)}
@@ -192,14 +263,15 @@ export function UsageChart({
                   x2={width - padding.right}
                   y1={y}
                   y2={y}
-                  stroke="currentColor"
-                  strokeOpacity="0.08"
+                  stroke="var(--af-border-subtle)"
+                  strokeWidth="1"
                 />
                 <text
                   x={padding.left - 8}
                   y={y + 4}
                   textAnchor="end"
-                  className="fill-current text-[10px] opacity-50"
+                  fontSize="10"
+                  fill="var(--af-text-tertiary)"
                 >
                   {pct}%
                 </text>
@@ -213,7 +285,8 @@ export function UsageChart({
             y={padding.top + plotH / 2}
             textAnchor="middle"
             transform={`rotate(-90, 14, ${padding.top + plotH / 2})`}
-            className="fill-current text-[10px] opacity-60"
+            fontSize="10"
+            fill="var(--af-text-tertiary)"
           >
             Remaining budget (%)
           </text>
@@ -223,7 +296,8 @@ export function UsageChart({
             x={padding.left}
             y={height - 22}
             textAnchor="start"
-            className="fill-current text-[10px] opacity-60"
+            fontSize="10"
+            fill="var(--af-text-tertiary)"
           >
             Start
           </text>
@@ -231,7 +305,8 @@ export function UsageChart({
             x={width - padding.right}
             y={height - 22}
             textAnchor="end"
-            className="fill-current text-[10px] opacity-60"
+            fontSize="10"
+            fill="var(--af-text-tertiary)"
           >
             Reset
           </text>
@@ -239,13 +314,14 @@ export function UsageChart({
             x={padding.left + plotW / 2}
             y={height - 6}
             textAnchor="middle"
-            className="fill-current text-[10px] opacity-60"
+            fontSize="10"
+            fill="var(--af-text-tertiary)"
           >
             Time
           </text>
 
           {/* Area fill under actual line */}
-          <path d={areaPath} fill={color} fillOpacity="0.08" />
+          <path d={areaPath} fill={colorVar} fillOpacity="0.1" />
 
           {/* Ideal diagonal (100% → 0%) */}
           <line
@@ -253,8 +329,8 @@ export function UsageChart({
             y1={yScale(100)}
             x2={xScale(windowEnd)}
             y2={yScale(0)}
-            stroke="currentColor"
-            strokeOpacity="0.4"
+            stroke="var(--af-text-tertiary)"
+            strokeOpacity="0.5"
             strokeWidth="1.5"
             strokeDasharray="4 3"
           />
@@ -267,15 +343,16 @@ export function UsageChart({
                 y1={padding.top}
                 x2={xScale(now)}
                 y2={padding.top + plotH}
-                stroke="currentColor"
-                strokeOpacity="0.3"
+                stroke="var(--af-text-secondary)"
+                strokeOpacity="0.5"
                 strokeWidth="1"
               />
               <text
                 x={xScale(now)}
                 y={padding.top - 6}
                 textAnchor="middle"
-                className="fill-current text-[10px] opacity-60"
+                fontSize="10"
+                fill="var(--af-text-secondary)"
               >
                 now
               </text>
@@ -286,7 +363,7 @@ export function UsageChart({
           <path
             d={linePath}
             fill="none"
-            stroke={color}
+            stroke={colorVar}
             strokeWidth="2.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -294,10 +371,10 @@ export function UsageChart({
 
           {/* Data point dots */}
           {points.map(([t, v], i) => (
-            <circle key={i} cx={xScale(t)} cy={yScale(v)} r="3" fill={color} />
+            <circle key={i} cx={xScale(t)} cy={yScale(v)} r="3" fill={colorVar} />
           ))}
 
-          {/* Hover crosshair + tooltip dot */}
+          {/* Hover crosshair + highlight dot */}
           {hover && (
             <g>
               <line
@@ -305,48 +382,82 @@ export function UsageChart({
                 y1={padding.top}
                 x2={hover.x}
                 y2={padding.top + plotH}
-                stroke="currentColor"
-                strokeOpacity="0.5"
+                stroke="var(--af-text-secondary)"
+                strokeOpacity="0.7"
                 strokeWidth="1"
                 strokeDasharray="2 2"
               />
-              <circle cx={hover.x} cy={yScale(hover.actual)} r="5" fill={color} stroke="white" strokeWidth="1.5" />
+              <circle
+                cx={hover.x}
+                cy={yScale(hover.actual)}
+                r="5"
+                fill={colorVar}
+                stroke="var(--af-surface)"
+                strokeWidth="1.5"
+              />
             </g>
           )}
         </svg>
 
-        {/* HTML tooltip (positioned using percentage) */}
+        {/* HTML tooltip */}
         {hover && (
           <div
-            className="pointer-events-none absolute rounded-md border border-af-border bg-af-bg px-3 py-2 text-xs shadow-lg"
             style={{
+              pointerEvents: "none",
+              position: "absolute",
               left: `${(hover.x / width) * 100}%`,
-              top: "8px",
+              top: 4,
               transform: "translateX(-50%)",
+              background: "var(--af-surface-elevated)",
+              border: "1px solid var(--af-border-subtle)",
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontSize: 11,
+              boxShadow: "0 6px 24px rgba(0, 0, 0, 0.24)",
+              whiteSpace: "nowrap",
+              color: "var(--af-text)",
             }}
           >
-            <div className="font-medium">{new Date(hover.t).toLocaleString()}</div>
-            <div className="mt-1 flex gap-3">
+            <div style={{ fontWeight: 600 }}>{new Date(hover.t).toLocaleString()}</div>
+            <div style={{ marginTop: 4, display: "flex", gap: 12 }}>
               <div>
-                <span className="text-af-muted">Actual</span>{" "}
-                <span className="font-semibold tabular-nums" style={{ color }}>
+                <span style={{ color: "var(--af-text-tertiary)" }}>Actual</span>{" "}
+                <span
+                  style={{
+                    fontWeight: 600,
+                    fontVariantNumeric: "tabular-nums",
+                    color: colorVar,
+                  }}
+                >
                   {hover.actual.toFixed(1)}%
                 </span>
               </div>
               <div>
-                <span className="text-af-muted">Ideal</span>{" "}
-                <span className="font-semibold tabular-nums">{hover.ideal.toFixed(1)}%</span>
+                <span style={{ color: "var(--af-text-tertiary)" }}>Ideal</span>{" "}
+                <span style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                  {hover.ideal.toFixed(1)}%
+                </span>
               </div>
             </div>
-            <div className="mt-0.5 text-af-muted">
-              Δ {(hover.actual - hover.ideal >= 0 ? "+" : "")}
+            <div style={{ marginTop: 2, color: "var(--af-text-tertiary)" }}>
+              Δ {hover.actual - hover.ideal >= 0 ? "+" : ""}
               {(hover.actual - hover.ideal).toFixed(1)}%
             </div>
           </div>
         )}
       </div>
 
-      <div className="mt-2 flex justify-between text-[10px] text-af-muted">
+      {/* Footer */}
+      <div
+        style={{
+          marginTop: 10,
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 10,
+          color: "var(--af-text-tertiary)",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
         <span>{new Date(windowStart).toLocaleString()}</span>
         <span>
           {points.length} snapshot{points.length === 1 ? "" : "s"} · last{" "}
