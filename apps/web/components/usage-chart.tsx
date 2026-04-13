@@ -33,11 +33,11 @@ export function UsageChart({
   colorVar: string;
 }) {
   // ViewBox dimensions chosen for a wide, compact chart that fits two
-  // per MBP screen without scrolling. ~8:1 aspect matches typical
-  // full-width display. Text renders undistorted via aspect-ratio CSS.
+  // per MBP screen without scrolling while keeping the burndown line
+  // readable. ~6.4:1 aspect works well at full page width.
   const width = 1280;
-  const height = 160;
-  const padding = { top: 16, right: 24, bottom: 34, left: 56 };
+  const height = 200;
+  const padding = { top: 18, right: 24, bottom: 38, left: 56 };
 
   const computed = useMemo(() => {
     const valid = snapshots
