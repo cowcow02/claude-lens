@@ -4,6 +4,7 @@ import { checkForUpdate } from "../updater.js";
 export async function start(args: string[]): Promise<void> {
   const portFlag = args.indexOf("--port");
   const port = portFlag !== -1 ? parseInt(args[portFlag + 1], 10) : undefined;
+  const noOpen = args.includes("--no-open");
 
   // Auto-update check
   try {
@@ -15,8 +16,9 @@ export async function start(args: string[]): Promise<void> {
   // Check if already running
   const status = getServerStatus();
   if (status.running) {
-    console.log(`Claude Lens is already running on http://localhost:${status.port} (PID ${status.pid})`);
-    openBrowser(`http://localhost:${status.port}`);
+    const url = `http://localhost:${status.port}`;
+    console.log(`Claude Lens is already running on ${url} (PID ${status.pid})`);
+    if (!noOpen) openBrowser(url);
     return;
   }
 
@@ -24,8 +26,9 @@ export async function start(args: string[]): Promise<void> {
 
   try {
     const result = await startServer({ port });
-    console.log(`Claude Lens running on http://localhost:${result.port} (PID ${result.pid})`);
-    openBrowser(`http://localhost:${result.port}`);
+    const url = `http://localhost:${result.port}`;
+    console.log(`Claude Lens running on ${url} (PID ${result.pid})`);
+    if (!noOpen) openBrowser(url);
   } catch (err) {
     console.error(`Failed to start: ${(err as Error).message}`);
     process.exit(1);

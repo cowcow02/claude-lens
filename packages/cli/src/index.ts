@@ -51,9 +51,9 @@ async function main() {
       console.log(`Usage: cclens <command>
 
 Commands:
-  start [--port N]                  Start the dashboard server
+  start [--port N] [--no-open]      Start the dashboard server
   stop                              Stop the dashboard server
-  web [page]                        Open dashboard in browser (e.g. 'web usage')
+  web [page] [--no-open]            Open dashboard in browser (e.g. 'web usage')
   update                            Update to the latest version
   stats [--live] [-s D] [--days N]  Show token usage statistics
   usage [--save]                    Show Claude Code plan utilization (5h/7d)
