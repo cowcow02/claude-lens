@@ -12,6 +12,7 @@ import {
   PinOff,
   Search,
   Activity,
+  Gauge,
 } from "lucide-react";
 import { formatRelative, prettyProjectName } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -153,6 +154,13 @@ export function Sidebar({
           icon={<GitBranch size={15} />}
         >
           Timeline
+        </NavLink>
+        <NavLink
+          href="/usage"
+          active={pathname === "/usage"}
+          icon={<Gauge size={15} />}
+        >
+          Usage
         </NavLink>
       </nav>
 
