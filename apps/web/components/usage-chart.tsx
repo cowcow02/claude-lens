@@ -183,6 +183,7 @@ export function UsageChart({
               color: "var(--af-text-tertiary)",
               marginTop: 4,
             }}
+            suppressHydrationWarning
           >
             Window: {formatWindowSize(windowMs)} · resets{" "}
             {formatRelative(new Date(windowEnd).toISOString())}
@@ -458,12 +459,12 @@ export function UsageChart({
           fontFamily: "var(--font-mono)",
         }}
       >
-        <span>{new Date(windowStart).toLocaleString()}</span>
-        <span>
+        <span suppressHydrationWarning>{new Date(windowStart).toLocaleString()}</span>
+        <span suppressHydrationWarning>
           {points.length} snapshot{points.length === 1 ? "" : "s"} · last{" "}
           {formatRelative(new Date(latest.capturedAt).toISOString())}
         </span>
-        <span>{new Date(windowEnd).toLocaleString()}</span>
+        <span suppressHydrationWarning>{new Date(windowEnd).toLocaleString()}</span>
       </div>
     </div>
   );
