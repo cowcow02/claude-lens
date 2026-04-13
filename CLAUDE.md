@@ -7,7 +7,7 @@ Local-only, privacy-first dashboard for Claude Code sessions. Reads JSONL transc
 pnpm monorepo with Turborepo:
 
 - `packages/parser` — `@claude-lens/parser`: JSONL parsing, analytics, filesystem scanning. Pure TypeScript, no framework deps.
-- `packages/cli` — `claudelens` on npm (also exposes `cclens` as a short alias binary): CLI that manages the dashboard server, provides terminal stats, handles auto-updates.
+- `packages/cli` — `fleetlens` on npm: CLI that manages the dashboard server, provides terminal stats, handles auto-updates.
 - `apps/web` — `@claude-lens/web`: Next.js dashboard (standalone output bundled into the CLI package).
 
 ## Dev Commands
@@ -24,8 +24,8 @@ pnpm clean        # Remove all build artifacts
 ## CLI Dev
 
 ```bash
-pnpm -F claudelens build    # Build CLI with esbuild
-pnpm -F claudelens test     # Run CLI tests
+pnpm -F fleetlens build    # Build CLI with esbuild
+pnpm -F fleetlens test     # Run CLI tests
 node packages/cli/dist/index.js stats   # Test stats locally
 ```
 

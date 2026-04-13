@@ -1,18 +1,18 @@
-# claudelens
+# fleetlens
 
 **Local-only dashboard and usage tracker for [Claude Code](https://claude.com/claude-code).**
 
-`claudelens` reads your `~/.claude/projects/*.jsonl` transcripts, polls your plan's utilization directly from Anthropic, and visualises everything — live burndown charts, activity heatmaps, per-project stats, parallel agent runs, PR shipping metrics, and a beautiful session transcript view modeled on Claude's own managed-agents UI.
+`fleetlens` reads your `~/.claude/projects/*.jsonl` transcripts, polls your plan's utilization directly from Anthropic, and visualises everything — live burndown charts, activity heatmaps, per-project stats, parallel agent runs, PR shipping metrics, and a beautiful session transcript view modeled on Claude's own managed-agents UI.
 
 Nothing leaves your machine.
 
-> Published to npm as `claudelens`. Invoke via `claudelens` (full name) or `cclens` (short alias, same binary) for tab-completion speed.
+> Published to npm as `fleetlens`. The binary is `fleetlens` — short enough for tab-completion, descriptive enough to explain itself.
 
 ## What makes it different
 
-There are [several](https://github.com/ryoppippi/ccusage) [excellent](https://github.com/chiphuyen/sniffly) [Claude Code](https://github.com/FlorianBruniaux/ccboard) [dashboards](https://github.com/d-kimuson/claude-code-viewer) already. `claudelens` focuses on four things they don't cover well:
+There are [several](https://github.com/ryoppippi/ccusage) [excellent](https://github.com/chiphuyen/sniffly) [Claude Code](https://github.com/FlorianBruniaux/ccboard) [dashboards](https://github.com/d-kimuson/claude-code-viewer) already. `fleetlens` focuses on four things they don't cover well:
 
-1. **Real plan utilization, not approximations.** Most tools estimate your 5h/7d usage from token counts in JSONL. `cclens` calls `api.anthropic.com/api/oauth/usage` with your Claude Code OAuth token, so the numbers match exactly what `/usage` shows inside Claude Code.
+1. **Real plan utilization, not approximations.** Most tools estimate your 5h/7d usage from token counts in JSONL. `fleetlens` calls `api.anthropic.com/api/oauth/usage` with your Claude Code OAuth token, so the numbers match exactly what `/usage` shows inside Claude Code.
 2. **Burndown visualisation.** A sprint-burndown chart per cycle shows remaining budget, a dashed "sustainable burn" reference line, and a live label telling you if you're on track or behind. Drops the jargon — you can see instantly whether you'll hit the wall.
 3. **Parallel agent run detection.** No other tool robustly detects when you had 2+ Claude Code sessions running simultaneously (against worktrees, multi-agent fleets, etc.). We compute this via sweep-line over session intervals and surface peaks, burst durations, and the % of agent time spent in parallel.
 4. **Per-session PR shipping attribution.** Scans `gh pr create` Bash calls to link individual sessions to the PRs they produced, plotting "position in session" as a proxy for how well your harness is tuned.
@@ -24,8 +24,8 @@ Plus: a full transcript UI modeled on Claude's managed-agents view (mini-map tim
 Install globally from npm:
 
 ```bash
-npm install -g claudelens
-claudelens web
+npm install -g fleetlens
+fleetlens web
 # → http://localhost:3321
 ```
 
@@ -49,19 +49,19 @@ curl -fsSL https://raw.githubusercontent.com/cowcow02/claude-lens/master/install
 ## CLI
 
 ```bash
-cclens start [--port N] [--no-open]   # launch dashboard server
-cclens stop                           # graceful shutdown
-cclens web [page] [--no-open]         # open dashboard in browser (auto-starts)
-cclens usage [--save]                 # print 5h/7d plan utilization in terminal
-cclens stats [--live] [-s D] [--days N]   # ccusage-style daily token table
-cclens daemon start|stop|status|logs  # background poller for usage history
-cclens update                         # force reinstall latest
-cclens version
+fleetlens start [--port N] [--no-open]   # launch dashboard server
+fleetlens stop                           # graceful shutdown
+fleetlens web [page] [--no-open]         # open dashboard in browser (auto-starts)
+fleetlens usage [--save]                 # print 5h/7d plan utilization in terminal
+fleetlens stats [--live] [-s D] [--days N]   # ccusage-style daily token table
+fleetlens daemon start|stop|status|logs  # background poller for usage history
+fleetlens update                         # force reinstall latest
+fleetlens version
 ```
 
 ### The usage daemon
 
-Running `cclens daemon start` spawns a detached background poller that hits the Claude Code OAuth usage endpoint every 5 minutes and appends a snapshot to `~/.cclens/usage.jsonl`. The dashboard's `/usage` page reads that log to render:
+Running `fleetlens daemon start` spawns a detached background poller that hits the Claude Code OAuth usage endpoint every 5 minutes and appends a snapshot to `~/.cclens/usage.jsonl`. The dashboard's `/usage` page reads that log to render:
 
 - **Current cycle burndown** — remaining budget over time, with a sustainable-burn reference diagonal and warning bands at <10% and <30%
 - **Multi-cycle historical view** — click expand on any chart → fullscreen modal with date range picker (Current cycle · 24H · 7D · 30D · 90D · Custom datetime range)
@@ -113,7 +113,7 @@ pnpm monorepo with Turborepo:
 claude-lens/
 ├── packages/
 │   ├── parser/              # @claude-lens/parser — pure JSONL parser + analytics
-│   └── cli/                 # cclens — published CLI + bundled standalone Next.js app
+│   └── cli/                 # fleetlens — published CLI + bundled standalone Next.js app
 ├── apps/
 │   └── web/                 # Next.js 16 dashboard (standalone output bundled into cli/)
 ├── scripts/
@@ -139,7 +139,7 @@ No fs or network. A `/fs` subpath exports the filesystem scanner for Node.
 
 `packages/cli/` is bundled with esbuild into a single binary that embeds:
 
-- The parser (for `cclens stats` and `cclens usage`)
+- The parser (for `fleetlens stats` and `fleetlens usage`)
 - A detached daemon worker (`dist/daemon-worker.js`) that polls the OAuth usage endpoint
 - The Next.js `apps/web` standalone output (pre-built and copied into `cli/app/`)
 
@@ -151,7 +151,7 @@ A single SSE stream (`/api/events`) watches both `~/.claude/projects/` (session 
 
 ### Shared preferences
 
-`usePersistentBoolean(key, default)` is a small hook backed by localStorage + a custom `cclens:persistent-boolean` event. It's the mechanism behind:
+`usePersistentBoolean(key, default)` is a small hook backed by localStorage + a custom `fleetlens:persistent-boolean` event. It's the mechanism behind:
 
 - The Sonnet chart show/hide (main page and sidebar stay in sync)
 - The cards/table view toggle on `/sessions` and `/projects`
@@ -210,12 +210,12 @@ Zero config by default. Environment overrides when needed:
 pnpm install
 pnpm dev                                  # start web app in dev mode
 pnpm -F @claude-lens/parser test          # run parser tests
-pnpm -F cclens test                       # run CLI tests
+pnpm -F fleetlens test                       # run CLI tests
 pnpm typecheck                            # typecheck everything
 pnpm verify                               # typecheck + smoke tests
 pnpm build                                # build parser + web + cli
 
-# Build a fresh standalone bundle for `cclens web`
+# Build a fresh standalone bundle for `fleetlens web`
 NEXT_OUTPUT=standalone pnpm build
 node scripts/prepare-cli.mjs
 node packages/cli/dist/index.js web --no-open

@@ -36,7 +36,7 @@ export async function daemon(args: string[]): Promise<void> {
       break;
     default:
       console.error(`Unknown daemon subcommand: ${sub}`);
-      console.error("Usage: cclens daemon <start|stop|status|logs>");
+      console.error("Usage: fleetlens daemon <start|stop|status|logs>");
       process.exit(1);
   }
 }
@@ -51,7 +51,7 @@ async function daemonStart(): Promise<void> {
 
   const script = workerPath();
   if (!existsSync(script)) {
-    console.error(`Daemon worker not found at ${script}. Rebuild with: pnpm -F cclens build`);
+    console.error(`Daemon worker not found at ${script}. Rebuild with: pnpm -F fleetlens build`);
     process.exit(1);
   }
 

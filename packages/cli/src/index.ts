@@ -43,12 +43,12 @@ async function main() {
     case "version":
     case "--version":
     case "-v":
-      console.log(`cclens ${CLI_VERSION}`);
+      console.log(`fleetlens ${CLI_VERSION}`);
       break;
     case "help":
     case "--help":
     case "-h":
-      console.log(`Usage: cclens <command>
+      console.log(`Usage: fleetlens <command>
 
 Commands:
   start [--port N] [--no-open]      Start the dashboard server
@@ -61,7 +61,7 @@ Commands:
   version                           Print version`);
       break;
     default:
-      console.error(`Unknown command: ${command}\nRun 'cclens help' for usage.`);
+      console.error(`Unknown command: ${command}\nRun 'fleetlens help' for usage.`);
       process.exit(1);
   }
 }

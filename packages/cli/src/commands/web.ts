@@ -1,14 +1,14 @@
 import { getServerStatus, startServer, openBrowser } from "../server.js";
 
 /**
- * `cclens web [page] [--no-open]` — open the dashboard in a browser.
+ * `fleetlens web [page] [--no-open]` — open the dashboard in a browser.
  * Starts the server first if it's not already running.
  *
  * Examples:
- *   cclens web                      → http://localhost:3321/
- *   cclens web usage                → http://localhost:3321/usage
- *   cclens web sessions             → http://localhost:3321/sessions
- *   cclens web usage --no-open      → start server, print URL, skip browser
+ *   fleetlens web                      → http://localhost:3321/
+ *   fleetlens web usage                → http://localhost:3321/usage
+ *   fleetlens web sessions             → http://localhost:3321/sessions
+ *   fleetlens web usage --no-open      → start server, print URL, skip browser
  */
 export async function web(args: string[]): Promise<void> {
   const noOpen = args.includes("--no-open");
