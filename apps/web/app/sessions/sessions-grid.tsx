@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { SessionMeta } from "@claude-lens/parser";
 import {
   formatDuration,
@@ -12,11 +13,15 @@ import {
 } from "@/lib/format";
 import { Search, Wrench, MessagesSquare, Clock } from "lucide-react";
 import { LiveBadge } from "@/components/live-badge";
+import { DataTable, type Column } from "@/components/data-table";
+import { useViewToggle } from "@/components/view-toggle";
 
 export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("all");
   const [sortBy, setSortBy] = useState<"newest" | "longest" | "most-tokens">("newest");
+  const { mode: viewMode, toggle: viewToggle } = useViewToggle("cclens:sessions:view");
 
   const projects = useMemo(() => {
     const s = new Set(sessions.map((x) => x.projectName));
@@ -114,11 +119,20 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
         >
           {filtered.length}
         </span>
+        {viewToggle}
       </div>
 
-      {/* Cards grid */}
       {filtered.length === 0 ? (
         <div className="af-empty">No sessions found.</div>
+      ) : viewMode === "table" ? (
+        <DataTable<SessionMeta>
+          rows={filtered}
+          getRowKey={(s) => `${s.projectDir}/${s.id}`}
+          onRowClick={(s) => router.push(`/sessions/${s.id}`)}
+          defaultSortKey="lastActive"
+          defaultSortDir="desc"
+          columns={sessionTableColumns}
+        />
       ) : (
         <div
           style={{
@@ -139,6 +153,130 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
     </div>
   );
 }
+
+const sessionTableColumns: Column<SessionMeta>[] = [
+  {
+    key: "project",
+    header: "Project",
+    sortValue: (s) => s.projectName,
+    render: (s) => (
+      <div
+        style={{
+          maxWidth: 180,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+        title={s.projectName}
+      >
+        <div style={{ fontWeight: 500 }}>{prettyProjectName(s.projectName)}</div>
+        <div
+          style={{
+            fontSize: 10,
+            color: "var(--af-text-tertiary)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {shortId(s.id)}
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: "preview",
+    header: "First message",
+    sortable: false,
+    render: (s) => (
+      <div
+        style={{
+          maxWidth: 360,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          color: "var(--af-text-secondary)",
+        }}
+        title={s.firstUserPreview}
+      >
+        {s.firstUserPreview || "—"}
+      </div>
+    ),
+  },
+  {
+    key: "lastActive",
+    header: "Last active",
+    sortValue: (s) => (s.lastTimestamp ? Date.parse(s.lastTimestamp) : 0),
+    align: "right",
+    render: (s) => (
+      <span
+        suppressHydrationWarning
+        style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}
+      >
+        {s.lastTimestamp ? formatRelative(s.lastTimestamp) : "—"}
+      </span>
+    ),
+  },
+  {
+    key: "airtime",
+    header: "Active time",
+    sortValue: (s) => s.airTimeMs ?? s.durationMs ?? 0,
+    align: "right",
+    render: (s) => (
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        {formatDuration(s.airTimeMs ?? s.durationMs ?? 0)}
+      </span>
+    ),
+  },
+  {
+    key: "turns",
+    header: "Turns",
+    sortValue: (s) => s.turnCount ?? 0,
+    align: "right",
+    render: (s) => (
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        {(s.turnCount ?? 0).toLocaleString()}
+      </span>
+    ),
+  },
+  {
+    key: "tools",
+    header: "Tool calls",
+    sortValue: (s) => s.toolCallCount ?? 0,
+    align: "right",
+    render: (s) => (
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        {(s.toolCallCount ?? 0).toLocaleString()}
+      </span>
+    ),
+  },
+  {
+    key: "tokens",
+    header: "Tokens",
+    sortValue: (s) =>
+      s.totalUsage.input +
+      s.totalUsage.output +
+      s.totalUsage.cacheRead +
+      s.totalUsage.cacheWrite,
+    align: "right",
+    render: (s) => (
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        {formatTokens(
+          s.totalUsage.input +
+            s.totalUsage.output +
+            s.totalUsage.cacheRead +
+            s.totalUsage.cacheWrite,
+        )}
+      </span>
+    ),
+  },
+  {
+    key: "status",
+    header: "Status",
+    sortValue: (s) => (s.status === "running" ? 1 : 0),
+    align: "center",
+    render: (s) =>
+      s.status === "running" ? <LiveBadge /> : <span style={{ opacity: 0.4 }}>—</span>,
+  },
+];
 
 function SessionCard({ session: s }: { session: SessionMeta }) {
   const totalTokens =
