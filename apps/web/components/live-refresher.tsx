@@ -15,7 +15,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
-import { useLiveEvents, type LiveSessionUpdate } from "@/lib/use-live-events";
+import { useLiveEvents, type LiveUpdate } from "@/lib/use-live-events";
 
 /** Debounce router.refresh() so a burst of writes doesn't hammer
  *  the RSC loader. 400ms covers the end of a tool result flush. */
@@ -24,13 +24,15 @@ const REFRESH_DEBOUNCE_MS = 400;
 export function LiveRefresher() {
   const router = useRouter();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastMtimeRef = useRef<number>(0);
+  // Track latest mtime per source so session updates don't starve
+  // usage updates (and vice versa) — different files have different clocks.
+  const lastMtimeRef = useRef<Record<string, number>>({ session: 0, usage: 0 });
 
   const onUpdate = useCallback(
-    (update: LiveSessionUpdate) => {
-      // Only count the *latest* update; drop older/equal mtimes.
-      if (update.mtimeMs <= lastMtimeRef.current) return;
-      lastMtimeRef.current = update.mtimeMs;
+    (update: LiveUpdate) => {
+      const key = update.type === "usage-updated" ? "usage" : "session";
+      if (update.mtimeMs <= (lastMtimeRef.current[key] ?? 0)) return;
+      lastMtimeRef.current[key] = update.mtimeMs;
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         router.refresh();

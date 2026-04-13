@@ -15,18 +15,27 @@
  */
 
 import { invalidateFile, DEFAULT_ROOT } from "@claude-lens/parser/fs";
-import { watch, promises as fs } from "node:fs";
+import { watch, promises as fs, existsSync } from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
 
 export const dynamic = "force-dynamic";
 // Edge runtime can't do fs.watch
 export const runtime = "nodejs";
+
+/** ~/.cclens/usage.jsonl — written by the cclens daemon every 5 minutes. */
+const USAGE_LOG_DIR = path.join(homedir(), ".cclens");
+const USAGE_LOG_FILE = "usage.jsonl";
 
 type LiveEvent =
   | {
       type: "session-updated";
       sessionId: string;
       projectDir: string;
+      mtimeMs: number;
+    }
+  | {
+      type: "usage-updated";
       mtimeMs: number;
     }
   | { type: "heartbeat"; tsMs: number }
@@ -116,6 +125,36 @@ export async function GET(request: Request) {
         console.error("[events] fs.watch failed:", e);
       }
 
+      // Watch ~/.cclens/usage.jsonl for daemon snapshot appends.
+      // Non-recursive — we only care about that one file.
+      let usageWatcher: ReturnType<typeof watch> | null = null;
+      if (existsSync(USAGE_LOG_DIR)) {
+        try {
+          usageWatcher = watch(USAGE_LOG_DIR, { persistent: false }, (_eventType, filename) => {
+            if (filename?.toString() !== USAGE_LOG_FILE) return;
+            // Debounce so a single append doesn't fire twice (write + metadata).
+            const key = "__usage__";
+            const prev = pending.get(key);
+            if (prev) clearTimeout(prev);
+            pending.set(
+              key,
+              setTimeout(async () => {
+                pending.delete(key);
+                if (closed) return;
+                try {
+                  const stat = await fs.stat(path.join(USAGE_LOG_DIR, USAGE_LOG_FILE));
+                  send({ type: "usage-updated", mtimeMs: stat.mtimeMs });
+                } catch {
+                  // File may have been deleted — silently drop.
+                }
+              }, DEBOUNCE_MS),
+            );
+          });
+        } catch (e) {
+          console.error("[events] usage watch failed:", e);
+        }
+      }
+
       // Initial "ready" ping so the client knows the stream is live
       // (and can clear any reconnecting indicator).
       send({ type: "ready" });
@@ -134,6 +173,11 @@ export async function GET(request: Request) {
         pending.clear();
         try {
           watcher?.close();
+        } catch {
+          // ignore
+        }
+        try {
+          usageWatcher?.close();
         } catch {
           // ignore
         }

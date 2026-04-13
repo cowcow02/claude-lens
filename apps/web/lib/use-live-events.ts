@@ -2,7 +2,15 @@
 
 /**
  * Live event subscription hook. Opens an EventSource to /api/events
- * and forwards each session-updated event to the caller's handler.
+ * and forwards each update event to the caller's handler.
+ *
+ * Two event types today:
+ *   - session-updated: a JSONL in ~/.claude/projects/ changed
+ *   - usage-updated:   ~/.cclens/usage.jsonl was appended to by the daemon
+ *
+ * The caller receives both through a single handler — they're
+ * both signals that "something the UI depends on has changed, so
+ * re-fetch".
  *
  * The connection is automatically re-established if the browser
  * drops it. Heartbeats keep it alive through idle periods.
@@ -17,9 +25,16 @@ export type LiveSessionUpdate = {
   mtimeMs: number;
 };
 
-type LiveEvent = LiveSessionUpdate | { type: "heartbeat"; tsMs: number } | { type: "ready" };
+export type LiveUsageUpdate = {
+  type: "usage-updated";
+  mtimeMs: number;
+};
 
-export function useLiveEvents(onUpdate: (update: LiveSessionUpdate) => void): void {
+export type LiveUpdate = LiveSessionUpdate | LiveUsageUpdate;
+
+type LiveEvent = LiveUpdate | { type: "heartbeat"; tsMs: number } | { type: "ready" };
+
+export function useLiveEvents(onUpdate: (update: LiveUpdate) => void): void {
   // Keep the latest handler in a ref so the EventSource effect doesn't
   // re-open every time the parent re-renders with a new closure.
   const handlerRef = useRef(onUpdate);
@@ -32,7 +47,7 @@ export function useLiveEvents(onUpdate: (update: LiveSessionUpdate) => void): vo
     es.onmessage = (e) => {
       try {
         const data: LiveEvent = JSON.parse(e.data);
-        if (data.type === "session-updated") {
+        if (data.type === "session-updated" || data.type === "usage-updated") {
           handlerRef.current(data);
         }
       } catch {
