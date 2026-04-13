@@ -11,8 +11,6 @@ import { buildGanttDay, type GanttDay } from "@claude-lens/parser";
 import { GanttChart } from "./gantt-chart";
 import { DateNav } from "./date-nav";
 import { toLocalDay } from "@claude-lens/parser";
-import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -77,20 +75,6 @@ export default async function TimelinePage({
 
   return (
     <div style={{ padding: "32px 40px", maxWidth: 1400 }}>
-      <div style={{ fontSize: 12, color: "var(--af-text-tertiary)", marginBottom: 8 }}>
-        <Link
-          href="/"
-          style={{
-            color: "var(--af-text-tertiary)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-          }}
-        >
-          <ArrowLeft size={12} /> Overview
-        </Link>
-      </div>
-
       <header
         style={{
           display: "flex",

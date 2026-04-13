@@ -5,8 +5,7 @@
  * No API endpoint — direct file read on the server.
  */
 
-import Link from "next/link";
-import { ArrowLeft, Activity } from "lucide-react";
+import { Activity } from "lucide-react";
 import { readUsageSnapshots, latestUsageSnapshot } from "@/lib/usage-data";
 import { UsageGauges } from "@/components/usage-gauges";
 import { UsageChart } from "@/components/usage-chart";
@@ -31,21 +30,6 @@ export default function UsagePage() {
         padding: "32px 40px",
       }}
     >
-      {/* Breadcrumb */}
-      <div style={{ fontSize: 12, color: "var(--af-text-tertiary)" }}>
-        <Link
-          href="/"
-          style={{
-            color: "var(--af-text-tertiary)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-          }}
-        >
-          <ArrowLeft size={12} /> Dashboard
-        </Link>
-      </div>
-
       {/* Header */}
       <header>
         <h1
