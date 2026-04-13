@@ -130,11 +130,16 @@ export default async function DashboardHome({
         <MetricCard
           label="Sessions"
           value={metrics.sessionCount.toLocaleString()}
-          sub={`${metrics.totalTurns.toLocaleString()} turns · avg ${
-            metrics.sessionCount
-              ? Math.round(metrics.totalTurns / metrics.sessionCount)
-              : 0
-          }/session`}
+          sub={
+            <SubLines
+              line1={`${metrics.totalTurns.toLocaleString()} turns`}
+              line2={`avg ${
+                metrics.sessionCount
+                  ? Math.round(metrics.totalTurns / metrics.sessionCount)
+                  : 0
+              } / session`}
+            />
+          }
           icon={<ListTree size={13} />}
           tooltip="Total Claude Code sessions (one JSONL file = one session). A 'turn' is one user message that starts an agent response cycle."
         />
@@ -142,12 +147,17 @@ export default async function DashboardHome({
           label="Active time"
           value={formatDuration(metrics.totalAirTimeMs)}
           sub={
-            buckets.filter((b) => b.airTimeMs > 0).length > 0
-              ? `${formatDuration(
+            buckets.filter((b) => b.airTimeMs > 0).length > 0 ? (
+              <SubLines
+                line1={`${formatDuration(
                   metrics.totalAirTimeMs /
                     Math.max(1, buckets.filter((b) => b.airTimeMs > 0).length),
-                )}/day · ${buckets.filter((b) => b.airTimeMs > 0).length} active days`
-              : "no activity"
+                )} / day`}
+                line2={`${buckets.filter((b) => b.airTimeMs > 0).length} active days`}
+              />
+            ) : (
+              "no activity"
+            )
           }
           icon={<Clock size={13} />}
           tooltip="Sum of time the agent was actively working across all sessions. Gaps longer than 3 minutes (user away, laptop lid closed) are excluded. This is NOT wall-clock duration. Per-day average is across days with any activity."
@@ -155,7 +165,12 @@ export default async function DashboardHome({
         <MetricCard
           label="Tool calls"
           value={metrics.totalToolCalls.toLocaleString()}
-          sub={`avg ${metrics.sessionCount ? Math.round(metrics.totalToolCalls / metrics.sessionCount) : 0} / session`}
+          sub={
+            <SubLines
+              line1={`avg ${metrics.sessionCount ? Math.round(metrics.totalToolCalls / metrics.sessionCount) : 0} / session`}
+              line2={`across ${metrics.sessionCount.toLocaleString()} sessions`}
+            />
+          }
           icon={<Zap size={13} />}
           tooltip="Total tool invocations (Bash, Read, Edit, Write, Grep, Glob, Agent, etc.) across all sessions. Higher counts typically mean more complex tasks."
         />
@@ -167,13 +182,18 @@ export default async function DashboardHome({
               : "—"
           }
           sub={
-            burstStats.burstCount > 0
-              ? `peak ×${burstStats.peakConcurrent} · ${Math.round(
+            burstStats.burstCount > 0 ? (
+              <SubLines
+                line1={`peak ×${burstStats.peakConcurrent}`}
+                line2={`${Math.round(
                   (burstStats.totalParallelMs /
                     Math.max(1, metrics.totalAirTimeMs)) *
                     100,
-                )}% of active time`
-              : "no sustained parallelism"
+                )}% of active time`}
+              />
+            ) : (
+              "no sustained parallelism"
+            )
           }
           tooltip={`Total time ≥2 agents were working in parallel, with peak concurrency as the highest count in any single burst. Percentage shows what fraction of total active time was parallel.\n\n${burstStats.burstCount} burst${burstStats.burstCount === 1 ? "" : "s"} · ${burstStats.crossProjectBurstCount} spanned multiple projects.`}
         />
@@ -190,13 +210,25 @@ export default async function DashboardHome({
               </span>
             </span>
           }
-          sub={`${metrics.totalFilesEdited.toLocaleString()} files`}
+          sub={
+            <SubLines
+              line1={`${metrics.totalFilesEdited.toLocaleString()} files touched`}
+              line2={`${compactInt(
+                metrics.totalLinesAdded + metrics.totalLinesRemoved,
+              )} total lines`}
+            />
+          }
           tooltip={`Total lines added and removed across all Edit + Write tool calls.\n+${metrics.totalLinesAdded.toLocaleString()} added\n-${metrics.totalLinesRemoved.toLocaleString()} removed\n${metrics.totalFilesEdited.toLocaleString()} unique files touched`}
         />
         <MetricCard
           label="Est. cost"
           value={formatCost(estimateCostMulti(sessions))}
-          sub={`${compactTokens(totalInput)} in · ${compactTokens(metrics.totalTokens.output)} out`}
+          sub={
+            <SubLines
+              line1={`${compactTokens(totalInput)} in`}
+              line2={`${compactTokens(metrics.totalTokens.output)} out`}
+            />
+          }
           icon={<DollarSign size={13} />}
           tooltip={`Estimated API spend priced per-model across all sessions.\nInput: ${formatTokens(metrics.totalTokens.input)}\nOutput: ${formatTokens(metrics.totalTokens.output)}\nCache read: ${formatTokens(metrics.totalTokens.cacheRead)}\nCache write: ${formatTokens(metrics.totalTokens.cacheWrite)}`}
         />
@@ -440,6 +472,16 @@ export default async function DashboardHome({
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+/** Two-line sub for MetricCard: primary on top, secondary dimmer below. */
+function SubLines({ line1, line2 }: { line1: string; line2: string }) {
+  return (
+    <div style={{ lineHeight: 1.4 }}>
+      <div>{line1}</div>
+      <div style={{ color: "var(--af-text-tertiary)" }}>{line2}</div>
     </div>
   );
 }
