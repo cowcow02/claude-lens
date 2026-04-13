@@ -34,7 +34,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{ pid: 
   const serverJs = join(appDir(), "server.js");
 
   if (!existsSync(serverJs)) {
-    throw new Error(`Server not found at ${serverJs}. Reinstall with: npm install -g cclens`);
+    throw new Error(`Server not found at ${serverJs}. Reinstall with: npm install -g claudelens`);
   }
 
   // Check if port is in use

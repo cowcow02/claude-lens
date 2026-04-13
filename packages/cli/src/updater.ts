@@ -2,7 +2,7 @@ import { execSync, spawnSync } from "node:child_process";
 
 declare const CLI_VERSION: string;
 
-const PACKAGE_NAME = "cclens";
+const PACKAGE_NAME = "claudelens";
 const CHECK_TIMEOUT_MS = 3_000;
 
 /** Simple semver comparison. Returns true if remote > local. */

@@ -1,40 +1,91 @@
-# Claude Lens
+# claudelens
 
-**Local-only, open-source dashboard for [Claude Code](https://claude.com/claude-code) sessions.**
+**Local-only dashboard and usage tracker for [Claude Code](https://claude.com/claude-code).**
 
-Read your `~/.claude/projects/*.jsonl` transcripts and visualize everything — activity heatmaps, per-project stats, parallel runs, PR shipping metrics, and a beautiful session transcript view modeled on Claude's own managed-agents UI.
+`claudelens` reads your `~/.claude/projects/*.jsonl` transcripts, polls your plan's utilization directly from Anthropic, and visualises everything — live burndown charts, activity heatmaps, per-project stats, parallel agent runs, PR shipping metrics, and a beautiful session transcript view modeled on Claude's own managed-agents UI.
 
 Nothing leaves your machine.
 
-## Why another one?
+> Published to npm as `claudelens`. Invoke via `claudelens` (full name) or `cclens` (short alias, same binary) for tab-completion speed.
 
-There are [several](https://github.com/ryoppippi/ccusage) [excellent](https://github.com/chiphuyen/sniffly) [Claude Code](https://github.com/FlorianBruniaux/ccboard) [dashboards](https://github.com/d-kimuson/claude-code-viewer) already — `ccusage` (CLI), `sniffly` (error taxonomy), `ccboard` (feature-dense TUI+web), `claude-code-viewer` (PWA). This one focuses on two things they don't do well:
+## What makes it different
 
-1. **Parallel agent run detection.** No existing tool robustly detects when you had 2+ Claude Code sessions running simultaneously (against worktrees, multi-agent fleets, etc.). We compute this via sweep-line over session intervals and surface peaks + contiguous windows.
-2. **Per-session PR shipping attribution.** Claude Code's OTEL emits a `pull_request.count` metric, but nobody links individual sessions to the PR that resulted from them. We scan Bash tool calls for `gh pr create`, pull the `--title`, and plot PRs against session position — so you can measure *"how early in the session did Claude ship the PR?"* as a proxy for how well your harness is tuned.
+There are [several](https://github.com/ryoppippi/ccusage) [excellent](https://github.com/chiphuyen/sniffly) [Claude Code](https://github.com/FlorianBruniaux/ccboard) [dashboards](https://github.com/d-kimuson/claude-code-viewer) already. `claudelens` focuses on four things they don't cover well:
+
+1. **Real plan utilization, not approximations.** Most tools estimate your 5h/7d usage from token counts in JSONL. `cclens` calls `api.anthropic.com/api/oauth/usage` with your Claude Code OAuth token, so the numbers match exactly what `/usage` shows inside Claude Code.
+2. **Burndown visualisation.** A sprint-burndown chart per cycle shows remaining budget, a dashed "sustainable burn" reference line, and a live label telling you if you're on track or behind. Drops the jargon — you can see instantly whether you'll hit the wall.
+3. **Parallel agent run detection.** No other tool robustly detects when you had 2+ Claude Code sessions running simultaneously (against worktrees, multi-agent fleets, etc.). We compute this via sweep-line over session intervals and surface peaks, burst durations, and the % of agent time spent in parallel.
+4. **Per-session PR shipping attribution.** Scans `gh pr create` Bash calls to link individual sessions to the PRs they produced, plotting "position in session" as a proxy for how well your harness is tuned.
 
 Plus: a full transcript UI modeled on Claude's managed-agents view (mini-map timeline, turn collapsing, pretty tool cards), because nobody else makes reading a session a pleasant experience.
 
-## What you get
+## Quickstart
 
-### Dashboard
+Install globally from npm:
 
-- **GitHub-style contribution heatmap** — every day you coded with Claude, colored by activity
-- **Daily activity chart** — switch between sessions, tool calls, turns, and token breakdowns
-- **High-level metrics** — sessions, air-time, tool calls, token usage, avg turns, parallel peaks
-- **Parallel run detection** — see when you had multiple Claude Code sessions running at once
-- **Top projects** and **recent sessions** at a glance
+```bash
+npm install -g claudelens
+claudelens web
+# → http://localhost:3321
+```
 
-### Per-project view
+Or build from source:
 
-- Everything above, but scoped to a single project
-- **PR shipping metrics** — detected from `gh pr create` tool calls, with timeline positioning (how early in the session did Claude ship the PR?)
-- Full session list for that project
+```bash
+git clone https://github.com/cowcow02/claude-lens.git
+cd claude-lens
+pnpm install
+NEXT_OUTPUT=standalone pnpm build
+node scripts/prepare-cli.mjs
+node packages/cli/dist/index.js web
+```
 
-### Session list
+Or use the legacy `install.sh` one-liner:
 
-- Cards showing first user prompt + last agent conclusion
-- Filter by project, sort by newest / longest / most-tokens
+```bash
+curl -fsSL https://raw.githubusercontent.com/cowcow02/claude-lens/master/install.sh | bash
+```
+
+## CLI
+
+```bash
+cclens start [--port N] [--no-open]   # launch dashboard server
+cclens stop                           # graceful shutdown
+cclens web [page] [--no-open]         # open dashboard in browser (auto-starts)
+cclens usage [--save]                 # print 5h/7d plan utilization in terminal
+cclens stats [--live] [-s D] [--days N]   # ccusage-style daily token table
+cclens daemon start|stop|status|logs  # background poller for usage history
+cclens update                         # force reinstall latest
+cclens version
+```
+
+### The usage daemon
+
+Running `cclens daemon start` spawns a detached background poller that hits the Claude Code OAuth usage endpoint every 5 minutes and appends a snapshot to `~/.cclens/usage.jsonl`. The dashboard's `/usage` page reads that log to render:
+
+- **Current cycle burndown** — remaining budget over time, with a sustainable-burn reference diagonal and warning bands at <10% and <30%
+- **Multi-cycle historical view** — click expand on any chart → fullscreen modal with date range picker (Current cycle · 24H · 7D · 30D · 90D · Custom datetime range)
+- **Cycle boundaries** — vertical markers between each 5h / 7d reset, with the per-cycle peak called out
+- **Gap-aware lines** — missing data periods (daemon was offline) don't render as straight interpolations
+- **Always-visible sidebar widget** — current 5h/7d/Sonnet% with reset countdowns on every page
+
+All polling is driven by the OAuth token Claude Code already stores in your macOS Keychain (service `Claude Code-credentials`) — no API key needed, no login flow, no config.
+
+## Web dashboard
+
+### Overview (`/`)
+
+- **6 headline metric cards** (Sessions, Agent time, Tool calls, Parallelism, Code changes, Est. cost) with two-line subs showing headline + detail
+- **GitHub-style contribution heatmap** — every day you coded with Claude
+- **Daily activity chart** with sortable metrics (sessions / agent time / tool calls / turns / input / output / cache read)
+- **Top projects** and **recent sessions** panels at a glance
+- **Date range filter** (7D / 30D / 90D / All)
+
+### Session / Project views
+
+- **`/sessions`** — all sessions with card *or* sortable-table toggle (persisted per-page), search + filter + sort-by
+- **`/projects`** — project rollups with the same card/table toggle; worktree projects fold into their parent repo
+- **`/projects/[slug]`** — per-project dashboard reusing the overview layout (shared `DashboardView` component) + PR timeline + parallel runs strip + full session list
 
 ### Session detail
 
@@ -43,130 +94,150 @@ Modeled on Claude's managed-agents Sessions view:
 - **Mini-map timeline** — adaptive, selectable, scroll-tracked
 - **Turns mode** — collapses agent work between user inputs into compact "turn" cards with first message, middle steps, and heuristic-selected conclusion
 - **Pretty tool cards** — diff view for Edit, file path + content for Write, command block for Bash, compact summaries for Grep/Glob/Skill/TodoWrite/MCP tools
-- **Markdown rendering** for agent messages via `react-markdown` + `remark-gfm`
+- **Markdown rendering** via `react-markdown` + `remark-gfm`
 - **Token chips** with fresh-input / cached breakdown tooltips
-- **Sliding drawer** for per-row details
 
-## Quickstart
+### Timeline (`/parallelism`)
 
-**One-liner** (checks Node/pnpm, clones, installs, opens browser):
+Gantt chart of every session's active segments stacked per day, with burst detection overlays. Date picker + calendar heatmap for navigation.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/cowcow02/claude-lens/master/install.sh | bash
-```
+### Usage (`/usage`)
 
-**Or manually** (requires [pnpm](https://pnpm.io) and Node 20+):
-
-```bash
-git clone https://github.com/cowcow02/claude-lens.git
-cd claude-lens && pnpm install && pnpm dev
-# → http://localhost:3321
-```
-
-That's it. The app reads `~/.claude/projects/*.jsonl` directly — no database, no auth, no cloud.
+Historical burndown charts described above.
 
 ## Architecture
 
-This is a small pnpm/turbo monorepo:
+pnpm monorepo with Turborepo:
 
 ```
 claude-lens/
 ├── packages/
-│   └── parser/        # @claude-lens/parser — pure JSONL parser + analytics
-└── apps/
-    └── web/           # Next.js 16 + React 19 + Tailwind v4 dashboard
+│   ├── parser/              # @claude-lens/parser — pure JSONL parser + analytics
+│   └── cli/                 # cclens — published CLI + bundled standalone Next.js app
+├── apps/
+│   └── web/                 # Next.js 16 dashboard (standalone output bundled into cli/)
+├── scripts/
+│   ├── prepare-cli.mjs      # copies Next.js standalone output into packages/cli/app/
+│   ├── generate-mock-usage.mjs  # produces 30 days of realistic mock usage snapshots
+│   ├── version-sync.mjs     # propagates root version to all sub-packages
+│   └── smoke.mjs            # basic route health check
+└── CLAUDE.md                # agent-facing project guide + release process
 ```
 
 ### The parser package
 
-[`@claude-lens/parser`](./packages/parser/README.md) is a standalone npm package (not yet published) that turns raw Claude Code JSONL lines into:
+[`@claude-lens/parser`](./packages/parser/README.md) is a pure TypeScript library that turns raw Claude Code JSONL into:
 
 - **Structured events** (`SessionEvent[]`) with roles, timestamps, offsets, token usage
-- **Presentation rows** (`PresentationRow[]`) — noise filtered, tool calls merged, task notifications parsed
-- **Mega rows** (`MegaRow[]`) — collapsing agent loops into "turns" between user inputs
-- **Analytics** — daily buckets, parallel-run detection, PR detection, high-level metrics, project rollups
+- **Presentation rows** — noise filtered, tool calls merged, task notifications parsed
+- **Mega rows** — collapsing agent loops into "turns" between user inputs
+- **Analytics** — daily buckets, parallel-run detection (sweep-line), PR detection, high-level metrics, canonical project rollups (worktrees fold into parent repo)
 
-It's pure (no fs, no network), so you can use it in any JS runtime. A filesystem subpath at `@claude-lens/parser/fs` scans `~/.claude/projects` in Node.
+No fs or network. A `/fs` subpath exports the filesystem scanner for Node.
 
-### The viewer app
+### The CLI package
 
-`apps/web` is a standard Next.js 16 App Router app. It reads sessions on the server (RSC) and passes them to small client components for interactivity (heatmap hovers, chart metric switching, sidebar pinning). No database, no API server.
+`packages/cli/` is bundled with esbuild into a single binary that embeds:
+
+- The parser (for `cclens stats` and `cclens usage`)
+- A detached daemon worker (`dist/daemon-worker.js`) that polls the OAuth usage endpoint
+- The Next.js `apps/web` standalone output (pre-built and copied into `cli/app/`)
+
+Everything ships as one npm package. Global install gets a fully-working dashboard + CLI with zero additional setup.
+
+### Live updates
+
+A single SSE stream (`/api/events`) watches both `~/.claude/projects/` (session files) and `~/.cclens/usage.jsonl` (daemon snapshots). Both feed `LiveRefresher`, which calls `router.refresh()` on any change so the entire RSC tree (including the sidebar usage widget) re-reads fresh data without manual reload.
+
+### Shared preferences
+
+`usePersistentBoolean(key, default)` is a small hook backed by localStorage + a custom `cclens:persistent-boolean` event. It's the mechanism behind:
+
+- The Sonnet chart show/hide (main page and sidebar stay in sync)
+- The cards/table view toggle on `/sessions` and `/projects`
 
 ## Features
 
-### Smart parsing
+### Plan utilization
+
+- **Exact numbers from the OAuth usage endpoint**, not token estimates
+- Daemon polls every 5 minutes and appends to `~/.cclens/usage.jsonl`
+- Burndown chart per cycle with remaining budget and sustainable-burn diagonal
+- Multi-cycle historical view with gap detection and cycle-boundary markers
+- Always-visible sidebar widget
+
+### Smart JSONL parsing
 
 - **Token dedup** — Claude Code splits one API response into multiple JSONL lines, each carrying identical `usage`. The parser sums once per `message.id` so totals aren't doubled.
-- **Out-of-order timestamps** — Attachments can flush after their triggering event with earlier timestamps. Session bounds use `min(ts)`, not `first(ts)`.
-- **Task-notification codas** — Background `gh pr create` replies like "Acknowledged" are skipped when picking a turn's "conclusion" message.
+- **Canonical project rollup** — sessions in `/.worktrees/<name>` subdirs fold into their parent repo so all activity on a project shows under one entry.
+- **Out-of-order timestamps** — attachments can flush after their triggering event with earlier timestamps. Session bounds use `min(ts)`, not `first(ts)`.
+- **Multi-day session splitting** — long-running sessions spanning multiple local days contribute activity to each day.
+- **Task-notification codas** — background `gh pr create` replies like "Acknowledged" are skipped when picking a turn's "conclusion" message.
 - **Slash-command prettification** — `<command-name>/implement</command-name><command-args>AGE-9</command-args>` renders as `/implement AGE-9`.
-- **Skill-injection hiding** — Skill docs auto-injected as user blocks are filtered out.
+- **Skill-injection hiding** — skill docs auto-injected as user blocks are filtered out.
+- **Cache-aware cost estimation** — per-model pricing table with separate rates for input / output / cache-read / cache-write.
 
 ### Parallel run detection
 
-Sweep-line algorithm over session `[start, end]` intervals finds peaks and contiguous parallel regions. Useful if you run multiple Claude sessions (git worktrees, multi-agent fleets, etc.).
+Sweep-line over session `[start, end]` intervals finds peaks and contiguous parallel regions. The Parallelism metric card shows total parallel time plus the **% of agent time spent in parallel** — the single most leadership-relevant number. Useful if you run multiple Claude sessions (git worktrees, multi-agent fleets, etc.).
 
 ### PR shipping metrics
 
 Scans Bash tool calls for `gh pr create`, extracts titles from `--title "..."`, and plots them against session duration — so you can measure "on average, how early does Claude ship the PR?" as a proxy for how well your harness is tuned.
 
-### Air-time
+### Agent time (not wall clock)
 
-Not "wall-clock duration" — the summed event-to-event gap under an idle threshold (default 3min), approximating how long the agent was actually moving vs. waiting for user input.
+The headline duration metric is **not** wall-clock session duration. It's the summed event-to-event gap under an idle threshold (default 3 min), approximating how long the Claude agent was actually working vs. waiting for user input or sitting idle.
 
 ### Pinned projects
 
-Projects you pin (star-button in the sidebar) get promoted to a "Pinned" section at the top. Persisted in `localStorage` — no server state.
+Projects you pin (star button in the sidebar) get promoted to a "Pinned" section at the top. Persisted in localStorage — no server state.
 
 ## Configuration
 
-Zero config by default. The scanner reads `~/.claude/projects` via `DEFAULT_ROOT` in `@claude-lens/parser/fs`; if your setup is different, fork and override.
+Zero config by default. Environment overrides when needed:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CCLENS_DATA_DIR` | `~/.claude/projects` | Where to scan for JSONL sessions |
+| `CCLENS_PORT` | `3321` | Dashboard port (overridden by `--port`) |
+| `CCLENS_USAGE_LOG` | `~/.cclens/usage.jsonl` | Path for the usage daemon's append-only snapshot log |
+| `NEXT_OUTPUT` | — | Set to `standalone` when building for CLI bundling |
 
 ## Development
 
 ```bash
 pnpm install
-pnpm dev                      # start the web app (port 3321)
-pnpm -F @claude-lens/parser test        # run parser tests
-pnpm typecheck                # typecheck everything
-pnpm build                    # build the web app + parser
+pnpm dev                                  # start web app in dev mode
+pnpm -F @claude-lens/parser test          # run parser tests
+pnpm -F cclens test                       # run CLI tests
+pnpm typecheck                            # typecheck everything
+pnpm verify                               # typecheck + smoke tests
+pnpm build                                # build parser + web + cli
+
+# Build a fresh standalone bundle for `cclens web`
+NEXT_OUTPUT=standalone pnpm build
+node scripts/prepare-cli.mjs
+node packages/cli/dist/index.js web --no-open
+```
+
+### Mock usage data
+
+Need to see what the dashboard looks like with 30 days of realistic data?
+
+```bash
+node scripts/generate-mock-usage.mjs
+```
+
+Backs up your existing `~/.cclens/usage.jsonl` to `.bak` first. To restore real data:
+
+```bash
+mv ~/.cclens/usage.jsonl.bak ~/.cclens/usage.jsonl
 ```
 
 ## Privacy
 
-Everything runs on `localhost:3321` against your local filesystem. Nothing is sent anywhere. Session transcripts never leave your machine.
-
-## Roadmap
-
-Informed by a scan of the Claude Code dashboard ecosystem ([ccusage](https://github.com/ryoppippi/ccusage), [sniffly](https://github.com/chiphuyen/sniffly), [ccboard](https://github.com/FlorianBruniaux/ccboard), [claude-code-viewer](https://github.com/d-kimuson/claude-code-viewer), [codedash](https://github.com/vakovalskii/codedash), [tokscale](https://github.com/junhoyeo/tokscale), [claude-code-otel](https://github.com/ColeMurray/claude-code-otel)):
-
-**Unique differentiators to lean into**
-- [x] Parallel agent run detection (sweep-line over session intervals)
-- [x] Per-session PR shipping attribution with "position in session" metric
-- [ ] Cross-repo organization rollup (monorepo + related packages + infra as one unit)
-- [ ] Friction analytics: which slash commands fail most, where you interrupt Claude, which tool calls retry most
-
-**Ecosystem-proven features worth stealing**
-- [ ] Token cost estimation using LiteLLM pricing data (Opus vs Sonnet vs Haiku, cache-write 1.25x/2x, cache-read 0.1x) — *borrowed from ccusage, tokscale*
-- [ ] Error-type classification (content-not-found, tool failure, rate limit) — *borrowed from sniffly*
-- [ ] Session bookmarks + tags — *borrowed from ccboard, codedash*
-- [ ] Full-text FTS5 search across all sessions — *borrowed from ccboard*
-- [ ] Session replay with play/pause slider — *borrowed from codedash*
-- [ ] Streak stats on the heatmap — *borrowed from codedash*
-- [ ] Model-switch timeline per session — *borrowed from ccboard*
-- [ ] Audit log for credential leaks / destructive commands — *borrowed from ccboard*
-- [ ] Git commit correlation: interleave commits with session messages — *borrowed from amac0/ClaudeCodeJSONLParser, simonw/claude-code-transcripts*
-- [ ] Live status badges via hook injection (Running / WaitingInput / Stopped) — *borrowed from ccboard, agents-observe*
-- [ ] `npx @claude-lens/web` distribution — *borrowed from ccusage pattern*
-
-**Infrastructure**
-- [ ] SQLite cache at `~/.claude/claude-lens.db` with mtime-based incremental scan (ccboard reports 89x speedup over raw rescans)
-- [ ] Scan additional session paths: `~/Library/Developer/Xcode/CodingAssistant/ClaudeAgentConfig/projects/` (phuryn does this)
-- [ ] Command palette (`⌘K`) for quick session lookup
-- [ ] Compare two sessions side-by-side
-- [ ] Export session as markdown / PDF
-- [ ] Per-tool usage breakdown charts
-- [ ] Zod-strict parsing for zero data loss on schema drift (d-kimuson pattern)
+Everything runs on `localhost:3321` against your local filesystem. The usage daemon calls Anthropic's own OAuth endpoint (the same one `/usage` in Claude Code hits) using the token Claude Code already stores locally — no new auth, no third parties. Session transcripts never leave your machine.
 
 ## License
 
@@ -175,3 +246,9 @@ Informed by a scan of the Claude Code dashboard ecosystem ([ccusage](https://git
 ## Credits
 
 Built on top of [Claude Code](https://claude.com/claude-code), [Next.js 16](https://nextjs.org), [Tailwind v4](https://tailwindcss.com), [lucide-react](https://lucide.dev), [react-markdown](https://github.com/remarkjs/react-markdown), and [remark-gfm](https://github.com/remarkjs/remark-gfm).
+
+Inspiration + mechanism credits:
+
+- [ccusage](https://github.com/ryoppippi/ccusage) — the daily token table layout
+- [usage4claude](https://github.com/f-is-h/usage4claude) — showed that the claude.ai private API was the right path for real numbers
+- [claude-meter](https://github.com/francisbrero/claude-meter) — the definitive find that the Claude Code OAuth token + `/api/oauth/usage` + `anthropic-beta: oauth-2025-04-20` header is a clean authoritative data source

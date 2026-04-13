@@ -1,10 +1,11 @@
 {
-  "name": "cclens",
+  "name": "claudelens",
   "version": "0.1.0",
-  "description": "Claude Code lens — local dashboard and usage tracker for Claude Code sessions",
+  "description": "Claude Lens — local-only dashboard and usage tracker for Claude Code sessions",
   "license": "MIT",
   "type": "module",
   "bin": {
+    "claudelens": "./dist/index.js",
     "cclens": "./dist/index.js"
   },
   "files": [
