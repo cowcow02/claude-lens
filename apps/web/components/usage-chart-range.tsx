@@ -5,6 +5,38 @@ import type { UsageSnapshot, UsageWindow } from "@/lib/usage-data";
 
 type SeriesKey = "five_hour" | "seven_day" | "seven_day_sonnet";
 
+/**
+ * Gap threshold: consecutive snapshots separated by more than this are
+ * treated as a data gap and the polyline is broken. The daemon polls
+ * every 5 minutes, so anything over ~15 minutes is unambiguously a gap.
+ */
+const GAP_THRESHOLD_MS = 15 * 60 * 1000;
+
+/**
+ * Convert a point series to an SVG path, breaking the line at gaps so
+ * missing data doesn't render as a straight interpolation. Single
+ * isolated points produce a tiny line-to-self (so they're still visible
+ * as a dot via the separately-drawn peak marker).
+ */
+function buildGappedPath(
+  points: { t: number; remaining: number }[],
+  xScale: (t: number) => number,
+  yScale: (v: number) => number,
+): string {
+  if (points.length === 0) return "";
+  const parts: string[] = [];
+  let inSegment = false;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]!;
+    const prev = i > 0 ? points[i - 1] : null;
+    const isGap = prev ? p.t - prev.t > GAP_THRESHOLD_MS : false;
+    const cmd = !inSegment || isGap ? "M" : "L";
+    parts.push(`${cmd} ${xScale(p.t).toFixed(1)} ${yScale(p.remaining).toFixed(1)}`);
+    inSegment = true;
+  }
+  return parts.join(" ");
+}
+
 type CycleData = {
   /** Cycle end (= resets_at of the window at that time), ms epoch */
   resetsAtMs: number;
@@ -205,6 +237,18 @@ export function UsageChartRange({
       className="af-card"
       style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10 }}
     >
+      {/* Range header — full datetime span */}
+      <div
+        suppressHydrationWarning
+        style={{
+          fontSize: 11,
+          color: "var(--af-text-tertiary)",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        {formatRangeLabel(startMs, endMs)}
+      </div>
+
       {/* Stat strip */}
       <div
         style={{
@@ -311,16 +355,14 @@ export function UsageChartRange({
               100 - (100 * (unXScale(idealX2) - cycle.startMs)) / windowMs,
             );
 
-            // Actual line — only snapshots within the visible range
+            // Actual line — only snapshots within the visible range.
+            // Break the polyline wherever there's a data gap larger than
+            // the expected polling interval so missing periods don't
+            // render as straight interpolations.
             const visiblePts = cycle.points.filter(
               (p) => p.t >= startMs && p.t <= endMs,
             );
-            const linePath = visiblePts
-              .map(
-                (p, j) =>
-                  `${j === 0 ? "M" : "L"} ${xScale(p.t).toFixed(1)} ${yScale(p.remaining).toFixed(1)}`,
-              )
-              .join(" ");
+            const linePath = buildGappedPath(visiblePts, xScale, yScale);
 
             // Reset marker: vertical line at cycle end (skip if outside range
             // or if it's the very last cycle ending in the future)
@@ -354,6 +396,19 @@ export function UsageChartRange({
                     strokeLinejoin="round"
                   />
                 )}
+
+                {/* Data point dots — ensures isolated/gap-bounded snapshots
+                    remain visible even when the polyline breaks around them. */}
+                {visiblePts.map((p, j) => (
+                  <circle
+                    key={`${i}-${j}`}
+                    cx={xScale(p.t)}
+                    cy={yScale(p.remaining)}
+                    r="1.8"
+                    fill={colorVar}
+                    fillOpacity="0.9"
+                  />
+                ))}
 
                 {/* Peak marker */}
                 {cycle.peakT >= startMs && cycle.peakT <= endMs && (
@@ -430,7 +485,7 @@ export function UsageChartRange({
             fill="var(--af-text-tertiary)"
             suppressHydrationWarning
           >
-            {formatAxisDate(startMs)}
+            {formatAxisDate(startMs, endMs - startMs)}
           </text>
           <text
             x={width - padding.right}
@@ -440,7 +495,7 @@ export function UsageChartRange({
             fill="var(--af-text-tertiary)"
             suppressHydrationWarning
           >
-            {formatAxisDate(endMs)}
+            {formatAxisDate(endMs, endMs - startMs)}
           </text>
           <text
             x={padding.left + plotW / 2}
@@ -530,11 +585,40 @@ function Stat({ label, value, color }: { label: string; value: string; color: st
   );
 }
 
-function formatAxisDate(ms: number): string {
+/** Render a full range header like:
+ *    "Mar 14 10:42 AM  →  Mar 14 3:42 PM  (5h)"
+ *  Always shows both date and time, plus a human-readable span.
+ */
+function formatRangeLabel(startMs: number, endMs: number): string {
+  const start = new Date(startMs).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const end = new Date(endMs).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const spanMs = endMs - startMs;
+  let span: string;
+  if (spanMs < 60 * 60 * 1000) {
+    span = `${Math.round(spanMs / 60000)}m`;
+  } else if (spanMs < 24 * 60 * 60 * 1000) {
+    span = `${(spanMs / (60 * 60 * 1000)).toFixed(1).replace(/\.0$/, "")}h`;
+  } else {
+    span = `${(spanMs / (24 * 60 * 60 * 1000)).toFixed(1).replace(/\.0$/, "")}d`;
+  }
+  return `${start}  →  ${end}  (${span})`;
+}
+
+function formatAxisDate(ms: number, rangeSpanMs: number): string {
   const d = new Date(ms);
-  const span = Math.abs(Date.now() - ms);
-  // If the range is short (< 48h), show time; otherwise show date.
-  if (span < 48 * 60 * 60 * 1000) {
+  // Short ranges (≤ 14 days) show date + time so viewers can see
+  // exact cycle boundaries. Longer ranges show date only.
+  if (rangeSpanMs <= 14 * 24 * 60 * 60 * 1000) {
     return d.toLocaleString(undefined, {
       month: "short",
       day: "numeric",
