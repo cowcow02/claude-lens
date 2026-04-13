@@ -12,7 +12,6 @@ const HEADER_HEIGHT = 26;
 const MIN_CHART_WIDTH = 700;
 const PAD_MS = 30 * 60 * 1000; // 30-min padding on each side
 
-// Per-project color palette — hash project name to pick a consistent color.
 const PROJECT_COLORS = [
   "rgba(45, 212, 191, 0.75)",
   "rgba(167, 139, 250, 0.75)",
@@ -34,12 +33,10 @@ function projectColor(projectDir: string): string {
   return PROJECT_COLORS[Math.abs(hash) % PROJECT_COLORS.length]!;
 }
 
-/** Strip XML tags from a preview string (teammate-message, local-command-caveat, etc.) */
 function stripXml(s: string): string {
   return s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 }
 
-/** Format an absolute ms timestamp as "HH:MM" in local time. */
 function fmtTime(ms: number): string {
   const d = new Date(ms);
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
@@ -52,7 +49,6 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
     y: number;
   } | null>(null);
 
-  // Build project legend: unique projects, each with their color.
   const projectLegend = useMemo(() => {
     const seen = new Map<string, { name: string; color: string; count: number }>();
     for (const s of gantt.sessions) {
@@ -70,8 +66,6 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
     return Array.from(seen.values()).sort((a, b) => b.count - a.count);
   }, [gantt.sessions]);
 
-  // Auto-zoom: compute the visible time range from actual segment bounds
-  // instead of always showing midnight-to-midnight.
   const { rangeStartMs, rangeEndMs, hourMarks } = useMemo(() => {
     if (gantt.sessions.length === 0) {
       return {
@@ -88,7 +82,6 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
         if (seg.endMs > latest) latest = seg.endMs;
       }
     }
-    // Pad and snap to hour boundaries for clean grid lines.
     const padded0 = earliest - PAD_MS;
     const padded1 = latest + PAD_MS;
     const startHour = new Date(padded0);
@@ -100,7 +93,6 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
     const rangeStartMs = Math.max(startHour.getTime(), gantt.dayStartMs);
     const rangeEndMs = Math.min(endHour.getTime(), gantt.dayEndMs);
 
-    // Build hour marks within the visible range.
     const marks: number[] = [];
     const cur = new Date(rangeStartMs);
     cur.setMinutes(0, 0, 0);
@@ -116,23 +108,21 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
   const rangeDuration = rangeEndMs - rangeStartMs;
   const chartWidth = Math.max(
     MIN_CHART_WIDTH,
-    Math.ceil((rangeDuration / (60 * 60 * 1000)) * 80), // ~80px per hour
+    Math.ceil((rangeDuration / (60 * 60 * 1000)) * 80),
   );
-  const totalWidth = LABEL_WIDTH + chartWidth;
-  const totalHeight =
-    HEADER_HEIGHT + gantt.sessions.length * (ROW_HEIGHT + ROW_GAP) + ROW_GAP + 8;
+  const bodyHeight = gantt.sessions.length * (ROW_HEIGHT + ROW_GAP) + ROW_GAP + 8;
 
+  // Map ms → x within the chart body (NOT including the label column offset)
   const msToX = (ms: number): number => {
     const frac = (ms - rangeStartMs) / rangeDuration;
-    return LABEL_WIDTH + frac * chartWidth;
+    return frac * chartWidth;
   };
 
+  const stickyBg = "var(--af-surface)";
+
   return (
-    <div
-      className="af-panel"
-      style={{ overflow: "auto", position: "relative" }}
-    >
-      {/* Legend */}
+    <div className="af-panel" style={{ overflow: "hidden" }}>
+      {/* Legend — stays above the scroll area */}
       <div
         style={{
           display: "flex",
@@ -146,12 +136,9 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
         }}
       >
         {projectLegend.map((p) => {
-          // Shorten long paths: keep last 2 segments max.
           const parts = p.name.split("/").filter(Boolean);
           const short =
-            parts.length > 2
-              ? "…/" + parts.slice(-2).join("/")
-              : p.name;
+            parts.length > 2 ? "…/" + parts.slice(-2).join("/") : p.name;
           return (
             <span
               key={p.name}
@@ -167,12 +154,17 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
                   flexShrink: 0,
                 }}
               />
-              <span style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span
+                style={{
+                  maxWidth: 160,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {short}
               </span>
-              <span style={{ color: "var(--af-text-tertiary)", fontSize: 10 }}>
-                ({p.count})
-              </span>
+              <span style={{ color: "var(--af-text-tertiary)", fontSize: 10 }}>({p.count})</span>
             </span>
           );
         })}
@@ -201,97 +193,99 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
         </span>
       </div>
 
-      <div style={{ minWidth: totalWidth }}>
-        <svg
-          width={totalWidth}
-          height={totalHeight}
-          style={{ display: "block" }}
-          onMouseLeave={() => setHover(null)}
+      {/* Scroll container — handles both axes. Sticky elements inside reference this. */}
+      <div
+        style={{
+          overflow: "auto",
+          maxHeight: "calc(100vh - 240px)",
+          position: "relative",
+        }}
+        onMouseLeave={() => setHover(null)}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: `${LABEL_WIDTH}px ${chartWidth}px`,
+            gridTemplateRows: `${HEADER_HEIGHT}px ${bodyHeight}px`,
+            width: LABEL_WIDTH + chartWidth,
+          }}
         >
-          {/* Stripe pattern for idle gaps */}
-          <defs>
-            <pattern
-              id="gantt-idle-stripes"
-              patternUnits="userSpaceOnUse"
-              width="6"
-              height="6"
-              patternTransform="rotate(45)"
-            >
-              <rect width="6" height="6" fill="var(--af-surface-hover)" />
-              <line
-                x1="0" y1="0" x2="0" y2="6"
-                stroke="var(--af-border-subtle)"
-                strokeWidth="1.5"
-              />
-            </pattern>
-          </defs>
+          {/* (0,0) top-left corner — sticky to both edges */}
+          <div
+            style={{
+              position: "sticky",
+              top: 0,
+              left: 0,
+              zIndex: 3,
+              background: stickyBg,
+              borderBottom: "1px solid var(--af-border-subtle)",
+              borderRight: "1px solid var(--af-border-subtle)",
+            }}
+          />
 
-          {/* Hour grid lines + labels */}
-          {hourMarks.map((ms) => {
-            const x = msToX(ms);
-            const d = new Date(ms);
-            const isMainHour = d.getHours() % 3 === 0;
-            return (
-              <g key={ms}>
-                <line
-                  x1={x}
-                  y1={HEADER_HEIGHT}
-                  x2={x}
-                  y2={totalHeight}
-                  stroke="var(--af-border-subtle)"
-                  strokeWidth={isMainHour ? 0.8 : 0.4}
-                  strokeDasharray={isMainHour ? undefined : "2 4"}
-                />
-                <text
-                  x={x}
-                  y={HEADER_HEIGHT - 8}
-                  textAnchor="middle"
-                  fontSize={10}
-                  fill={
-                    isMainHour
-                      ? "var(--af-text-secondary)"
-                      : "var(--af-text-tertiary)"
-                  }
-                  fontWeight={isMainHour ? 600 : 400}
-                >
-                  {fmtTime(ms)}
-                </text>
-              </g>
-            );
-          })}
+          {/* (0,1) hour header row — sticky top */}
+          <div
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 2,
+              background: stickyBg,
+              borderBottom: "1px solid var(--af-border-subtle)",
+            }}
+          >
+            <svg width={chartWidth} height={HEADER_HEIGHT} style={{ display: "block" }}>
+              {hourMarks.map((ms) => {
+                const x = msToX(ms);
+                const d = new Date(ms);
+                const isMainHour = d.getHours() % 3 === 0;
+                return (
+                  <text
+                    key={ms}
+                    x={x}
+                    y={HEADER_HEIGHT - 8}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fill={
+                      isMainHour ? "var(--af-text-secondary)" : "var(--af-text-tertiary)"
+                    }
+                    fontWeight={isMainHour ? 600 : 400}
+                  >
+                    {fmtTime(ms)}
+                  </text>
+                );
+              })}
+            </svg>
+          </div>
 
-          {/* Session rows */}
-          {gantt.sessions.map((session, i) => {
-            const y = HEADER_HEIGHT + i * (ROW_HEIGHT + ROW_GAP) + ROW_GAP;
-            const color = projectColor(session.projectDir);
-            const label = session.firstUserPreview
-              ? stripXml(session.firstUserPreview).slice(0, 45)
-              : prettyProjectName(session.projectName);
-            const projectLabel = prettyProjectName(session.projectName);
-
-            return (
-              <g key={`${session.id}-${i}`}>
-                {/* Subtle row stripe */}
-                {i % 2 === 1 && (
-                  <rect
-                    x={0}
-                    y={y}
-                    width={totalWidth}
-                    height={ROW_HEIGHT}
-                    fill="var(--af-surface-hover)"
-                    opacity={0.25}
-                  />
-                )}
-
-                {/* Session label */}
-                <foreignObject x={4} y={y} width={LABEL_WIDTH - 8} height={ROW_HEIGHT}>
+          {/* (1,0) session labels column — sticky left */}
+          <div
+            style={{
+              position: "sticky",
+              left: 0,
+              zIndex: 1,
+              background: stickyBg,
+              borderRight: "1px solid var(--af-border-subtle)",
+            }}
+          >
+            <div style={{ paddingTop: ROW_GAP }}>
+              {gantt.sessions.map((session, i) => {
+                const color = projectColor(session.projectDir);
+                const label = session.firstUserPreview
+                  ? stripXml(session.firstUserPreview).slice(0, 45)
+                  : prettyProjectName(session.projectName);
+                const projectLabel = prettyProjectName(session.projectName);
+                return (
                   <div
+                    key={`label-${session.id}-${i}`}
                     style={{
                       height: ROW_HEIGHT,
+                      marginBottom: ROW_GAP,
                       display: "flex",
                       alignItems: "center",
                       gap: 6,
-                      overflow: "hidden",
+                      padding: "0 8px 0 6px",
+                      background:
+                        i % 2 === 1 ? "var(--af-surface-hover)" : "transparent",
                     }}
                   >
                     <span
@@ -312,88 +306,154 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
                         lineHeight: 1.2,
+                        textDecoration: "none",
                       }}
                       title={`${stripXml(session.firstUserPreview ?? "")} — ${projectLabel}`}
                     >
                       {label}
                     </Link>
                   </div>
-                </foreignObject>
+                );
+              })}
+            </div>
+          </div>
 
-                {/* Active segments */}
-                {session.segments.map((seg, si) => {
-                  const x1 = msToX(seg.startMs);
-                  const x2 = msToX(seg.endMs);
-                  const w = Math.max(x2 - x1, 4);
-                  return (
-                    <rect
-                      key={si}
-                      x={x1}
-                      y={y + 5}
-                      width={w}
-                      height={ROW_HEIGHT - 10}
-                      fill={color}
-                      rx={3}
-                      style={{ cursor: "pointer" }}
-                      onMouseEnter={(e) => {
-                        const svgRect = (
-                          e.currentTarget.closest("svg") as SVGElement
-                        ).getBoundingClientRect();
-                        setHover({
-                          session,
-                          x: e.clientX - svgRect.left,
-                          y: y + ROW_HEIGHT + 4,
-                        });
-                      }}
-                    />
-                  );
-                })}
-
-                {/* Idle gaps (zebra-striped rectangles) */}
-                {session.segments.length > 1 &&
-                  session.segments.slice(0, -1).map((seg, si) => {
-                    const next = session.segments[si + 1]!;
-                    const x1 = msToX(seg.endMs);
-                    const x2 = msToX(next.startMs);
-                    if (x2 - x1 < 4) return null;
-                    return (
-                      <rect
-                        key={`idle-${si}`}
-                        x={x1 + 1}
-                        y={y + 7}
-                        width={x2 - x1 - 2}
-                        height={ROW_HEIGHT - 14}
-                        fill="url(#gantt-idle-stripes)"
-                        rx={2}
-                        opacity={0.7}
-                      />
-                    );
-                  })}
-
-                {/* Active time + time range at right end */}
-                <text
-                  x={Math.min(msToX(session.endMs) + 8, totalWidth - 100)}
-                  y={y + ROW_HEIGHT / 2 + 3.5}
-                  fontSize={9}
-                  fill="var(--af-text-tertiary)"
-                  fontFamily="var(--font-mono)"
+          {/* (1,1) main chart body — bars + grid + idle + right-end text */}
+          <div>
+            <svg width={chartWidth} height={bodyHeight} style={{ display: "block" }}>
+              <defs>
+                <pattern
+                  id="gantt-idle-stripes"
+                  patternUnits="userSpaceOnUse"
+                  width="6"
+                  height="6"
+                  patternTransform="rotate(45)"
                 >
-                  {formatDuration(session.activeMs)}
-                  {" · "}
-                  {fmtTime(session.startMs)}–{fmtTime(session.endMs)}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
+                  <rect width="6" height="6" fill="var(--af-surface-hover)" />
+                  <line
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2="6"
+                    stroke="var(--af-border-subtle)"
+                    strokeWidth="1.5"
+                  />
+                </pattern>
+              </defs>
 
-        {/* Hover tooltip — clamped within the chart bounds */}
+              {/* Hour grid lines */}
+              {hourMarks.map((ms) => {
+                const x = msToX(ms);
+                const d = new Date(ms);
+                const isMainHour = d.getHours() % 3 === 0;
+                return (
+                  <line
+                    key={ms}
+                    x1={x}
+                    y1={0}
+                    x2={x}
+                    y2={bodyHeight}
+                    stroke="var(--af-border-subtle)"
+                    strokeWidth={isMainHour ? 0.8 : 0.4}
+                    strokeDasharray={isMainHour ? undefined : "2 4"}
+                  />
+                );
+              })}
+
+              {/* Session rows */}
+              {gantt.sessions.map((session, i) => {
+                const y = i * (ROW_HEIGHT + ROW_GAP) + ROW_GAP;
+                const color = projectColor(session.projectDir);
+
+                return (
+                  <g key={`row-${session.id}-${i}`}>
+                    {i % 2 === 1 && (
+                      <rect
+                        x={0}
+                        y={y}
+                        width={chartWidth}
+                        height={ROW_HEIGHT}
+                        fill="var(--af-surface-hover)"
+                        opacity={0.25}
+                      />
+                    )}
+
+                    {/* Active segments */}
+                    {session.segments.map((seg, si) => {
+                      const x1 = msToX(seg.startMs);
+                      const x2 = msToX(seg.endMs);
+                      const w = Math.max(x2 - x1, 4);
+                      return (
+                        <rect
+                          key={si}
+                          x={x1}
+                          y={y + 5}
+                          width={w}
+                          height={ROW_HEIGHT - 10}
+                          fill={color}
+                          rx={3}
+                          style={{ cursor: "pointer" }}
+                          onMouseEnter={(e) => {
+                            const svgRect = (
+                              e.currentTarget.closest("svg") as SVGElement
+                            ).getBoundingClientRect();
+                            setHover({
+                              session,
+                              x: e.clientX - svgRect.left + LABEL_WIDTH,
+                              y: y + ROW_HEIGHT + HEADER_HEIGHT + 4,
+                            });
+                          }}
+                        />
+                      );
+                    })}
+
+                    {/* Idle gaps */}
+                    {session.segments.length > 1 &&
+                      session.segments.slice(0, -1).map((seg, si) => {
+                        const next = session.segments[si + 1]!;
+                        const x1 = msToX(seg.endMs);
+                        const x2 = msToX(next.startMs);
+                        if (x2 - x1 < 4) return null;
+                        return (
+                          <rect
+                            key={`idle-${si}`}
+                            x={x1 + 1}
+                            y={y + 7}
+                            width={x2 - x1 - 2}
+                            height={ROW_HEIGHT - 14}
+                            fill="url(#gantt-idle-stripes)"
+                            rx={2}
+                            opacity={0.7}
+                          />
+                        );
+                      })}
+
+                    {/* Active time + time range at right end */}
+                    <text
+                      x={Math.min(msToX(session.endMs) + 8, chartWidth - 100)}
+                      y={y + ROW_HEIGHT / 2 + 3.5}
+                      fontSize={9}
+                      fill="var(--af-text-tertiary)"
+                      fontFamily="var(--font-mono)"
+                    >
+                      {formatDuration(session.activeMs)}
+                      {" · "}
+                      {fmtTime(session.startMs)}–{fmtTime(session.endMs)}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        </div>
+
+        {/* Hover tooltip */}
         {hover && (
           <div
             style={{
               position: "absolute",
-              left: Math.max(8, Math.min(hover.x, totalWidth - 340)),
-              top: Math.min(hover.y, totalHeight - 100),
+              left: Math.max(8, Math.min(hover.x, LABEL_WIDTH + chartWidth - 340)),
+              top: Math.min(hover.y, HEADER_HEIGHT + bodyHeight - 100),
               zIndex: 50,
               background: "var(--af-surface-elevated)",
               border: "1px solid var(--af-border-subtle)",
@@ -431,7 +491,9 @@ export function GanttChart({ gantt }: { gantt: GanttDay }) {
                 color: "var(--af-text-secondary)",
               }}
             >
-              <span>Active: <strong>{formatDuration(hover.session.activeMs)}</strong></span>
+              <span>
+                Active: <strong>{formatDuration(hover.session.activeMs)}</strong>
+              </span>
               <span>Segments: {hover.session.segments.length}</span>
               <span>
                 Range: {fmtTime(hover.session.startMs)}–{fmtTime(hover.session.endMs)}

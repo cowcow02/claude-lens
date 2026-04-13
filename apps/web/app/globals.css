@@ -133,6 +133,14 @@ input::placeholder {
   color: var(--af-text-tertiary);
 }
 
+/* Compact select — used in toolbars where the default 9px padding is too large */
+.sl-compact-select {
+  padding: 4px 28px 4px 10px !important;
+  height: 32px !important;
+  font-size: 12px !important;
+  border-radius: 6px !important;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
@@ -166,8 +174,8 @@ input::placeholder {
   font-size: 13px;
   font-weight: 600;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 6px;
 }
 
 .af-tag {

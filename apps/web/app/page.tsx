@@ -325,7 +325,7 @@ export default async function DashboardHome({
             </span>
           </div>
           <div style={{ padding: 14 }}>
-            <ParallelRunsStrip runs={parallelRuns} />
+            <ParallelRunsStrip runs={parallelRuns} sessions={sessions} />
           </div>
         </div>
 
@@ -425,7 +425,7 @@ export default async function DashboardHome({
       <section className="af-panel">
         <div className="af-panel-header">
           <span>Recent sessions</span>
-          <Link href="/sessions" style={{ fontSize: 11, color: "var(--af-accent)" }}>
+          <Link href="/sessions" style={{ fontSize: 11, color: "var(--af-accent)", marginLeft: "auto" }}>
             View all →
           </Link>
         </div>

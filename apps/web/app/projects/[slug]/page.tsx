@@ -287,7 +287,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ slug
               </span>
             </div>
             <div style={{ padding: 14 }}>
-              <ParallelRunsStrip runs={parallelRuns} />
+              <ParallelRunsStrip runs={parallelRuns} sessions={projectSessions} />
             </div>
           </div>
         )}

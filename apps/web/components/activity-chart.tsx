@@ -120,55 +120,59 @@ export function ActivityChart({
       <div
         style={{
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
+          gap: 4,
+          background: "var(--background)",
+          borderRadius: 7,
+          padding: 3,
           marginBottom: 10,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            gap: 4,
-            background: "var(--background)",
-            borderRadius: 7,
-            padding: 3,
-          }}
-        >
-          {(Object.keys(METRIC_CONFIG) as Metric[]).map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setMetric(key)}
-              style={{
-                fontSize: 11,
-                padding: "5px 10px",
-                border: "none",
-                borderRadius: 5,
-                background:
-                  metric === key ? "var(--af-surface-elevated)" : "transparent",
-                color: metric === key ? "var(--af-text)" : "var(--af-text-tertiary)",
-                fontWeight: 500,
-              }}
-            >
-              {METRIC_CONFIG[key].label}
-            </button>
-          ))}
-        </div>
+        {(Object.keys(METRIC_CONFIG) as Metric[]).map((key) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setMetric(key)}
+            style={{
+              fontSize: 11,
+              padding: "5px 10px",
+              border: "none",
+              borderRadius: 5,
+              background:
+                metric === key ? "var(--af-surface-elevated)" : "transparent",
+              color: metric === key ? "var(--af-text)" : "var(--af-text-tertiary)",
+              fontWeight: 500,
+            }}
+          >
+            {METRIC_CONFIG[key].label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ position: "relative", overflowX: "auto" }}>
         {hover && (
           <div
             style={{
+              position: "absolute",
+              left: hover.x,
+              top: 0,
+              transform: "translateX(-50%)",
+              background: "var(--af-surface-elevated)",
+              border: "1px solid var(--af-border-subtle)",
+              borderRadius: 6,
+              padding: "4px 8px",
               fontSize: 11,
               color: "var(--af-text-secondary)",
               fontFamily: "var(--font-mono)",
+              whiteSpace: "nowrap",
+              pointerEvents: "none",
+              zIndex: 10,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
             }}
           >
             {hover.bucket.date} ·{" "}
             {config.unit === "ms" ? formatMs(hover.value) : hover.value.toLocaleString()}
           </div>
         )}
-      </div>
-
-      <div style={{ position: "relative", overflowX: "auto" }}>
         <svg width={Math.max(width, 600)} height={height} style={{ display: "block" }}>
           {/* Baseline */}
           <line
