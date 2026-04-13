@@ -39,7 +39,7 @@ export function UsageChart({
   // readable. ~6.4:1 aspect works well at full page width.
   const width = 1280;
   const height = 200;
-  const padding = { top: 20, right: 26, bottom: 42, left: 64 };
+  const padding = { top: 20, right: 26, bottom: 32, left: 64 };
 
   const computed = useMemo(() => {
     const valid = snapshots
@@ -270,15 +270,16 @@ export function UsageChart({
             Remaining budget (%)
           </text>
 
-          {/* X-axis labels */}
+          {/* X-axis labels — actual datetimes instead of 'Start'/'Reset' */}
           <text
             x={padding.left}
             y={height - 20}
             textAnchor="start"
             fontSize="12"
             fill="var(--af-text-tertiary)"
+            suppressHydrationWarning
           >
-            Start
+            {formatAxisDatetime(windowStart)}
           </text>
           <text
             x={width - padding.right}
@@ -286,17 +287,9 @@ export function UsageChart({
             textAnchor="end"
             fontSize="12"
             fill="var(--af-text-tertiary)"
+            suppressHydrationWarning
           >
-            Reset
-          </text>
-          <text
-            x={padding.left + plotW / 2}
-            y={height - 4}
-            textAnchor="middle"
-            fontSize="12"
-            fill="var(--af-text-tertiary)"
-          >
-            Time
+            {formatAxisDatetime(windowEnd)}
           </text>
 
           {/* Danger (<10% remaining) and caution (10–30%) bands at the bottom */}
@@ -468,6 +461,15 @@ function formatWindowSize(ms: number): string {
   if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
   const days = hours / 24;
   return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+function formatAxisDatetime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatRelative(iso: string): string {
