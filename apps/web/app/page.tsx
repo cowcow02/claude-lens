@@ -190,7 +190,7 @@ export default async function DashboardHome({
               ? `peak ×${burstStats.peakConcurrent} · ${burstStats.burstCount} burst${burstStats.burstCount === 1 ? "" : "s"} · ${burstStats.activeDayCount} day${burstStats.activeDayCount === 1 ? "" : "s"}`
               : "no sustained parallelism"
           }
-          tooltip={`Total time where ≥2 agents were actively working in parallel, summed across all detected bursts. Peak concurrency is the highest agent count during any single burst.\n\nBursts are detected by sweep-line over session active segments (same 3-min idle-gap split as airtime), then:\n  • drop overlaps under 1 minute\n  • merge overlaps within 10 minutes of each other\n\nThis filters out accidental tab-switch artifacts and fragments — a morning of back-and-forth agent work becomes one burst, not forty.\n\n${burstStats.burstCount} burst${burstStats.burstCount === 1 ? "" : "s"} across ${burstStats.activeDayCount} day${burstStats.activeDayCount === 1 ? "" : "s"}. ${burstStats.crossProjectBurstCount} of ${burstStats.burstCount} bursts spanned multiple projects.`}
+          tooltip={`Total time ≥2 agents were working in parallel, with peak concurrency as the highest count in any single burst.\n${burstStats.crossProjectBurstCount} of ${burstStats.burstCount} bursts spanned multiple projects.`}
         />
       </section>
 
