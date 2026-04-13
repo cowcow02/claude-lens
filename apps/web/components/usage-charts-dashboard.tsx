@@ -4,7 +4,13 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { UsageSnapshot } from "@/lib/usage-data";
 import { UsageChart } from "@/components/usage-chart";
+import { UsageChartRange } from "@/components/usage-chart-range";
 import { OptionalChart } from "@/components/optional-chart";
+import {
+  DateRangePicker,
+  resolveRange,
+  type DateRange,
+} from "@/components/date-range-picker";
 
 type SeriesKey = "five_hour" | "seven_day" | "seven_day_sonnet";
 
@@ -120,6 +126,9 @@ function ExpandedModal({
   snapshots: UsageSnapshot[];
   onClose: () => void;
 }) {
+  const [range, setRange] = useState<DateRange>({ preset: "current" });
+  const resolved = resolveRange(range);
+
   return (
     <div
       onClick={onClose}
@@ -150,14 +159,16 @@ function ExpandedModal({
           overflow: "hidden",
         }}
       >
-        {/* Modal header */}
+        {/* Modal header: title + range picker + close */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "16px 20px",
+            gap: 16,
+            padding: "14px 20px",
             borderBottom: "1px solid var(--af-border-subtle)",
+            flexWrap: "wrap",
           }}
         >
           <div
@@ -171,6 +182,7 @@ function ExpandedModal({
           >
             {config.label}
           </div>
+          <DateRangePicker value={range} onChange={setRange} />
           <button
             type="button"
             onClick={onClose}
@@ -192,8 +204,7 @@ function ExpandedModal({
           </button>
         </div>
 
-        {/* Modal body — just a bigger version of the same chart for now.
-            Date range picker + multi-cycle chart coming in a follow-up. */}
+        {/* Modal body: either single-cycle burndown or multi-cycle line */}
         <div
           style={{
             padding: 20,
@@ -201,25 +212,22 @@ function ExpandedModal({
             flex: 1,
           }}
         >
-          <UsageChart
-            snapshots={snapshots}
-            seriesKey={config.key}
-            windowMs={config.windowMs}
-            colorVar={config.colorVar}
-          />
-          <div
-            style={{
-              marginTop: 16,
-              padding: "10px 14px",
-              border: "1px dashed var(--af-border-subtle)",
-              borderRadius: 6,
-              fontSize: 11,
-              color: "var(--af-text-tertiary)",
-              textAlign: "center",
-            }}
-          >
-            Date range picker (Current cycle · 7D · 30D · 90D · Custom) and multi-cycle chart coming next.
-          </div>
+          {range.preset === "current" || !resolved.startMs || !resolved.endMs ? (
+            <UsageChart
+              snapshots={snapshots}
+              seriesKey={config.key}
+              windowMs={config.windowMs}
+              colorVar={config.colorVar}
+            />
+          ) : (
+            <UsageChartRange
+              snapshots={snapshots}
+              seriesKey={config.key}
+              startMs={resolved.startMs}
+              endMs={resolved.endMs}
+              colorVar={config.colorVar}
+            />
+          )}
         </div>
       </div>
     </div>

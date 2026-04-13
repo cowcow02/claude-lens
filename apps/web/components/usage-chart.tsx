@@ -39,7 +39,7 @@ export function UsageChart({
   // readable. ~6.4:1 aspect works well at full page width.
   const width = 1280;
   const height = 200;
-  const padding = { top: 18, right: 24, bottom: 38, left: 56 };
+  const padding = { top: 20, right: 26, bottom: 42, left: 64 };
 
   const computed = useMemo(() => {
     const valid = snapshots
@@ -249,7 +249,7 @@ export function UsageChart({
                   x={padding.left - 8}
                   y={y + 4}
                   textAnchor="end"
-                  fontSize="10"
+                  fontSize="13"
                   fill="var(--af-text-tertiary)"
                 >
                   {pct}%
@@ -264,7 +264,7 @@ export function UsageChart({
             y={padding.top + plotH / 2}
             textAnchor="middle"
             transform={`rotate(-90, 14, ${padding.top + plotH / 2})`}
-            fontSize="10"
+            fontSize="12"
             fill="var(--af-text-tertiary)"
           >
             Remaining budget (%)
@@ -273,27 +273,27 @@ export function UsageChart({
           {/* X-axis labels */}
           <text
             x={padding.left}
-            y={height - 22}
+            y={height - 20}
             textAnchor="start"
-            fontSize="10"
+            fontSize="12"
             fill="var(--af-text-tertiary)"
           >
             Start
           </text>
           <text
             x={width - padding.right}
-            y={height - 22}
+            y={height - 20}
             textAnchor="end"
-            fontSize="10"
+            fontSize="12"
             fill="var(--af-text-tertiary)"
           >
             Reset
           </text>
           <text
             x={padding.left + plotW / 2}
-            y={height - 6}
+            y={height - 4}
             textAnchor="middle"
-            fontSize="10"
+            fontSize="12"
             fill="var(--af-text-tertiary)"
           >
             Time
@@ -330,7 +330,8 @@ export function UsageChart({
                 x={xScale(now)}
                 y={padding.top - 6}
                 textAnchor="middle"
-                fontSize="10"
+                fontSize="12"
+                fontWeight="600"
                 fill="var(--af-text-secondary)"
               >
                 now
