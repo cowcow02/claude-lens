@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { TimelineData, TeamTrack, TeamTurn } from "./adapter";
+import { xOfMs, msOfXFrac } from "./adapter";
 
 const LANE_HEIGHT = 22;
 const LANE_GAP = 2;
@@ -22,7 +23,6 @@ type HoverState = {
 };
 
 export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
-  const span = Math.max(1, data.lastEventMs - data.firstEventMs);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [expanded, setExpanded] = useState(false);
   const hasOverflow = data.tracks.length > DEFAULT_VISIBLE_LANES;
@@ -32,6 +32,11 @@ export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
       : data.tracks;
   const hiddenCount = data.tracks.length - DEFAULT_VISIBLE_LANES;
 
+  // Event-anchored x-scale — active intervals stay proportional with a floor,
+  // all-idle intervals (including multi-day overnight gaps) collapse into
+  // compact bands. Shared across lanes so cross-agent alignment holds.
+  const xOf = (ms: number) => xOfMs(data.xAnchors, ms);
+
   const onLaneClick = (
     track: TeamTrack,
     e: React.MouseEvent<HTMLDivElement>,
@@ -39,12 +44,12 @@ export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.max(0, e.clientX - rect.left);
     const frac = Math.min(1, x / Math.max(1, rect.width));
-    onSeek(data.firstEventMs + frac * span, track.id);
+    onSeek(msOfXFrac(data.xAnchors, frac), track.id);
   };
 
   const playheadFrac =
     playheadMs != null
-      ? Math.max(0, Math.min(1, (playheadMs - data.firstEventMs) / span))
+      ? Math.max(0, Math.min(1, xOf(playheadMs)))
       : null;
 
   return (
@@ -71,13 +76,53 @@ export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
           paddingLeft: LABEL_WIDTH,
         }}
       >
-        <span>{new Date(data.firstEventMs).toLocaleTimeString()}</span>
-        <span>{new Date(data.lastEventMs).toLocaleTimeString()}</span>
+        <span>{formatEdge(data.firstEventMs, data.multiDay)}</span>
+        <span>{formatEdge(data.lastEventMs, data.multiDay)}</span>
       </div>
 
       <div
-        style={{ display: "flex", flexDirection: "column", gap: LANE_GAP }}
+        style={{
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+          gap: LANE_GAP,
+        }}
       >
+        {/* Hatched idle bands spanning all lanes. Positioned as an overlay
+            so they line up exactly with the lane strips' x axis (both use
+            the shared xOfMs scale). */}
+        {data.minimapIdleBands.map((band, i) => {
+          const left = band.xFracStart * 100;
+          const width = Math.max(0.5, (band.xFracEnd - band.xFracStart) * 100);
+          return (
+            <div
+              key={i}
+              style={{
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: `calc(${LABEL_WIDTH}px + ${left}% * (100% - ${LABEL_WIDTH}px) / 100%)`,
+                width: `calc(${width}% * (100% - ${LABEL_WIDTH}px) / 100%)`,
+                background:
+                  "repeating-linear-gradient(135deg, transparent 0, transparent 4px, var(--af-border-subtle) 4px, var(--af-border-subtle) 6px)",
+                pointerEvents: "none",
+                zIndex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 9,
+                fontFamily: "ui-monospace, monospace",
+                color: "var(--af-text-tertiary)",
+                textAlign: "center",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+              }}
+              title={band.label}
+            >
+              {width > 3 ? band.label : ""}
+            </div>
+          );
+        })}
         {visibleTracks.map((t) => (
           <div
             key={t.id}
@@ -111,9 +156,10 @@ export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
               onClick={(e) => onLaneClick(t, e)}
             >
               {t.turns.map((turn) => {
-                const left =
-                  ((turn.startMs - data.firstEventMs) / span) * 100;
-                const width = Math.max(0.4, (turn.durationMs / span) * 100);
+                const leftFrac = xOf(turn.startMs);
+                const rightFrac = xOf(turn.endMs);
+                const left = leftFrac * 100;
+                const width = Math.max(0.4, (rightFrac - leftFrac) * 100);
                 return (
                   <div
                     key={turn.id}
@@ -148,10 +194,12 @@ export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
               })}
               {t.subagents.map((sa, i) => {
                 if (sa.startMs == null) return null;
-                const left = ((sa.startMs - data.firstEventMs) / span) * 100;
-                const w = sa.durationMs
-                  ? Math.max(0.2, (sa.durationMs / span) * 100)
-                  : 0.4;
+                const startFrac = xOf(sa.startMs);
+                const endFrac = xOf(
+                  sa.startMs + (sa.durationMs ?? 0),
+                );
+                const left = startFrac * 100;
+                const w = Math.max(0.2, (endFrac - startFrac) * 100) || 0.4;
                 return (
                   <div
                     key={i}
@@ -229,12 +277,18 @@ export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
         </div>
       )}
 
-      {hover && <HoverCard hover={hover} />}
+      {hover && <HoverCard hover={hover} multiDay={data.multiDay} />}
     </div>
   );
 }
 
-function HoverCard({ hover }: { hover: HoverState }) {
+function HoverCard({
+  hover,
+  multiDay,
+}: {
+  hover: HoverState;
+  multiDay: boolean;
+}) {
   const { turn, track } = hover;
   const summary = turn.megaRow.summary;
   const userText =
@@ -285,7 +339,7 @@ function HoverCard({ hover }: { hover: HoverState }) {
       >
         <span>{track.isLead ? "LEAD" : track.label}</span>
         <span style={{ color: "var(--af-text-tertiary)", fontWeight: 500 }}>
-          {formatHM(turn.startMs)} → {formatHM(turn.endMs)} · {formatDuration(turn.durationMs)}
+          {formatEdge(turn.startMs, multiDay)} → {formatEdge(turn.endMs, multiDay)} · {formatDuration(turn.durationMs)}
         </span>
       </div>
       <div
@@ -409,11 +463,20 @@ function HoverCard({ hover }: { hover: HoverState }) {
   );
 }
 
-function formatHM(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], {
+function formatEdge(ms: number, multiDay: boolean): string {
+  const d = new Date(ms);
+  if (!multiDay) {
+    return d.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+  const date = d.toLocaleDateString([], { month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
+  return `${date} ${time}`;
 }
 
 function formatDuration(ms: number): string {

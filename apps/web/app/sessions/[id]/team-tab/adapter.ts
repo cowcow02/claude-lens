@@ -42,6 +42,23 @@ export type YAnchor = {
   yPx: number;
 };
 
+export type XAnchor = {
+  tsMs: number;
+  xFrac: number;
+};
+
+/** Idle band expressed as an x-range for the minimap. Unlike the body's
+ *  IdleBand (yPx), this is expressed as normalized fractions [0, 1] so
+ *  the minimap's horizontal scale stays independent of pixel width. */
+export type MinimapIdleBand = {
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  xFracStart: number;
+  xFracEnd: number;
+  label: string;
+};
+
 export type TimelineData = {
   tracks: TeamTrack[];
   yAnchors: YAnchor[];
@@ -50,6 +67,13 @@ export type TimelineData = {
   firstEventMs: number;
   lastEventMs: number;
   timeTicks: { tsMs: number; yPx: number; label: string }[];
+  /** Event-anchored x-scale for the minimap. Same spirit as yAnchors:
+   *  active intervals get proportional width, all-idle stretches collapse. */
+  xAnchors: XAnchor[];
+  minimapIdleBands: MinimapIdleBand[];
+  /** True when the team spans more than one local day — consumers can
+   *  show full dates in hover cards / labels instead of just times. */
+  multiDay: boolean;
 };
 
 const LEAD_COLOR = "#f0b429";
@@ -110,6 +134,14 @@ export function teamViewToTimelineData(
     view.lastEventMs,
   );
 
+  const multiDay = isMultiDay(view.firstEventMs, view.lastEventMs);
+  const { xAnchors, minimapIdleBands } = buildXFunction(
+    allTurns,
+    view.firstEventMs,
+    view.lastEventMs,
+    multiDay,
+  );
+
   return {
     tracks,
     yAnchors,
@@ -118,7 +150,20 @@ export function teamViewToTimelineData(
     firstEventMs: view.firstEventMs,
     lastEventMs: view.lastEventMs,
     timeTicks,
+    xAnchors,
+    minimapIdleBands,
+    multiDay,
   };
+}
+
+function isMultiDay(firstMs: number, lastMs: number): boolean {
+  const a = new Date(firstMs);
+  const b = new Date(lastMs);
+  return (
+    a.getFullYear() !== b.getFullYear() ||
+    a.getMonth() !== b.getMonth() ||
+    a.getDate() !== b.getDate()
+  );
 }
 
 function buildTrack(
@@ -292,6 +337,199 @@ function formatTimeLabel(ms: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/* ----------- X function (minimap horizontal scale) ----------- */
+
+/** Synthetic "ms weight" each active interval contributes. Used to keep
+ *  short active bursts visually wide enough to click while still letting
+ *  genuinely long activity dominate. */
+const ACTIVE_MIN_WEIGHT_MS = 45_000;
+
+/** Synthetic "ms weight" each idle interval collapses to. Doesn't scale
+ *  with real duration — a 10-minute gap and a 10-hour overnight gap both
+ *  take roughly the same horizontal space, with the actual duration and
+ *  date carried in the hatched band's label. */
+function idleWeightMs(gapMs: number): number {
+  if (gapMs < 60_000) return 20_000;
+  if (gapMs < 10 * 60_000) return 40_000;
+  if (gapMs < 60 * 60_000) return 60_000;
+  if (gapMs < 6 * 60 * 60_000) return 80_000;
+  return 100_000; // multi-hour, multi-day — effectively capped
+}
+
+function buildXFunction(
+  allTurns: TeamTurn[],
+  firstEventMs: number,
+  lastEventMs: number,
+  multiDay: boolean,
+): {
+  xAnchors: XAnchor[];
+  minimapIdleBands: MinimapIdleBand[];
+} {
+  if (allTurns.length === 0 || lastEventMs <= firstEventMs) {
+    return {
+      xAnchors: [
+        { tsMs: firstEventMs, xFrac: 0 },
+        { tsMs: lastEventMs, xFrac: 1 },
+      ],
+      minimapIdleBands: [],
+    };
+  }
+
+  // Same active-region merge as buildYFunction — we treat the union of
+  // all turns across all lanes as "active" and the gaps as candidates
+  // for compression.
+  const sorted = [...allTurns].sort((a, b) => a.startMs - b.startMs);
+  type Active = { startMs: number; endMs: number };
+  const active: Active[] = [];
+  for (const t of sorted) {
+    const last = active[active.length - 1];
+    if (last && t.startMs <= last.endMs) {
+      if (t.endMs > last.endMs) last.endMs = t.endMs;
+    } else {
+      active.push({ startMs: t.startMs, endMs: t.endMs });
+    }
+  }
+
+  // Build the interval list: alternating active / idle spans that cover
+  // [firstEventMs, lastEventMs] end to end.
+  type Interval = {
+    startMs: number;
+    endMs: number;
+    isIdle: boolean;
+    weight: number;
+  };
+  const intervals: Interval[] = [];
+  let cursor = firstEventMs;
+  for (const a of active) {
+    if (a.startMs > cursor) {
+      const gap = a.startMs - cursor;
+      intervals.push({
+        startMs: cursor,
+        endMs: a.startMs,
+        isIdle: gap >= ALL_IDLE_THRESHOLD_MS,
+        weight:
+          gap >= ALL_IDLE_THRESHOLD_MS
+            ? idleWeightMs(gap)
+            : Math.max(ACTIVE_MIN_WEIGHT_MS, gap),
+      });
+    }
+    const dur = a.endMs - a.startMs;
+    intervals.push({
+      startMs: a.startMs,
+      endMs: a.endMs,
+      isIdle: false,
+      weight: Math.max(ACTIVE_MIN_WEIGHT_MS, dur),
+    });
+    cursor = a.endMs;
+  }
+  if (cursor < lastEventMs) {
+    const gap = lastEventMs - cursor;
+    intervals.push({
+      startMs: cursor,
+      endMs: lastEventMs,
+      isIdle: gap >= ALL_IDLE_THRESHOLD_MS,
+      weight:
+        gap >= ALL_IDLE_THRESHOLD_MS
+          ? idleWeightMs(gap)
+          : Math.max(ACTIVE_MIN_WEIGHT_MS, gap),
+    });
+  }
+
+  const totalWeight = intervals.reduce((s, i) => s + i.weight, 0) || 1;
+
+  const xAnchors: XAnchor[] = [{ tsMs: firstEventMs, xFrac: 0 }];
+  let cumWeight = 0;
+  for (const i of intervals) {
+    cumWeight += i.weight;
+    xAnchors.push({ tsMs: i.endMs, xFrac: cumWeight / totalWeight });
+  }
+
+  const minimapIdleBands: MinimapIdleBand[] = [];
+  let walkWeight = 0;
+  for (const i of intervals) {
+    const start = walkWeight / totalWeight;
+    walkWeight += i.weight;
+    const end = walkWeight / totalWeight;
+    if (i.isIdle) {
+      minimapIdleBands.push({
+        startMs: i.startMs,
+        endMs: i.endMs,
+        durationMs: i.endMs - i.startMs,
+        xFracStart: start,
+        xFracEnd: end,
+        label: idleLabel(i.startMs, i.endMs, multiDay),
+      });
+    }
+  }
+
+  return { xAnchors, minimapIdleBands };
+}
+
+function idleLabel(startMs: number, endMs: number, multiDay: boolean): string {
+  const dur = formatIdleDuration(endMs - startMs);
+  if (!multiDay) return dur;
+  const a = new Date(startMs);
+  const b = new Date(endMs);
+  const sameDay =
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay) return dur;
+  const toDate = b.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${dur} → ${toDate}`;
+}
+
+function formatIdleDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s idle`;
+  if (ms < 3600_000) return `${Math.round(ms / 60_000)}m idle`;
+  const h = Math.floor(ms / 3600_000);
+  const m = Math.round((ms % 3600_000) / 60_000);
+  return m > 0 ? `${h}h ${m}m idle` : `${h}h idle`;
+}
+
+export function xOfMs(anchors: XAnchor[], tsMs: number): number {
+  if (anchors.length === 0) return 0;
+  if (tsMs <= anchors[0]!.tsMs) return anchors[0]!.xFrac;
+  if (tsMs >= anchors[anchors.length - 1]!.tsMs)
+    return anchors[anchors.length - 1]!.xFrac;
+
+  let lo = 0;
+  let hi = anchors.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (anchors[mid]!.tsMs <= tsMs) lo = mid;
+    else hi = mid;
+  }
+  const a = anchors[lo]!;
+  const b = anchors[hi]!;
+  if (b.tsMs === a.tsMs) return a.xFrac;
+  const frac = (tsMs - a.tsMs) / (b.tsMs - a.tsMs);
+  return a.xFrac + frac * (b.xFrac - a.xFrac);
+}
+
+/** Inverse of xOfMs — given an xFrac in [0, 1], return the wall-clock ms
+ *  that lives at that compressed position. Used by the minimap's click-to-
+ *  seek. */
+export function msOfXFrac(anchors: XAnchor[], xFrac: number): number {
+  if (anchors.length === 0) return 0;
+  if (xFrac <= anchors[0]!.xFrac) return anchors[0]!.tsMs;
+  if (xFrac >= anchors[anchors.length - 1]!.xFrac)
+    return anchors[anchors.length - 1]!.tsMs;
+
+  let lo = 0;
+  let hi = anchors.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (anchors[mid]!.xFrac <= xFrac) lo = mid;
+    else hi = mid;
+  }
+  const a = anchors[lo]!;
+  const b = anchors[hi]!;
+  if (b.xFrac === a.xFrac) return a.tsMs;
+  const frac = (xFrac - a.xFrac) / (b.xFrac - a.xFrac);
+  return a.tsMs + frac * (b.tsMs - a.tsMs);
 }
 
 export function yOfMs(anchors: YAnchor[], tsMs: number): number {
