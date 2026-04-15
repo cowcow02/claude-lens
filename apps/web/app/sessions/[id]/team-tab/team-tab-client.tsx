@@ -11,16 +11,16 @@ export function TeamTabClient({
   teamName,
   playheadMs,
   onPlayheadChange,
+  onVisibleTrackIdsChange,
   seekTarget,
 }: {
   initial: TimelineData;
   teamName: string;
-  /** Current playhead — owned by session-view so the sticky TeamMinimap
-   *  and the table body stay in sync without a duplicated minimap inside
-   *  the tab. The body publishes its top-of-viewport ms via onPlayheadChange. */
   playheadMs: number | null;
   onPlayheadChange: (tsMs: number | null) => void;
-  /** Click on the sticky minimap → request the table to scroll. */
+  /** Publish which member track ids are currently in the table's viewport
+   *  so the sticky minimap lanes can mirror the same slice. */
+  onVisibleTrackIdsChange: (ids: string[]) => void;
   seekTarget: SeekTarget | null;
 }) {
   const [selectedTurn, setSelectedTurn] = useState<TeamTurn | null>(null);
@@ -61,6 +61,7 @@ export function TeamTabClient({
       <TeamTable
         data={initial}
         onPlayheadChange={onPlayheadChange}
+        onVisibleTrackIdsChange={onVisibleTrackIdsChange}
         scrollTarget={seekTarget}
         onTurnClick={setSelectedTurn}
       />

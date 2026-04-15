@@ -15,6 +15,12 @@ type Props = {
   onSeek: (tsMs: number, trackId?: string) => void;
   expanded: boolean;
   onToggleExpanded: () => void;
+  /** Member track ids currently visible in the body table (mid-point inside
+   *  the horizontal viewport). When the minimap is collapsed, the lane set
+   *  mirrors this — lead first, then whichever members are currently in the
+   *  table's viewport. Falls back to "first N members by start time" when
+   *  empty, so the initial render is sane. */
+  visibleTrackIds: string[];
 };
 
 type HoverState = {
@@ -30,14 +36,35 @@ export function TeamMinimap({
   onSeek,
   expanded,
   onToggleExpanded,
+  visibleTrackIds,
 }: Props) {
   const [hover, setHover] = useState<HoverState | null>(null);
   const hasOverflow = data.tracks.length > DEFAULT_VISIBLE_LANES;
-  const visibleTracks =
-    hasOverflow && !expanded
-      ? data.tracks.slice(0, DEFAULT_VISIBLE_LANES)
-      : data.tracks;
-  const hiddenCount = data.tracks.length - DEFAULT_VISIBLE_LANES;
+
+  // Compute which tracks are "active" (shown at full height). The minimap
+  // always renders every track so CSS transitions can animate lanes in and
+  // out when the active set changes; non-active lanes collapse to height 0
+  // via transition instead of unmounting.
+  //   - expanded → every track active
+  //   - collapsed + table has reported visible members → lead + those
+  //   - collapsed + no report yet → lead + first N-1 members (initial)
+  let activeIds: Set<string>;
+  if (expanded || !hasOverflow) {
+    activeIds = new Set(data.tracks.map((t) => t.id));
+  } else {
+    const lead = data.tracks[0];
+    const members = data.tracks.slice(1);
+    const pickMembers =
+      visibleTrackIds.length > 0
+        ? members
+            .filter((t) => visibleTrackIds.includes(t.id))
+            .slice(0, DEFAULT_VISIBLE_LANES - 1)
+            .map((t) => t.id)
+        : members.slice(0, DEFAULT_VISIBLE_LANES - 1).map((t) => t.id);
+    activeIds = new Set(pickMembers);
+    if (lead) activeIds.add(lead.id);
+  }
+  const hiddenCount = data.tracks.length - activeIds.size;
 
   // Event-anchored x-scale — active intervals stay proportional with a floor,
   // all-idle intervals (including multi-day overnight gaps) collapse into
@@ -92,7 +119,6 @@ export function TeamMinimap({
           position: "relative",
           display: "flex",
           flexDirection: "column",
-          gap: LANE_GAP,
         }}
       >
         {/* Hatched idle bands spanning all lanes. Positioned as an overlay
@@ -130,10 +156,27 @@ export function TeamMinimap({
             </div>
           );
         })}
-        {visibleTracks.map((t) => (
+        {data.tracks.map((t) => {
+          const isActive = activeIds.has(t.id);
+          return (
           <div
             key={t.id}
-            style={{ display: "flex", alignItems: "center", gap: 6 }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              // The collapsed lanes animate to zero height with opacity fade
+              // so the minimap visually slides when its active set changes
+              // (e.g. in response to the table's horizontal scroll or the
+              // "Show all" toggle).
+              maxHeight: isActive ? LANE_HEIGHT : 0,
+              opacity: isActive ? 1 : 0,
+              marginBottom: isActive ? LANE_GAP : 0,
+              overflow: "hidden",
+              transition:
+                "max-height 280ms ease, opacity 280ms ease, margin-bottom 280ms ease",
+              pointerEvents: isActive ? "auto" : "none",
+            }}
           >
             <div
               style={{
@@ -231,7 +274,8 @@ export function TeamMinimap({
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {hasOverflow && (

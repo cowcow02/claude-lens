@@ -101,8 +101,12 @@ export function SessionView({
     tsMs: number;
     trackId?: string;
   } | null>(null);
-  // Shared collapsed-lanes state — the minimap's "+ N more" button toggles
-  // both the minimap lanes AND the body table columns for a unified view.
+  // Member track ids currently in the table's horizontal viewport, published
+  // by TeamTable on scroll. The sticky TeamMinimap uses this to mirror the
+  // table's current agents in its default (collapsed) lane set.
+  const [teamVisibleTrackIds, setTeamVisibleTrackIds] = useState<string[]>([]);
+  // When the user explicitly clicks "Show all" in the minimap we display
+  // every lane regardless of table scroll position.
   const [teamExpanded, setTeamExpanded] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("turns");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -557,6 +561,7 @@ export function SessionView({
             onSeek={(tsMs, trackId) => setTeamSeekTarget({ tsMs, trackId })}
             expanded={teamExpanded}
             onToggleExpanded={() => setTeamExpanded((v) => !v)}
+            visibleTrackIds={teamVisibleTrackIds}
           />
         ) : (
           <Minimap
@@ -597,6 +602,7 @@ export function SessionView({
             teamName={team.teamName}
             playheadMs={teamPlayheadMs}
             onPlayheadChange={setTeamPlayheadMs}
+            onVisibleTrackIdsChange={setTeamVisibleTrackIds}
             seekTarget={teamSeekTarget}
           />
         ) : tab === "transcript" ? (

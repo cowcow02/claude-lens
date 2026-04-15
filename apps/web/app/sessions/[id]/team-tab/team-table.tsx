@@ -25,16 +25,31 @@ export type SeekTarget = { tsMs: number; trackId?: string };
 type Props = {
   data: TimelineData;
   onPlayheadChange: (tsMs: number | null) => void;
+  /** Publishes which member track ids currently have their midpoint inside
+   *  the visible horizontal viewport, in track order. Used by the parent
+   *  to keep the sticky minimap's visible lanes in sync with whatever the
+   *  user is looking at in the table. */
+  onVisibleTrackIdsChange: (ids: string[]) => void;
   scrollTarget: SeekTarget | null;
   onTurnClick: (turn: TeamTurn) => void;
 };
 
+/** Programmatically scroll horizontally. The container has
+ *  `scroll-behavior: smooth` set as a persistent inline style, so a
+ *  plain scrollLeft assignment becomes a smooth animation driven by
+ *  the browser. */
+function smoothScrollLeft(el: HTMLElement, targetLeft: number): void {
+  el.scrollLeft = targetLeft;
+}
+
 export function TeamTable({
   data,
   onPlayheadChange,
+  onVisibleTrackIdsChange,
   scrollTarget,
   onTurnClick,
 }: Props) {
+  const lastVisibleIdsRef = useRef<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const [expandedTurns, setExpandedTurns] = useState<Set<string>>(new Set());
   const toggleExpand = useCallback((turnId: string) => {
@@ -120,20 +135,10 @@ export function TeamTable({
     }
     onPlayheadChange(ts);
 
-    // Auto-scroll: only on vertical movement, and only when the user hasn't
-    // just panned horizontally themselves, and only when the cooldown has
-    // elapsed. These guards prevent feedback loops and UX fights.
-    if (dy === 0) return;
-    const now = Date.now();
-    if (now - lastUserHScrollRef.current < USER_HSCROLL_GRACE_MS) return;
-    if (now - lastAutoScrollRef.current < AUTOSCROLL_COOLDOWN_MS) return;
-
-    // Skip if there are no off-lead columns at all (no auto-scroll possible).
-    if (data.tracks.length <= 1) return;
-
-    // Figure out the grid x-range of every MEMBER column (lead is sticky and
-    // always visible, so it's excluded from the "is the member area blank"
-    // question). Members start after the TIME + LEAD columns in the grid.
+    // Compute which member columns have their midpoint inside the viewport
+    // right now. Published on every scroll so the sticky minimap lanes can
+    // stay in sync with whatever the user is looking at. Also reused below
+    // for the blank-detection auto-scroll.
     const MEMBER_AREA_LEFT = TIME_COL_WIDTH + COL_MIN_WIDTH + COL_GAP * 2;
     const viewportW = el.clientWidth;
     const visibleMemberRangeStart = left + MEMBER_AREA_LEFT;
@@ -156,18 +161,39 @@ export function TeamTable({
       const mid = (r.start + r.end) / 2;
       return mid >= visibleMemberRangeStart && mid <= visibleMemberRangeEnd;
     };
+    const visibleMembers = memberRanges.filter(isVisible);
+
+    // Publish the current visible ids if they changed (string-compare via
+    // joined key avoids churning React state on every scroll event).
+    const visibleIds = visibleMembers.map(
+      (r) => data.tracks[r.trackIdx]!.id,
+    );
+    const key = visibleIds.join(",");
+    if (key !== lastVisibleIdsRef.current) {
+      lastVisibleIdsRef.current = key;
+      onVisibleTrackIdsChange(visibleIds);
+    }
+
+    // Auto-scroll: only on vertical movement, and only when the user hasn't
+    // just panned horizontally themselves, and only when the cooldown has
+    // elapsed. These guards prevent feedback loops and UX fights.
+    if (dy === 0) return;
+    const now = Date.now();
+    if (now - lastUserHScrollRef.current < USER_HSCROLL_GRACE_MS) return;
+    if (now - lastAutoScrollRef.current < AUTOSCROLL_COOLDOWN_MS) return;
+    if (data.tracks.length <= 1) return;
+    if (visibleMembers.length === 0) return;
+
     const hasTurnAtTs = (trackIdx: number) => {
       const track = data.tracks[trackIdx]!;
       return track.turns.some((t) => t.startMs <= ts && t.endMs >= ts);
     };
-    const visibleMembers = memberRanges.filter(isVisible);
-    if (visibleMembers.length === 0) return; // whole member area scrolled off-screen
     const anyVisibleActive = visibleMembers.some((r) => hasTurnAtTs(r.trackIdx));
     if (anyVisibleActive) return;
 
     // Nothing visible has activity. Find the leftmost off-screen member that
-    // IS active at this ts, and scroll to center its left edge just inside
-    // the member area.
+    // IS active at this ts and animate the scroll so it lands right after
+    // the sticky LEAD column.
     let targetIdx = -1;
     for (const r of memberRanges) {
       if (!isVisible(r) && hasTurnAtTs(r.trackIdx)) {
@@ -175,18 +201,14 @@ export function TeamTable({
         break;
       }
     }
-    if (targetIdx < 0) return; // no off-screen activity either — nothing to show
+    if (targetIdx < 0) return;
 
     const targetX = TIME_COL_WIDTH + targetIdx * (COL_MIN_WIDTH + COL_GAP);
     const targetLeft = Math.max(0, targetX - MEMBER_AREA_LEFT - 8);
     lastAutoScrollRef.current = now;
     programmaticLeftRef.current = targetLeft;
-    // Instant scroll rather than smooth: some environments ignore smooth
-    // behavior entirely, leaving the auto-scroll half-applied. The jump is
-    // only a few hundred pixels and only fires when the visible area was
-    // already blank, so the UX cost of the snap is low.
-    el.scrollLeft = targetLeft;
-  }, [data.tracks, data.yAnchors, onPlayheadChange]);
+    smoothScrollLeft(el, targetLeft);
+  }, [data.tracks, data.yAnchors, onPlayheadChange, onVisibleTrackIdsChange]);
 
   const gridTemplate = `${TIME_COL_WIDTH}px repeat(${data.tracks.length}, minmax(${COL_MIN_WIDTH}px, 1fr))`;
 
@@ -200,6 +222,13 @@ export function TeamTable({
         minHeight: 400,
         overflowY: "auto",
         overflowX: "auto",
+        // scroll-behavior: smooth on the container so that programmatic
+        // scrollLeft/scrollTop assignments (and the blank-detection auto-
+        // scroll) animate natively via the browser. User wheel scrolls are
+        // NOT affected — Chrome only applies scroll-behavior to API-driven
+        // scrolls (scrollTo, scrollBy, .scrollLeft= , etc.), not to wheel
+        // or touch input. So manual panning stays direct.
+        scrollBehavior: "smooth",
         border: "1px solid var(--af-border-subtle)",
         borderRadius: 6,
         background: "var(--af-surface-elevated)",
