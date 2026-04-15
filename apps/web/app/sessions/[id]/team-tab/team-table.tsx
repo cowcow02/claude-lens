@@ -353,7 +353,13 @@ function TurnCell({
         padding: "6px 8px",
         fontSize: 10,
         lineHeight: 1.3,
-        overflow: isExpanded ? "visible" : "hidden",
+        // IMPORTANT: `overflow: hidden` creates a new scroll container in
+        // Chrome, which would make the inner sticky content stick to the
+        // cell instead of the team table's scroll viewport. Use clip-path
+        // for visual clipping — it's paint-only and doesn't break sticky
+        // propagation up to the real scroll ancestor.
+        overflow: "visible",
+        clipPath: isExpanded ? "none" : "inset(0)",
         boxSizing: "border-box",
         cursor: "pointer",
         outline: isExpanded
