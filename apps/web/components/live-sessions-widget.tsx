@@ -15,7 +15,9 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
+import type { SessionMeta } from "@claude-lens/parser";
 import { prettyProjectName } from "@/lib/format";
+import { TeamBadge } from "@/components/team-badge";
 
 const LIVE_WINDOW_MS = 45_000;
 const MAX_VISIBLE = 5;
@@ -29,6 +31,8 @@ export type LiveSessionPick = {
   lastAgentPreview?: string;
   firstTimestamp?: string;
   lastTimestamp?: string;
+  teamName?: string;
+  agentName?: string;
 };
 
 export function LiveSessionsWidget({ sessions }: { sessions: LiveSessionPick[] }) {
@@ -190,16 +194,27 @@ export function LiveSessionsWidget({ sessions }: { sessions: LiveSessionPick[] }
           {/* Title: most recent user message — "what am I working on now". */}
           <div
             style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
               fontWeight: 500,
               color: "var(--af-text)",
+              minWidth: 0,
             }}
           >
-            {s.lastUserPreview || s.firstUserPreview || (
-              <em style={{ color: "var(--af-text-tertiary)" }}>(no user message)</em>
-            )}
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+              }}
+            >
+              {s.lastUserPreview || s.firstUserPreview || (
+                <em style={{ color: "var(--af-text-tertiary)" }}>(no user message)</em>
+              )}
+            </span>
+            <TeamBadge session={s as unknown as SessionMeta} linkable={false} />
           </div>
           {/* Subtitle: what the agent is saying in response. */}
           <div
