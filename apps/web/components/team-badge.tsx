@@ -75,7 +75,7 @@ export function TeamBadge({
         color: "var(--af-text-tertiary)",
         border: "1px solid var(--af-border-subtle)",
       }}
-      title={`Team member — ${session.teamName}${session.agentName ? ` · ${session.agentName}` : ""}`}
+      title={`Team member — ${session.teamName} · ${session.agentName}`}
     >
       Team Member
     </span>
