@@ -25,6 +25,7 @@ export type TeamTurn = {
   endMs: number;
   megaRow: TurnMegaRow;
   durationMs: number;
+  userPrompt?: PresentationRow;
 };
 
 export type IdleBand = {
@@ -62,7 +63,7 @@ const MEMBER_COLORS = [
   "#56d364",
 ];
 
-const TURN_MIN_HEIGHT = 100;
+const TURN_MIN_HEIGHT = 140;
 function turnPreferredHeight(durationMs: number): number {
   const minutes = durationMs / 60_000;
   // Gentle log growth so a 10-hour turn doesn't blow up the page.
@@ -132,7 +133,12 @@ function buildTrack(
 
   const turns: TeamTurn[] = [];
   let turnIndex = 0;
+  let lastUserRow: PresentationRow | undefined;
   for (const m of mega) {
+    if (m.kind === "user") {
+      lastUserRow = m;
+      continue;
+    }
     if (m.kind !== "turn") continue;
     if (m.tOffsetMs === undefined || m.durationMs === undefined) continue;
     const startMs = sessionStartMs + m.tOffsetMs;
@@ -145,6 +151,7 @@ function buildTrack(
       endMs: startMs + durationMs,
       megaRow: m,
       durationMs,
+      userPrompt: lastUserRow,
     });
   }
 

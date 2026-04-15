@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import type { TimelineData, TeamTurn, TeamTrack, IdleBand } from "./adapter";
 import { yOfMs } from "./adapter";
 
@@ -8,20 +8,35 @@ const TIME_COL_WIDTH = 80;
 const COL_GAP = 1;
 const COL_MIN_WIDTH = 240;
 
+export type SeekTarget = { tsMs: number; trackId?: string };
+
 type Props = {
   data: TimelineData;
   onPlayheadChange: (tsMs: number | null) => void;
-  scrollTargetMs: number | null;
+  scrollTarget: SeekTarget | null;
+  onTurnClick: (turn: TeamTurn) => void;
 };
 
-export function TeamTable({ data, onPlayheadChange, scrollTargetMs }: Props) {
+export function TeamTable({ data, onPlayheadChange, scrollTarget, onTurnClick }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (scrollTargetMs == null || !scrollRef.current) return;
-    const targetY = yOfMs(data.yAnchors, scrollTargetMs);
+    if (!scrollTarget || !scrollRef.current) return;
+    const targetY = yOfMs(data.yAnchors, scrollTarget.tsMs);
     scrollRef.current.scrollTop = Math.max(0, targetY - 40);
-  }, [scrollTargetMs, data.yAnchors]);
+
+    if (scrollTarget.trackId) {
+      const colIndex = data.tracks.findIndex((t) => t.id === scrollTarget.trackId);
+      if (colIndex !== -1) {
+        const targetX = TIME_COL_WIDTH + colIndex * (COL_MIN_WIDTH + COL_GAP);
+        const viewport = scrollRef.current.clientWidth;
+        scrollRef.current.scrollLeft = Math.max(
+          0,
+          targetX - viewport / 2 + COL_MIN_WIDTH / 2,
+        );
+      }
+    }
+  }, [scrollTarget, data.yAnchors, data.tracks]);
 
   const onScroll = useCallback(() => {
     if (!scrollRef.current) return;
@@ -175,6 +190,7 @@ export function TeamTable({ data, onPlayheadChange, scrollTargetMs }: Props) {
                     track={track}
                     top={top}
                     height={height}
+                    onClick={() => onTurnClick(turn)}
                   />
                 );
               })}
@@ -199,38 +215,54 @@ function TurnCell({
   track,
   top,
   height,
+  onClick,
 }: {
   turn: TeamTurn;
   track: TeamTrack;
   top: number;
   height: number;
+  onClick: () => void;
 }) {
+  const [hover, setHover] = useState(false);
   const summary = turn.megaRow.summary;
-  const preview = summary.firstAgentPreview ?? summary.finalAgentPreview ?? "";
-  const tools = summary.toolNames.slice(0, 4);
   const durationStr = formatDuration(turn.durationMs);
+
+  const userText =
+    turn.userPrompt && turn.userPrompt.kind === "user"
+      ? (turn.userPrompt.displayPreview ?? turn.userPrompt.event.preview ?? "")
+      : "";
+  const firstAgent = summary.firstAgentPreview ?? "";
+  const finalAgent = summary.finalAgentPreview ?? "";
+  const showFinal = !!finalAgent && finalAgent !== firstAgent;
+  const tools = summary.toolNames.slice(0, 5);
 
   return (
     <div
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
         position: "absolute",
         top: top + 2,
         left: 4,
         right: 4,
         height,
-        background: "var(--af-surface)",
+        background: hover ? "var(--af-surface-hover)" : "var(--af-surface)",
         borderLeft: `3px solid ${track.color}`,
         border: "1px solid var(--af-border-subtle)",
         borderLeftWidth: 3,
         borderRadius: 4,
         padding: "6px 8px",
         fontSize: 10,
-        lineHeight: 1.4,
+        lineHeight: 1.3,
         overflow: "hidden",
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
         gap: 4,
+        cursor: "pointer",
+        outline: hover ? `1px solid ${track.color}` : "none",
+        transition: "background 0.1s ease",
       }}
     >
       <div
@@ -240,6 +272,7 @@ function TurnCell({
           fontSize: 9,
           color: "var(--af-text-tertiary)",
           fontFamily: "ui-monospace, monospace",
+          flexShrink: 0,
         }}
       >
         <span>
@@ -248,27 +281,61 @@ function TurnCell({
         </span>
         <span>{durationStr}</span>
       </div>
-      <div
-        style={{
-          color: "var(--af-text)",
-          flex: 1,
-          overflow: "hidden",
-          display: "-webkit-box",
-          WebkitLineClamp: Math.max(2, Math.floor((height - 60) / 14)),
-          WebkitBoxOrient: "vertical",
-          textOverflow: "ellipsis",
-        }}
-      >
-        {preview || (
-          <span
-            style={{ color: "var(--af-text-tertiary)", fontStyle: "italic" }}
+
+      {userText && (
+        <div style={{ flexShrink: 0 }}>
+          <div
+            style={{
+              fontSize: 8,
+              color: track.color,
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+            }}
           >
-            (no preview)
-          </span>
-        )}
-      </div>
-      {tools.length > 0 && height > 90 && (
-        <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+            HUMAN
+          </div>
+          <div
+            style={{
+              color: "var(--af-text)",
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {userText}
+          </div>
+        </div>
+      )}
+
+      {firstAgent && (
+        <div style={{ flexShrink: 0, minHeight: 0 }}>
+          <div
+            style={{
+              fontSize: 8,
+              color: track.color,
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+            }}
+          >
+            AGENT
+          </div>
+          <div
+            style={{
+              color: "var(--af-text)",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {firstAgent}
+          </div>
+        </div>
+      )}
+
+      {tools.length > 0 && (
+        <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flexShrink: 0 }}>
           {tools.map((t) => (
             <span
               key={t.name}
@@ -284,6 +351,39 @@ function TurnCell({
               {t.count > 1 ? ` ×${t.count}` : ""}
             </span>
           ))}
+        </div>
+      )}
+
+      {showFinal && height > 120 && (
+        <div style={{ flexShrink: 0, minHeight: 0 }}>
+          <div
+            style={{
+              fontSize: 8,
+              color: track.color,
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+            }}
+          >
+            RESULT
+          </div>
+          <div
+            style={{
+              color: "var(--af-text)",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {finalAgent}
+          </div>
+        </div>
+      )}
+
+      {!userText && !firstAgent && (
+        <div style={{ color: "var(--af-text-tertiary)", fontStyle: "italic" }}>
+          (no preview)
         </div>
       )}
     </div>

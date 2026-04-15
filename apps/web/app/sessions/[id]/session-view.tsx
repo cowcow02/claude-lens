@@ -41,6 +41,7 @@ import { AskClaudeButton, AskClaudeDrawer } from "@/components/ask-claude";
 import { TailMode } from "@/components/tail-mode";
 import type { TimelineData } from "./team-tab/adapter";
 import { TeamTabClient } from "./team-tab/team-tab-client";
+import { TeamMinimap } from "./team-tab/team-minimap";
 
 /* ------------------------------------------------------------------ */
 /*  Constants + theming                                               */
@@ -140,6 +141,10 @@ export function SessionView({
   const [tab, setTab] = useState<"transcript" | "debug" | "team">(
     team ? "team" : "transcript",
   );
+  // Playhead tOffsetMs (session-relative) for the outer sticky TeamMinimap
+  // when viewing the Transcript tab of a team-lead session. Filled by an
+  // IntersectionObserver below; null when not applicable.
+  const [teamPlayheadTOffset, setTeamPlayheadTOffset] = useState<number | null>(null);
   const [filter, setFilter] = useState<FilterMode>("turns");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
@@ -341,6 +346,59 @@ export function SessionView({
   }
 
   const totalInput = totalUsage.input + totalUsage.cacheRead + totalUsage.cacheWrite;
+
+  // Track the topmost transcript row and publish its tOffsetMs. Only runs
+  // when we're showing the team minimap as the sticky header (Transcript
+  // tab on a team-lead session) — the inner single-session <Minimap>
+  // maintains its own separate playhead state for the non-team case.
+  useEffect(() => {
+    if (!team || tab !== "transcript") return;
+    const el = headerRef.current;
+    if (!el) return;
+    const main = el.closest("main") as HTMLElement | null;
+    if (!main) return;
+    const BAND_HEIGHT = 12;
+    const rootMargin = `-${headerH}px 0px -${Math.max(
+      0,
+      main.clientHeight - headerH - BAND_HEIGHT,
+    )}px 0px`;
+    const inBand = new Set<HTMLElement>();
+    const publish = () => {
+      if (inBand.size === 0) {
+        setTeamPlayheadTOffset(null);
+        return;
+      }
+      let topmost: HTMLElement | null = null;
+      let topOff = Infinity;
+      for (const e of inBand) {
+        const t = e.offsetTop;
+        if (t < topOff) {
+          topOff = t;
+          topmost = e;
+        }
+      }
+      if (!topmost) {
+        setTeamPlayheadTOffset(null);
+        return;
+      }
+      const tOff = Number(topmost.getAttribute("data-sl-toffset"));
+      setTeamPlayheadTOffset(Number.isNaN(tOff) ? null : tOff);
+    };
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const node = e.target as HTMLElement;
+          if (e.isIntersecting) inBand.add(node);
+          else inBand.delete(node);
+        }
+        publish();
+      },
+      { root: main, rootMargin, threshold: 0 },
+    );
+    const rows = main.querySelectorAll<HTMLDivElement>("[data-sl-row-index]");
+    for (const r of rows) obs.observe(r);
+    return () => obs.disconnect();
+  }, [team, tab, headerH, displayRows.length]);
 
   return (
     <div style={{ padding: 0 }}>
@@ -586,23 +644,73 @@ export function SessionView({
             transition: "padding-bottom 0.2s ease",
           }}
         >
-        <Minimap
-          displayRows={displayRows}
-          durationMs={durationMs ?? 0}
-          selectedIndex={selectedIndex}
-          onSelect={scrollToIndex}
-          headerOffset={headerH}
-          subagents={session.subagents}
-          collapsed={collapsed}
-          prMarkers={prMarkers}
-          selectedSubagentId={selectedSubagentId}
-          onSelectSubagent={(id) => {
-            setSelectedSubagentId(id);
-            // Close the event drawer so we don't have two drawers fighting
-            // for the same right-side real estate.
-            if (id) setSelectedIndex(null);
-          }}
-        />
+        {team ? (
+          (() => {
+            const sessionStartMs = session.firstTimestamp
+              ? Date.parse(session.firstTimestamp)
+              : 0;
+            const playheadAbsMs =
+              teamPlayheadTOffset !== null
+                ? sessionStartMs + teamPlayheadTOffset
+                : null;
+            return (
+              <TeamMinimap
+                data={team}
+                playheadMs={playheadAbsMs}
+                onSeek={(absMs) => {
+                  // Only seek when the click lands on the lead's own time
+                  // range — member-lane clicks outside the lead's window
+                  // have nothing to scroll to in this transcript.
+                  const targetTOffset = absMs - sessionStartMs;
+                  if (displayRows.length === 0) return;
+                  let bestIdx = 0;
+                  let bestDelta = Infinity;
+                  for (let i = 0; i < displayRows.length; i++) {
+                    const d = displayRows[i]!;
+                    const ts =
+                      d.kind === "turn-collapsed"
+                        ? d.turn.tOffsetMs
+                        : "row" in d
+                          ? d.row.tOffsetMs
+                          : undefined;
+                    if (ts === undefined) continue;
+                    const delta = Math.abs(ts - targetTOffset);
+                    if (delta < bestDelta) {
+                      bestDelta = delta;
+                      bestIdx = i;
+                    }
+                  }
+                  const target = displayRows[bestIdx]!;
+                  const idx =
+                    target.kind === "turn-collapsed"
+                      ? target.turn.firstPrimaryIndex
+                      : "row" in target
+                        ? rowPrimaryIndex(target.row)
+                        : null;
+                  if (idx !== null) scrollToIndex(idx);
+                }}
+              />
+            );
+          })()
+        ) : (
+          <Minimap
+            displayRows={displayRows}
+            durationMs={durationMs ?? 0}
+            selectedIndex={selectedIndex}
+            onSelect={scrollToIndex}
+            headerOffset={headerH}
+            subagents={session.subagents}
+            collapsed={collapsed}
+            prMarkers={prMarkers}
+            selectedSubagentId={selectedSubagentId}
+            onSelectSubagent={(id) => {
+              setSelectedSubagentId(id);
+              // Close the event drawer so we don't have two drawers fighting
+              // for the same right-side real estate.
+              if (id) setSelectedIndex(null);
+            }}
+          />
+        )}
         </div>
       </div>
 

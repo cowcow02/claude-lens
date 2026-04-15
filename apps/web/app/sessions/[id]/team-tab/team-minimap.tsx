@@ -1,6 +1,6 @@
 "use client";
 
-import type { TimelineData } from "./adapter";
+import type { TimelineData, TeamTrack } from "./adapter";
 
 const LANE_HEIGHT = 22;
 const LANE_GAP = 2;
@@ -9,17 +9,20 @@ const LABEL_WIDTH = 100;
 type Props = {
   data: TimelineData;
   playheadMs: number | null;
-  onSeek: (tsMs: number) => void;
+  onSeek: (tsMs: number, trackId?: string) => void;
 };
 
 export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
   const span = Math.max(1, data.lastEventMs - data.firstEventMs);
 
-  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const onLaneClick = (
+    track: TeamTrack,
+    e: React.MouseEvent<HTMLDivElement>,
+  ) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.max(0, e.clientX - rect.left);
     const frac = Math.min(1, x / Math.max(1, rect.width));
-    onSeek(data.firstEventMs + frac * span);
+    onSeek(data.firstEventMs + frac * span, track.id);
   };
 
   const playheadFrac =
@@ -88,7 +91,7 @@ export function TeamMinimap({ data, playheadMs, onSeek }: Props) {
                 overflow: "hidden",
                 cursor: "pointer",
               }}
-              onClick={onClick}
+              onClick={(e) => onLaneClick(t, e)}
             >
               {t.turns.map((turn) => {
                 const left =

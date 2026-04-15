@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import type { TimelineData } from "./adapter";
+import type { TimelineData, TeamTurn } from "./adapter";
+import type { SeekTarget } from "./team-table";
 import { TeamMinimap } from "./team-minimap";
 import { TeamTable } from "./team-table";
+import { TurnDrawer } from "./turn-drawer";
 
 export function TeamTabClient({
   initial,
@@ -13,7 +15,12 @@ export function TeamTabClient({
   teamName: string;
 }) {
   const [playheadMs, setPlayheadMs] = useState<number | null>(null);
-  const [seekTargetMs, setSeekTargetMs] = useState<number | null>(null);
+  const [seekTarget, setSeekTarget] = useState<SeekTarget | null>(null);
+  const [selectedTurn, setSelectedTurn] = useState<TeamTurn | null>(null);
+
+  const selectedTrack = selectedTurn
+    ? initial.tracks.find((t) => t.id === selectedTurn.trackId)
+    : null;
 
   return (
     <div
@@ -43,12 +50,25 @@ export function TeamTabClient({
       <TeamMinimap
         data={initial}
         playheadMs={playheadMs}
-        onSeek={(ts) => setSeekTargetMs(ts)}
+        onSeek={(tsMs, trackId) => setSeekTarget({ tsMs, trackId })}
       />
       <TeamTable
         data={initial}
         onPlayheadChange={setPlayheadMs}
-        scrollTargetMs={seekTargetMs}
+        scrollTarget={seekTarget}
+        onTurnClick={setSelectedTurn}
+      />
+      <TurnDrawer
+        turn={selectedTurn}
+        trackLabel={
+          selectedTrack
+            ? selectedTrack.isLead
+              ? "LEAD"
+              : selectedTrack.label
+            : ""
+        }
+        trackColor={selectedTrack?.color ?? "#888"}
+        onClose={() => setSelectedTurn(null)}
       />
     </div>
   );
