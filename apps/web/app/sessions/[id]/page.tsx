@@ -18,8 +18,11 @@ export default async function SessionDetailPage({
   const session = await getSession(id);
   if (!session) return notFound();
 
+  // Only attempt the team load when this session is actually orchestrating
+  // a team. A bare teamName tag (without TeamCreate or outbound SendMessage)
+  // is just an environmental artifact and shouldn't surface a Team tab.
   let teamProps: (TimelineData & { teamName: string }) | null = null;
-  if (session.teamName) {
+  if (session.isTeamLead) {
     const result = await loadTeamForSession(id);
     if (result) {
       teamProps = {

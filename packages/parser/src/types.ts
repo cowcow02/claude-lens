@@ -128,6 +128,12 @@ export type SessionMeta = {
    *  Claude Code writes on all events in a member session. Used to pair
    *  lead-side SendMessage.to values directly. */
   agentName?: string;
+  /** True only when this session has actual team-orchestration activity:
+   *  a TeamCreate tool_use, OR an outbound SendMessage to a non-lead
+   *  recipient. A bare `teamName` field isn't enough — Claude Code can
+   *  tag a one-off chat with whatever team context happened to be active.
+   *  Gate "is this session a team lead" UI on this flag. */
+  isTeamLead?: boolean;
 };
 
 /**

@@ -277,6 +277,73 @@ describe("parseTranscript — team fields", () => {
     const { meta } = parseTranscript(lines);
     expect(meta.agentName).toBeUndefined();
   });
+
+  it("does NOT mark a session as team lead just because it has a teamName tag", () => {
+    // Reproduces the bug where a one-off chat opened in an existing team
+    // context gets tagged with teamName but is doing zero team work.
+    const lines = [
+      { type: "user", sessionId: "s1", teamName: "orphan-team",
+        message: { content: "explain the harness" },
+        timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.teamName).toBe("orphan-team");
+    expect(meta.isTeamLead).toBe(false);
+  });
+
+  it("marks a session as team lead when it contains TeamCreate", () => {
+    const lines = [
+      { type: "user", sessionId: "s1", teamName: "t",
+        message: { content: "start team" },
+        timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+      { type: "assistant", sessionId: "s1", teamName: "t",
+        timestamp: "2026-04-15T10:00:05Z", uuid: "u2", parentUuid: "u1",
+        requestId: "r1",
+        message: { id: "m1", model: "claude-opus", content: [
+          { type: "tool_use", id: "tu1", name: "TeamCreate",
+            input: { team_name: "t", agent_type: "orchestrator" } },
+        ] } },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.isTeamLead).toBe(true);
+  });
+
+  it("marks a session as team lead when it contains an outbound SendMessage", () => {
+    const lines = [
+      { type: "user", sessionId: "s1", teamName: "t",
+        message: { content: "go" },
+        timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+      { type: "assistant", sessionId: "s1", teamName: "t",
+        timestamp: "2026-04-15T10:00:05Z", uuid: "u2", parentUuid: "u1",
+        requestId: "r1",
+        message: { id: "m1", model: "claude-opus", content: [
+          { type: "tool_use", id: "tu1", name: "SendMessage",
+            input: { to: "member-a", message: "do task" } },
+        ] } },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.isTeamLead).toBe(true);
+  });
+
+  it("does NOT mark a member session as team lead even with SendMessage to team-lead", () => {
+    // Members send to "team-lead", not to other agents — that's a reply,
+    // not a dispatch, and shouldn't qualify them as a lead.
+    const lines = [
+      { type: "user", sessionId: "s1", teamName: "t", agentName: "member-a",
+        message: { content: "hi" },
+        timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+      { type: "assistant", sessionId: "s1", teamName: "t", agentName: "member-a",
+        timestamp: "2026-04-15T10:00:05Z", uuid: "u2", parentUuid: "u1",
+        requestId: "r1",
+        message: { id: "m1", model: "claude-opus", content: [
+          { type: "tool_use", id: "tu1", name: "SendMessage",
+            input: { to: "team-lead", message: "done" } },
+        ] } },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.isTeamLead).toBe(false);
+    expect(meta.agentName).toBe("member-a");
+  });
 });
 
 describe("parseTranscript — teammateMessage classification", () => {

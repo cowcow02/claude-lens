@@ -4,6 +4,7 @@ type BadgeSession = {
   id: string;
   teamName?: string;
   agentName?: string;
+  isTeamLead?: boolean;
 };
 
 const BASE_STYLE = {
@@ -28,7 +29,13 @@ export function TeamBadge({
   linkable?: boolean;
 }) {
   if (!session.teamName) return null;
-  const isLead = !session.agentName;
+  // Lead = explicit orchestration evidence. A bare teamName + missing
+  // agentName isn't enough — see SessionMeta.isTeamLead. Sessions that
+  // sit in that grey zone (tagged with a team but doing nothing teamy)
+  // get no badge.
+  const isLead = session.isTeamLead === true;
+  const isMember = session.agentName !== undefined;
+  if (!isLead && !isMember) return null;
 
   if (isLead && linkable) {
     return (

@@ -48,7 +48,10 @@ function buildTeamView(
   group: SessionMeta[],
   details: Map<string, SessionDetail>,
 ): TeamView | null {
-  const candidates = group.filter((s) => !s.agentName);
+  // Lead candidates must have actual orchestration activity. Sessions that
+  // merely have a teamName tag (Claude Code can attach one to any chat
+  // opened while a team context is active) don't qualify.
+  const candidates = group.filter((s) => s.isTeamLead);
   if (candidates.length === 0) return null;
 
   // Prefer a candidate whose detail contains a TeamCreate tool_use.

@@ -313,6 +313,8 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
   let gitBranch: string | undefined;
   let teamName: string | undefined;
   let agentName: string | undefined;
+  let hasTeamCreate = false;
+  let hasOutboundDispatch = false;
   let toolCallCount = 0;
   let turnCount = 0;
   let firstUserPreview: string | undefined;
@@ -331,6 +333,15 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       ) as { type: "tool_use"; name: string; input?: Record<string, unknown> } | undefined;
       if (toolBlock) {
         const input = toolBlock.input ?? {};
+        // Team-orchestration evidence: a session is only a "lead" when it
+        // actually creates a team or dispatches outbound messages. A bare
+        // teamName field on events isn't enough — Claude Code can tag a
+        // one-off chat with whatever team context happened to be active.
+        if (toolBlock.name === "TeamCreate") hasTeamCreate = true;
+        if (toolBlock.name === "SendMessage") {
+          const to = typeof input.to === "string" ? (input.to as string) : "";
+          if (to && to !== "team-lead") hasOutboundDispatch = true;
+        }
         const fp = typeof input.file_path === "string" ? (input.file_path as string) : undefined;
         if (toolBlock.name === "Edit" && fp) {
           filesEdited.add(fp);
@@ -432,6 +443,10 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       filesEdited: filesEdited.size,
       teamName,
       agentName,
+      isTeamLead:
+        teamName !== undefined &&
+        agentName === undefined &&
+        (hasTeamCreate || hasOutboundDispatch),
     },
   };
 }
