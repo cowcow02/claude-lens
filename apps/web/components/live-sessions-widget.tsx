@@ -15,7 +15,6 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import type { SessionMeta } from "@claude-lens/parser";
 import { prettyProjectName } from "@/lib/format";
 import { TeamBadge } from "@/components/team-badge";
 
@@ -214,7 +213,7 @@ export function LiveSessionsWidget({ sessions }: { sessions: LiveSessionPick[] }
                 <em style={{ color: "var(--af-text-tertiary)" }}>(no user message)</em>
               )}
             </span>
-            <TeamBadge session={s as unknown as SessionMeta} linkable={false} />
+            <TeamBadge session={s} linkable={false} />
           </div>
           {/* Subtitle: what the agent is saying in response. */}
           <div

@@ -1,5 +1,10 @@
 import Link from "next/link";
-import type { SessionMeta } from "@claude-lens/parser";
+
+type BadgeSession = {
+  id: string;
+  teamName?: string;
+  agentName?: string;
+};
 
 const BASE_STYLE = {
   display: "inline-flex",
@@ -16,7 +21,7 @@ export function TeamBadge({
   session,
   linkable = true,
 }: {
-  session: SessionMeta;
+  session: BadgeSession;
   /** When false, the lead variant renders as a span instead of a Link — use
    *  inside parent `<Link>` contexts (e.g. a card wrapper) to avoid nested
    *  anchors. */
