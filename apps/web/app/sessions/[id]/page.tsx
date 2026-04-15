@@ -1,5 +1,10 @@
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/data";
+import { loadTeamForSession } from "@claude-lens/parser/fs";
+import {
+  teamViewToMultiTrackProps,
+  type MultiTrackProps,
+} from "./team-tab/adapter";
 import { SessionView } from "./session-view";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +18,17 @@ export default async function SessionDetailPage({
   const session = await getSession(id);
   if (!session) return notFound();
 
+  let teamProps: (MultiTrackProps & { teamName: string }) | null = null;
+  if (session.teamName) {
+    const result = await loadTeamForSession(id);
+    if (result) {
+      teamProps = {
+        ...teamViewToMultiTrackProps(result.view, result.details),
+        teamName: result.view.teamName,
+      };
+    }
+  }
+
   // Strip the `raw` field from every event before serializing to the
   // client. The parser keeps `raw` around for the Debug tab, but it's a
   // full verbatim copy of the JSONL line — for an 8.7 MB session file
@@ -24,5 +40,5 @@ export default async function SessionDetailPage({
     events: session.events.map((e) => ({ ...e, raw: undefined })),
   };
 
-  return <SessionView session={stripped} />;
+  return <SessionView session={stripped} team={teamProps} />;
 }

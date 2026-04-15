@@ -39,6 +39,8 @@ import { formatGap, formatOffset, formatRelative, formatTokens, shortId } from "
 import { LiveBadge } from "@/components/live-badge";
 import { AskClaudeButton, AskClaudeDrawer } from "@/components/ask-claude";
 import { TailMode } from "@/components/tail-mode";
+import type { MultiTrackProps } from "./team-tab/adapter";
+import { TeamTabClient } from "./team-tab/team-tab-client";
 
 /* ------------------------------------------------------------------ */
 /*  Constants + theming                                               */
@@ -128,8 +130,16 @@ const FILTER_MODES: { value: FilterMode; label: string }[] = [
 /** Drawer width in px — reserved on the transcript's right edge when open. */
 const DRAWER_WIDTH = 460;
 
-export function SessionView({ session }: { session: SessionDetail }) {
-  const [tab, setTab] = useState<"transcript" | "debug">("transcript");
+export function SessionView({
+  session,
+  team,
+}: {
+  session: SessionDetail;
+  team?: (MultiTrackProps & { teamName: string }) | null;
+}) {
+  const [tab, setTab] = useState<"transcript" | "debug" | "team">(
+    team ? "team" : "transcript",
+  );
   const [filter, setFilter] = useState<FilterMode>("turns");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
@@ -489,6 +499,14 @@ export function SessionView({ session }: { session: SessionDetail }) {
             >
               Debug
             </button>
+            {team && (
+              <button
+                className={`af-tab-btn ${tab === "team" ? "active" : ""}`}
+                onClick={() => setTab("team")}
+              >
+                Team
+              </button>
+            )}
           </div>
 
           <div
@@ -599,7 +617,9 @@ export function SessionView({ session }: { session: SessionDetail }) {
           transition: "padding-right 0.15s ease",
         }}
       >
-        {tab === "transcript" ? (
+        {tab === "team" && team ? (
+          <TeamTabClient initial={team} teamName={team.teamName} />
+        ) : tab === "transcript" ? (
           <>
             {teammateCount > 0 && (
               <div
