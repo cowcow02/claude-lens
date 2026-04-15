@@ -598,7 +598,6 @@ export function SessionView({
             playheadMs={teamPlayheadMs}
             onPlayheadChange={setTeamPlayheadMs}
             seekTarget={teamSeekTarget}
-            expanded={teamExpanded}
           />
         ) : tab === "transcript" ? (
           <>

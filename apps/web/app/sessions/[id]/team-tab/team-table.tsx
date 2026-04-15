@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback, useMemo, useState } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import type { TimelineData, TeamTurn, TeamTrack, IdleBand } from "./adapter";
 import { yOfMs } from "./adapter";
 
@@ -10,6 +10,16 @@ const TIME_COL_WIDTH = 80;
 const COL_GAP = 1;
 const COL_MIN_WIDTH = 240;
 
+/** When the vertical scroll moves to a point where no visible member
+ *  column has any turn active, auto-scroll horizontally to bring the
+ *  leftmost active one into view — but only after this quiet period
+ *  has elapsed since the user last manually scrolled horizontally, so
+ *  manual pan isn't fought by the auto-scroll. */
+const USER_HSCROLL_GRACE_MS = 800;
+/** Minimum time between two consecutive auto-scrolls so a continuous
+ *  vertical scroll through a blank stretch doesn't thrash horizontally. */
+const AUTOSCROLL_COOLDOWN_MS = 1200;
+
 export type SeekTarget = { tsMs: number; trackId?: string };
 
 type Props = {
@@ -17,9 +27,6 @@ type Props = {
   onPlayheadChange: (tsMs: number | null) => void;
   scrollTarget: SeekTarget | null;
   onTurnClick: (turn: TeamTurn) => void;
-  /** Track ids currently visible in the table — derived from the shared
-   *  minimap expanded state so minimap lanes and table columns stay in sync. */
-  visibleTrackIds: Set<string>;
 };
 
 export function TeamTable({
@@ -27,12 +34,7 @@ export function TeamTable({
   onPlayheadChange,
   scrollTarget,
   onTurnClick,
-  visibleTrackIds,
 }: Props) {
-  const visibleTracks = useMemo(
-    () => data.tracks.filter((t) => visibleTrackIds.has(t.id)),
-    [data.tracks, visibleTrackIds],
-  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const [expandedTurns, setExpandedTurns] = useState<Set<string>>(new Set());
   const toggleExpand = useCallback((turnId: string) => {
@@ -44,32 +46,63 @@ export function TeamTable({
     });
   }, []);
 
+  // Track user vs. programmatic horizontal scroll, and cool-down the
+  // auto-horizontal-scroll so a continuous vertical drag doesn't yank the
+  // table left/right on every frame.
+  const lastScrollTopRef = useRef(0);
+  const lastScrollLeftRef = useRef(0);
+  const lastUserHScrollRef = useRef(0);
+  const lastAutoScrollRef = useRef(0);
+  const programmaticLeftRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!scrollTarget || !scrollRef.current) return;
     const targetY = yOfMs(data.yAnchors, scrollTarget.tsMs);
     scrollRef.current.scrollTop = Math.max(0, targetY - 40);
 
     if (scrollTarget.trackId) {
-      const colIndex = visibleTracks.findIndex((t) => t.id === scrollTarget.trackId);
+      const colIndex = data.tracks.findIndex((t) => t.id === scrollTarget.trackId);
       if (colIndex !== -1) {
         const targetX = TIME_COL_WIDTH + colIndex * (COL_MIN_WIDTH + COL_GAP);
         const viewport = scrollRef.current.clientWidth;
-        scrollRef.current.scrollLeft = Math.max(
+        const nextLeft = Math.max(
           0,
           targetX - viewport / 2 + COL_MIN_WIDTH / 2,
         );
+        programmaticLeftRef.current = nextLeft;
+        scrollRef.current.scrollLeft = nextLeft;
       }
     }
-  }, [scrollTarget, data.yAnchors, visibleTracks]);
+  }, [scrollTarget, data.yAnchors, data.tracks]);
 
   const onScroll = useCallback(() => {
     if (!scrollRef.current) return;
-    const top = scrollRef.current.scrollTop;
+    const el = scrollRef.current;
+    const top = el.scrollTop;
+    const left = el.scrollLeft;
+    const dy = top - lastScrollTopRef.current;
+    const dx = left - lastScrollLeftRef.current;
+    lastScrollTopRef.current = top;
+    lastScrollLeftRef.current = left;
+
+    // Distinguish programmatic horizontal scroll (which we just triggered
+    // ourselves) from a real user pan. Only the latter should reset the
+    // "leave the user alone" timer.
+    if (dx !== 0) {
+      const wasProgrammatic =
+        programmaticLeftRef.current !== null &&
+        Math.abs(left - programmaticLeftRef.current) < 2;
+      if (wasProgrammatic) programmaticLeftRef.current = null;
+      else lastUserHScrollRef.current = Date.now();
+    }
+
     const anchors = data.yAnchors;
     if (anchors.length === 0) {
       onPlayheadChange(null);
       return;
     }
+
+    // Binary-search for the wall-clock ms at the top of the viewport.
     let lo = 0;
     let hi = anchors.length - 1;
     while (hi - lo > 1) {
@@ -86,9 +119,76 @@ export function TeamTable({
       ts = a.tsMs + frac * (b.tsMs - a.tsMs);
     }
     onPlayheadChange(ts);
-  }, [data.yAnchors, onPlayheadChange]);
 
-  const gridTemplate = `${TIME_COL_WIDTH}px repeat(${visibleTracks.length}, minmax(${COL_MIN_WIDTH}px, 1fr))`;
+    // Auto-scroll: only on vertical movement, and only when the user hasn't
+    // just panned horizontally themselves, and only when the cooldown has
+    // elapsed. These guards prevent feedback loops and UX fights.
+    if (dy === 0) return;
+    const now = Date.now();
+    if (now - lastUserHScrollRef.current < USER_HSCROLL_GRACE_MS) return;
+    if (now - lastAutoScrollRef.current < AUTOSCROLL_COOLDOWN_MS) return;
+
+    // Skip if there are no off-lead columns at all (no auto-scroll possible).
+    if (data.tracks.length <= 1) return;
+
+    // Figure out the grid x-range of every MEMBER column (lead is sticky and
+    // always visible, so it's excluded from the "is the member area blank"
+    // question). Members start after the TIME + LEAD columns in the grid.
+    const MEMBER_AREA_LEFT = TIME_COL_WIDTH + COL_MIN_WIDTH + COL_GAP * 2;
+    const viewportW = el.clientWidth;
+    const visibleMemberRangeStart = left + MEMBER_AREA_LEFT;
+    const visibleMemberRangeEnd = left + viewportW;
+
+    type MemberRange = { trackIdx: number; start: number; end: number };
+    const memberRanges: MemberRange[] = [];
+    for (let i = 1; i < data.tracks.length; i++) {
+      const gridX = TIME_COL_WIDTH + i * (COL_MIN_WIDTH + COL_GAP);
+      memberRanges.push({
+        trackIdx: i,
+        start: gridX,
+        end: gridX + COL_MIN_WIDTH,
+      });
+    }
+    // "Visible" means the column's midpoint is inside the viewport's member
+    // area. A column that peeks in by a few pixels at the right edge doesn't
+    // count — the user can't read a turn from a 30px-wide slice.
+    const isVisible = (r: MemberRange) => {
+      const mid = (r.start + r.end) / 2;
+      return mid >= visibleMemberRangeStart && mid <= visibleMemberRangeEnd;
+    };
+    const hasTurnAtTs = (trackIdx: number) => {
+      const track = data.tracks[trackIdx]!;
+      return track.turns.some((t) => t.startMs <= ts && t.endMs >= ts);
+    };
+    const visibleMembers = memberRanges.filter(isVisible);
+    if (visibleMembers.length === 0) return; // whole member area scrolled off-screen
+    const anyVisibleActive = visibleMembers.some((r) => hasTurnAtTs(r.trackIdx));
+    if (anyVisibleActive) return;
+
+    // Nothing visible has activity. Find the leftmost off-screen member that
+    // IS active at this ts, and scroll to center its left edge just inside
+    // the member area.
+    let targetIdx = -1;
+    for (const r of memberRanges) {
+      if (!isVisible(r) && hasTurnAtTs(r.trackIdx)) {
+        targetIdx = r.trackIdx;
+        break;
+      }
+    }
+    if (targetIdx < 0) return; // no off-screen activity either — nothing to show
+
+    const targetX = TIME_COL_WIDTH + targetIdx * (COL_MIN_WIDTH + COL_GAP);
+    const targetLeft = Math.max(0, targetX - MEMBER_AREA_LEFT - 8);
+    lastAutoScrollRef.current = now;
+    programmaticLeftRef.current = targetLeft;
+    // Instant scroll rather than smooth: some environments ignore smooth
+    // behavior entirely, leaving the auto-scroll half-applied. The jump is
+    // only a few hundred pixels and only fires when the visible area was
+    // already blank, so the UX cost of the snap is low.
+    el.scrollLeft = targetLeft;
+  }, [data.tracks, data.yAnchors, onPlayheadChange]);
+
+  const gridTemplate = `${TIME_COL_WIDTH}px repeat(${data.tracks.length}, minmax(${COL_MIN_WIDTH}px, 1fr))`;
 
   return (
     <div
@@ -109,7 +209,7 @@ export function TeamTable({
         style={{
           position: "relative",
           width:
-            TIME_COL_WIDTH + visibleTracks.length * (COL_MIN_WIDTH + COL_GAP),
+            TIME_COL_WIDTH + data.tracks.length * (COL_MIN_WIDTH + COL_GAP),
           minWidth: "100%",
           height: data.totalHeightPx + 72,
         }}
@@ -143,7 +243,7 @@ export function TeamTable({
           >
             Time
           </div>
-          {visibleTracks.map((t, idx) => {
+          {data.tracks.map((t, idx) => {
             const stickyLead = idx === 0;
             return (
               <div
@@ -213,7 +313,7 @@ export function TeamTable({
             ))}
           </div>
 
-          {visibleTracks.map((track, trackIdx) => (
+          {data.tracks.map((track, trackIdx) => (
             <div
               key={track.id}
               style={{
@@ -294,7 +394,7 @@ export function TeamTable({
             <IdleBandStrip
               key={i}
               band={band}
-              totalCols={visibleTracks.length + 1}
+              totalCols={data.tracks.length + 1}
             />
           ))}
         </div>
