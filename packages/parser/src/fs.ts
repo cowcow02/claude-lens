@@ -799,11 +799,14 @@ export async function loadTeamForSession(
 
   const candidates = all.filter((s) => s.teamName === teamName);
 
+  const loaded = await Promise.all(
+    candidates.map((c) => getSession(c.sessionId, { root })),
+  );
   const details = new Map<string, SessionDetail>();
-  for (const c of candidates) {
-    const d = await getSession(c.sessionId, { root });
+  candidates.forEach((c, i) => {
+    const d = loaded[i];
     if (d) details.set(c.sessionId, d);
-  }
+  });
 
   const views = groupByTeam(candidates, details);
   const view = views.find((v) => v.teamName === teamName);

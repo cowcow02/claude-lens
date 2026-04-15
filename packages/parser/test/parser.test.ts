@@ -344,4 +344,23 @@ describe("parseTranscript — teammateMessage classification", () => {
     expect(events[0]!.teammateMessage?.teammateId).toBe("kip-121");
     expect(events[0]!.teammateMessage?.body).toBe("PR merged");
   });
+
+  it("excludes teammate-message events from turnCount / first / last user previews", () => {
+    // Simulates a team lead transcript: real human prompt, inbound team
+    // reply, human follow-up. turnCount should be 2 (the human messages
+    // only), and previews should surface the human text — not the inbound
+    // cross-session deliveries.
+    const lines = [
+      { ...base, uuid: "h1", timestamp: "2026-04-15T10:00:00Z",
+        message: { content: "start the team" } },
+      { ...base, uuid: "tm1", timestamp: "2026-04-15T10:05:00Z",
+        message: { content: '<teammate-message teammate_id="member-a">PR merged</teammate-message>' } },
+      { ...base, uuid: "h2", timestamp: "2026-04-15T10:10:00Z",
+        message: { content: "good, now do the next one" } },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.turnCount).toBe(2);
+    expect(meta.firstUserPreview).toBe("start the team");
+    expect(meta.lastUserPreview).toBe("good, now do the next one");
+  });
 });

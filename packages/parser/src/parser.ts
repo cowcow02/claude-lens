@@ -356,6 +356,7 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       const rawContent =
         typeof rawMsg?.content === "string" ? rawMsg.content : "";
       const isHidden =
+        e.teammateMessage !== undefined ||
         rawContent.startsWith("<command-name>") ||
         rawContent.startsWith("Base directory for this skill:") ||
         rawContent.startsWith("<task-notification>");
