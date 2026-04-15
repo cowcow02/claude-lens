@@ -284,6 +284,8 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
   let sessionId = "";
   let cwd: string | undefined;
   let gitBranch: string | undefined;
+  let teamName: string | undefined;
+  let agentName: string | undefined;
   let toolCallCount = 0;
   let turnCount = 0;
   let firstUserPreview: string | undefined;
@@ -350,6 +352,8 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
     if (typeof o.sessionId === "string" && !sessionId) sessionId = o.sessionId;
     if (typeof o.cwd === "string" && !cwd) cwd = o.cwd;
     if (typeof o.gitBranch === "string" && !gitBranch) gitBranch = o.gitBranch;
+    if (typeof o.teamName === "string" && !teamName) teamName = o.teamName;
+    if (typeof o.agentName === "string" && !agentName) agentName = o.agentName;
     if (o.type === "assistant") {
       const m = o.message as Record<string, unknown> | undefined;
       if (m) {
@@ -398,6 +402,8 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       linesAdded,
       linesRemoved,
       filesEdited: filesEdited.size,
+      teamName,
+      agentName,
     },
   };
 }

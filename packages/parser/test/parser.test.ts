@@ -240,3 +240,41 @@ describe("buildMegaRows", () => {
     }
   });
 });
+
+describe("parseTranscript — team fields", () => {
+  it("extracts teamName from top-level event field", () => {
+    const lines = [
+      { type: "user", sessionId: "s1", teamName: "my-team",
+        message: { content: "hi" }, timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.teamName).toBe("my-team");
+  });
+
+  it("leaves teamName undefined when absent", () => {
+    const lines = [
+      { type: "user", sessionId: "s1",
+        message: { content: "hi" }, timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.teamName).toBeUndefined();
+  });
+
+  it("extracts agentName on member session", () => {
+    const lines = [
+      { type: "user", sessionId: "s1", teamName: "t", agentName: "kip-127",
+        message: { content: "hi" }, timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.agentName).toBe("kip-127");
+  });
+
+  it("leaves agentName undefined on lead session", () => {
+    const lines = [
+      { type: "user", sessionId: "s1", teamName: "t",
+        message: { content: "hi" }, timestamp: "2026-04-15T10:00:00Z", uuid: "u1" },
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.agentName).toBeUndefined();
+  });
+});
