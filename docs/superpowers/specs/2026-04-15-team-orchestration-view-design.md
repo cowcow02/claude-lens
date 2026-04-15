@@ -311,3 +311,97 @@ Per CLAUDE.md's release cadence: user-facing feature → `npm version minor` aft
 ## Open questions
 
 None that block implementation. The `agentName` field discovery collapsed the main uncertainty (teammate_id ↔ sessionId correlation) from "heuristic" to "deterministic".
+
+---
+
+# v2 redesign addendum (2026-04-15 afternoon)
+
+After building v1 and reviewing it against a real team on localhost, the user pushed back on four issues:
+
+1. **No scroll-position indicator** on the Team tab's sticky header — the existing single-session transcript tab has one, the Team tab didn't.
+2. **Subagents were showing up as their own lanes.** `loadTeamForSession` filtered by `teamName`, but `listSessions` walks recursively and picked up `<session>/subagents/agent-*.jsonl` files too, inheriting the parent's `teamName` and polluting the roster.
+3. **Visualization was hard to understand.** Two parallel views of the same data — a sticky swim-lane header plus a multi-track grid below — where you had to read both to piece together the story. Either unify them or drop one.
+4. **No turn-collapsing.** The v1 grid rendered every atomic event as its own cell; after spending effort to collapse events into turns everywhere else, the Team tab threw that away.
+
+## Decisions
+
+**Delete both the sticky swim-lane header and the row-based grid from v1.** Replace them with one primitive:
+
+### Multi-lane horizontal timeline (primary view)
+
+One lane per agent (lead + each member). Wall-clock time is a shared horizontal axis across all lanes. Each lane is an independent horizontal track; each turn on that lane is positioned as a block whose left edge is the turn's `firstTimestamp + tOffsetMs` and whose width is the turn's `durationMs`. Overlapping turns across agents visually overlap on the canvas because they sit at the same X-position on different Y-lanes — the "lead started a turn, then halfway through a member spun up" story reads directly off the geometry.
+
+Turn data comes from **the existing `buildMegaRows` in `packages/parser/src/presentation.ts`**, applied per session. Each `TurnMegaRow` already carries `tOffsetMs`, `durationMs`, a full summary, and the child `PresentationRow[]` for drill-down.
+
+### Zoom, pan, and the universally applicable navigation UX
+
+The single-session transcript has the same readability problem (long sessions get condensed). The v2 timeline is built as a **standalone reusable primitive** (`TimelineCanvas`) so a future change could replace the single-session sticky strip with the same component. Scope of this PR is the Team tab only.
+
+Navigation:
+- **Zoom slider** at the top right, from "fit-to-width" (zoom=0) to a max where short turns are legible. A "Fit" button snaps back. Ctrl/Cmd+wheel over the canvas zooms with the cursor position as the anchor.
+- **Horizontal pan** via click-and-drag on empty canvas area, shift+wheel, or horizontal trackpad scroll.
+- **Minimap strip** at the top of the canvas: compressed full-span overview with all lanes stacked, a draggable viewport rectangle marking the currently-visible range. Clicking the minimap jumps to that time. The viewport rect serves as the scroll-position indicator from point 1.
+
+### Turn-block contents
+
+Each block carries the same information density the Transcript tab shows for a turn. Compact layout, not stripped-down content. Graceful degradation at narrow widths (colored bar + duration only, hover tooltip, click-to-drawer).
+
+### Detail drawer
+
+Click any turn block → a drawer slides in from the right with the full turn contents. Close with Esc or the X button. No navigation away from the Team tab.
+
+**Subagent visibility.** Subagents are no longer their own lanes (filtered out of `loadTeamForSession` by `filePath.includes('/subagents/')`). They remain visible as nested events *inside* their parent session's turn blocks via the drawer.
+
+## Data-model delta from v1
+
+- `loadTeamForSession` gains a subagent-path filter.
+- The web-side adapter is rewritten from `TeamView → MultiTrackProps` (grid rows) to `TeamView → TimelineData`:
+  ```ts
+  type TeamTurn = {
+    id: string;
+    sessionId: string;
+    trackId: string;
+    startMs: number;
+    endMs: number;
+    megaRow: TurnMegaRow;
+    agentColor: string;
+  };
+  type TeamTrack = {
+    id: string;
+    label: string;
+    color: string;
+    isLead: boolean;
+    turns: TeamTurn[];
+  };
+  type TimelineData = {
+    tracks: TeamTrack[];
+    firstEventMs: number;
+    lastEventMs: number;
+  };
+  ```
+- The `MultiTrackProps` type and all of its consumers are deleted.
+
+## Files that change
+
+**New (this rework):**
+- `apps/web/app/sessions/[id]/team-tab/timeline-canvas.tsx`
+- `apps/web/app/sessions/[id]/team-tab/turn-drawer.tsx`
+
+**Rewritten:**
+- `apps/web/app/sessions/[id]/team-tab/adapter.ts`
+- `apps/web/app/sessions/[id]/team-tab/team-tab-client.tsx`
+
+**Deleted:**
+- `apps/web/app/sessions/[id]/team-tab/swim-lane-header.tsx`
+- `apps/web/app/sessions/[id]/team-tab/multi-track.tsx`
+
+**Modified:**
+- `packages/parser/src/fs.ts` — `loadTeamForSession` filters out `filePath.includes('/subagents/')` sessions.
+- `apps/web/app/sessions/[id]/session-view.tsx` — the `team` prop type changes from `MultiTrackProps & { teamName }` to `TimelineData & { teamName }`.
+- `apps/web/app/sessions/[id]/page.tsx` — adapter import + return type change ripple through.
+
+## Non-goals of the v2 redesign
+
+- Horizontal-scrolling single-session transcript — the primitive is designed so this could later be done, but not in this PR.
+- Synchronized cross-session cursor with linked inspection across agents — drawer is one-at-a-time.
+- Any new parser types. All turn data reuses `TurnMegaRow`.
