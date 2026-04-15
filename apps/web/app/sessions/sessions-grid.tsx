@@ -13,6 +13,7 @@ import {
 } from "@/lib/format";
 import { Search, Wrench, MessagesSquare, Clock } from "lucide-react";
 import { LiveBadge } from "@/components/live-badge";
+import { TeamBadge } from "@/components/team-badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useViewToggle } from "@/components/view-toggle";
 
@@ -169,7 +170,19 @@ const sessionTableColumns: Column<SessionMeta>[] = [
         }}
         title={s.projectName}
       >
-        <div style={{ fontWeight: 500 }}>{prettyProjectName(s.projectName)}</div>
+        <div style={{ fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {prettyProjectName(s.projectName)}
+          </span>
+          <TeamBadge session={s} />
+        </div>
         <div
           style={{
             fontSize: 10,
@@ -325,6 +338,7 @@ function SessionCard({ session: s }: { session: SessionMeta }) {
           >
             {prettyProjectName(s.projectName)}
           </span>
+          <TeamBadge session={s} linkable={false} />
         </div>
         <div
           style={{

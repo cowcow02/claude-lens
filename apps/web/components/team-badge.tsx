@@ -12,14 +12,23 @@ const BASE_STYLE = {
   whiteSpace: "nowrap",
 } as const;
 
-export function TeamBadge({ session }: { session: SessionMeta }) {
+export function TeamBadge({
+  session,
+  linkable = true,
+}: {
+  session: SessionMeta;
+  /** When false, the lead variant renders as a span instead of a Link — use
+   *  inside parent `<Link>` contexts (e.g. a card wrapper) to avoid nested
+   *  anchors. */
+  linkable?: boolean;
+}) {
   if (!session.teamName) return null;
   const isLead = !session.agentName;
 
-  if (isLead) {
+  if (isLead && linkable) {
     return (
       <Link
-        href={`/sessions/${session.sessionId}`}
+        href={`/sessions/${session.id}`}
         style={{
           ...BASE_STYLE,
           fontWeight: 600,
@@ -32,6 +41,23 @@ export function TeamBadge({ session }: { session: SessionMeta }) {
       >
         Team Lead
       </Link>
+    );
+  }
+
+  if (isLead) {
+    return (
+      <span
+        style={{
+          ...BASE_STYLE,
+          fontWeight: 600,
+          background: "var(--af-warning-subtle)",
+          color: "var(--af-warning)",
+          border: "1px solid var(--af-warning-subtle)",
+        }}
+        title={`Team lead — ${session.teamName}`}
+      >
+        Team Lead
+      </span>
     );
   }
 
