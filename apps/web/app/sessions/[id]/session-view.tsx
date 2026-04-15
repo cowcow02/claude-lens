@@ -227,6 +227,19 @@ export function SessionView({ session }: { session: SessionDetail }) {
   const { events, durationMs, totalUsage, model, eventCount, projectName } = session;
   const airTimeMs = session.airTimeMs ?? durationMs;
 
+  /** Inbound `<teammate-message>` events are cross-session team traffic
+   *  wrapped in a synthetic user event — they're surfaced on the Team tab,
+   *  not in the lead's own transcript. Filter them out here so they don't
+   *  masquerade as real user input. Debug tab still sees the raw list. */
+  const teammateCount = useMemo(
+    () => events.filter((e) => e.teammateMessage).length,
+    [events],
+  );
+  const visibleEvents = useMemo(
+    () => (teammateCount === 0 ? events : events.filter((e) => !e.teammateMessage)),
+    [events, teammateCount],
+  );
+
   // A session is "live" if its last event was within 45 seconds.
   const isSessionLive = (() => {
     if (!session.lastTimestamp) return false;
@@ -238,7 +251,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
   const prMarkers = useMemo(() => detectPrMarkers(session), [session]);
 
   /** Build the full presentation stream once. */
-  const allRows = useMemo(() => buildPresentation(events), [events]);
+  const allRows = useMemo(() => buildPresentation(visibleEvents), [visibleEvents]);
 
   /** Collapse the presentation stream into conversational turns (user →
    *  agent loop → next user). Used by the "turns" filter mode. */
@@ -269,7 +282,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
       return flattenMegaRows(megaRows, expandedTurns);
     }
     if (filter === "all")
-      return allRowsAsRawRows(events).map((r) => ({
+      return allRowsAsRawRows(visibleEvents).map((r) => ({
         kind: "presentation",
         row: r,
       }));
@@ -281,10 +294,12 @@ export function SessionView({ session }: { session: SessionDetail }) {
         return r.kind === filter;
       })
       .map((r) => ({ kind: "presentation", row: r }));
-  }, [filter, megaRows, expandedTurns, allRows, events]);
+  }, [filter, megaRows, expandedTurns, allRows, visibleEvents]);
 
   const selectedEvent =
-    selectedIndex !== null ? (events.find((e) => e.index === selectedIndex) ?? null) : null;
+    selectedIndex !== null
+      ? (visibleEvents.find((e) => e.index === selectedIndex) ?? null)
+      : null;
   const selectedRow =
     selectedIndex !== null
       ? (allRows.find((r) => rowPrimaryIndex(r) === selectedIndex) ?? null)
@@ -508,7 +523,7 @@ export function SessionView({ session }: { session: SessionDetail }) {
             {filter === "turns"
               ? `${megaRows.filter((m) => m.kind === "turn").length} turns · ${allRows.length} actions`
               : filter === "meaningful"
-                ? `${allRows.length} rows (of ${events.length} raw events)`
+                ? `${allRows.length} rows (of ${visibleEvents.length} raw events)`
                 : `${displayRows.length} rows`}
           </span>
 
@@ -585,15 +600,33 @@ export function SessionView({ session }: { session: SessionDetail }) {
         }}
       >
         {tab === "transcript" ? (
-          <TranscriptList
-            displayRows={displayRows}
-            rowRefs={rowRefs}
-            selectedIndex={selectedIndex}
-            onSelect={setSelectedIndex}
-            onToggleTurn={toggleTurn}
-            stickyOffset={headerH + 16}
-            isSessionLive={isSessionLive}
-          />
+          <>
+            {teammateCount > 0 && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--af-text-tertiary, #888)",
+                  background: "var(--af-surface-subtle, rgba(255,255,255,0.04))",
+                  border: "1px solid var(--af-border-subtle, rgba(255,255,255,0.08))",
+                  borderRadius: 6,
+                  padding: "6px 10px",
+                  marginBottom: 8,
+                }}
+              >
+                {teammateCount} inbound team message
+                {teammateCount === 1 ? "" : "s"} hidden — open the Team tab to see them.
+              </div>
+            )}
+            <TranscriptList
+              displayRows={displayRows}
+              rowRefs={rowRefs}
+              selectedIndex={selectedIndex}
+              onSelect={setSelectedIndex}
+              onToggleTurn={toggleTurn}
+              stickyOffset={headerH + 16}
+              isSessionLive={isSessionLive}
+            />
+          </>
         ) : (
           <DebugList events={events} />
         )}
