@@ -447,8 +447,14 @@ function HoverCard({
 }) {
   const { turn, track } = hover;
   const summary = turn.megaRow.summary;
-  const userText =
-    turn.userPrompt && turn.userPrompt.kind === "user"
+  const tmMsg =
+    turn.userPrompt && "event" in turn.userPrompt
+      ? turn.userPrompt.event.teammateMessage
+      : undefined;
+  const userLabel = tmMsg ? `FROM ${tmMsg.teammateId}` : "HUMAN";
+  const userText = tmMsg
+    ? formatTeammatePreview(tmMsg)
+    : turn.userPrompt && turn.userPrompt.kind === "user"
       ? (turn.userPrompt.displayPreview ?? turn.userPrompt.event.preview ?? "")
       : "";
   const firstAgent = summary.firstAgentPreview ?? "";
@@ -513,18 +519,19 @@ function HoverCard({
           <div
             style={{
               fontSize: 8,
-              color: track.color,
+              color: tmMsg ? "var(--af-text-tertiary)" : track.color,
               fontWeight: 600,
               textTransform: "uppercase",
               letterSpacing: "0.04em",
               marginBottom: 1,
+              fontStyle: tmMsg ? "italic" : undefined,
             }}
           >
-            HUMAN
+            {userLabel}
           </div>
           <div
             style={{
-              color: "var(--af-text)",
+              color: tmMsg ? "var(--af-text-tertiary)" : "var(--af-text)",
               display: "-webkit-box",
               WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical",
@@ -657,4 +664,23 @@ function formatDuration(ms: number): string {
   if (ms < 60_000) return `${(ms / 1000).toFixed(0)}s`;
   if (ms < 3600_000) return `${(ms / 60_000).toFixed(1)}m`;
   return `${(ms / 3600_000).toFixed(1)}h`;
+}
+
+function formatTeammatePreview(
+  tm: NonNullable<import("@claude-lens/parser").SessionEvent["teammateMessage"]>,
+): string {
+  switch (tm.kind) {
+    case "idle-notification":
+      return `${tm.teammateId} is idle / available`;
+    case "shutdown-request":
+      return `${tm.teammateId} requesting shutdown`;
+    case "shutdown-approved":
+      return `${tm.teammateId} shutdown approved`;
+    case "teammate-terminated":
+      return `${tm.teammateId} has shut down`;
+    case "task-assignment":
+      return `task assigned to ${tm.teammateId}`;
+    default:
+      return tm.body.length > 120 ? tm.body.slice(0, 120) + "…" : tm.body;
+  }
 }

@@ -476,10 +476,20 @@ function TurnCell({
   const summary = turn.megaRow.summary;
   const durationStr = formatDuration(turn.durationMs);
 
+  const tmMsg =
+    turn.userPrompt && "event" in turn.userPrompt
+      ? turn.userPrompt.event.teammateMessage
+      : undefined;
   const userText =
     turn.userPrompt && turn.userPrompt.kind === "user"
       ? (turn.userPrompt.displayPreview ?? turn.userPrompt.event.preview ?? "")
       : "";
+  const userLabel = tmMsg
+    ? `FROM ${tmMsg.teammateId}`
+    : "HUMAN";
+  const userPreview = tmMsg
+    ? formatTeammatePreview(tmMsg)
+    : userText;
   const firstAgent = summary.firstAgentPreview ?? "";
   const finalAgent = summary.finalAgentPreview ?? "";
   const showFinal = !!finalAgent && finalAgent !== firstAgent;
@@ -582,27 +592,28 @@ function TurnCell({
         </span>
       </div>
 
-      {userText && (
+      {userPreview && (
         <div style={{ flexShrink: 0 }}>
           <div
             style={{
               fontSize: 8,
-              color: track.color,
+              color: tmMsg ? "var(--af-text-tertiary)" : track.color,
               fontWeight: 600,
               letterSpacing: "0.05em",
+              fontStyle: tmMsg ? "italic" : undefined,
             }}
           >
-            HUMAN
+            {userLabel}
           </div>
           <div
             style={{
-              color: "var(--af-text)",
+              color: tmMsg ? "var(--af-text-tertiary)" : "var(--af-text)",
               overflow: "hidden",
               whiteSpace: "nowrap",
               textOverflow: "ellipsis",
             }}
           >
-            {userText}
+            {userPreview}
           </div>
         </div>
       )}
@@ -786,4 +797,23 @@ function formatIdle(ms: number): string {
   const h = Math.floor(ms / 3600_000);
   const m = Math.round((ms % 3600_000) / 60_000);
   return `${h}h ${m}m`;
+}
+
+function formatTeammatePreview(
+  tm: NonNullable<import("@claude-lens/parser").SessionEvent["teammateMessage"]>,
+): string {
+  switch (tm.kind) {
+    case "idle-notification":
+      return `${tm.teammateId} is idle / available`;
+    case "shutdown-request":
+      return `${tm.teammateId} requesting shutdown`;
+    case "shutdown-approved":
+      return `${tm.teammateId} shutdown approved`;
+    case "teammate-terminated":
+      return `${tm.teammateId} has shut down`;
+    case "task-assignment":
+      return `task assigned to ${tm.teammateId}`;
+    default:
+      return tm.body.length > 120 ? tm.body.slice(0, 120) + "…" : tm.body;
+  }
 }

@@ -216,13 +216,20 @@ function FullTurnCard({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {userRow && userRow.kind === "user" && (
-        <ExpandableTextBlock
-          label="Human"
-          color={color}
-          text={userRow.displayPreview ?? userRow.event.preview ?? ""}
-        />
-      )}
+      {userRow && userRow.kind === "user" && (() => {
+        const tm = userRow.event.teammateMessage;
+        const label = tm ? `From ${tm.teammateId}` : "Human";
+        const text = tm
+          ? formatTeammatePreview(tm)
+          : (userRow.displayPreview ?? userRow.event.preview ?? "");
+        return (
+          <ExpandableTextBlock
+            label={label}
+            color={tm ? "var(--af-text-tertiary)" : color}
+            text={text}
+          />
+        );
+      })()}
 
       {firstAgentRow && firstAgentRow.kind === "agent" && (
         <ExpandableAgentBlock
@@ -787,4 +794,23 @@ function formatDuration(ms: number): string {
   if (ms < 60_000) return `${(ms / 1000).toFixed(0)}s`;
   if (ms < 3600_000) return `${(ms / 60_000).toFixed(1)}m`;
   return `${(ms / 3600_000).toFixed(1)}h`;
+}
+
+function formatTeammatePreview(
+  tm: NonNullable<import("@claude-lens/parser").SessionEvent["teammateMessage"]>,
+): string {
+  switch (tm.kind) {
+    case "idle-notification":
+      return `${tm.teammateId} is idle / available`;
+    case "shutdown-request":
+      return `${tm.teammateId} requesting shutdown`;
+    case "shutdown-approved":
+      return `${tm.teammateId} shutdown approved`;
+    case "teammate-terminated":
+      return `${tm.teammateId} has shut down`;
+    case "task-assignment":
+      return `task assigned to ${tm.teammateId}`;
+    default:
+      return tm.body.length > 120 ? tm.body.slice(0, 120) + "…" : tm.body;
+  }
 }

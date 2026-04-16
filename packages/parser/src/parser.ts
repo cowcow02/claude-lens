@@ -19,8 +19,12 @@ function truncate(s: string, n = 200): string {
   return one.length > n ? one.slice(0, n - 1) + "…" : one;
 }
 
+// Matches any text that starts with <teammate-message> — handles both
+// single-block and multi-block (batched) deliveries. Captures the first
+// teammate_id and the first body for classification; multi-block messages
+// are still classified from the first block.
 const TEAMMATE_MSG_RE =
-  /^\s*<teammate-message\s+teammate_id="([^"]+)"[^>]*>([\s\S]*?)<\/teammate-message>\s*$/;
+  /^\s*<teammate-message\s+teammate_id="([^"]+)"[^>]*>([\s\S]*?)<\/teammate-message>/;
 
 function classifyTeammateMessage(
   text: string,
@@ -29,12 +33,16 @@ function classifyTeammateMessage(
   if (!m) return undefined;
   const teammateId = m[1]!;
   const body = m[2]!.trim();
-  let kind: "message" | "idle-notification" | "shutdown-request" = "message";
+  type TmKind = NonNullable<SessionEvent["teammateMessage"]>["kind"];
+  let kind: TmKind = "message";
   if (body.startsWith("{")) {
     try {
       const parsed = JSON.parse(body) as { type?: string };
       if (parsed.type === "idle_notification") kind = "idle-notification";
       else if (parsed.type === "shutdown_request") kind = "shutdown-request";
+      else if (parsed.type === "shutdown_approved") kind = "shutdown-approved";
+      else if (parsed.type === "task_assignment") kind = "task-assignment";
+      else if (parsed.type === "teammate_terminated") kind = "teammate-terminated";
     } catch {
       /* not JSON, treat as message */
     }

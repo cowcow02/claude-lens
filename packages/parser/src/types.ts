@@ -69,7 +69,13 @@ export type SessionEvent = {
   teammateMessage?: {
     teammateId: string;
     body: string;
-    kind: "message" | "idle-notification" | "shutdown-request";
+    kind:
+      | "message"
+      | "idle-notification"
+      | "shutdown-request"
+      | "shutdown-approved"
+      | "task-assignment"
+      | "teammate-terminated";
   };
 };
 
