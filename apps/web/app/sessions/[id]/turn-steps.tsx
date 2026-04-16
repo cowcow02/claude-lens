@@ -194,7 +194,8 @@ function TurnStepLine({
   onClick?: () => void;
 }) {
   const theme = ROLE_THEMES[row.kind];
-  const label = theme.label;
+  const isTeammateMsg = row.kind === "user" && !!row.event.teammateMessage;
+  const label = isTeammateMsg ? "Team Lead" : theme.label;
   const preview = rowPreview(row);
   const interactive = !!onClick;
   return (

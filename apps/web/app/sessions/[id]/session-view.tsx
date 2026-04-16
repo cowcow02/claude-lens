@@ -93,13 +93,39 @@ const DRAWER_WIDTH = 460;
 export function SessionView({
   session,
   team,
+  teamLead,
 }: {
   session: SessionDetail;
   team?: (TimelineData & { teamName: string }) | null;
+  teamLead?: { leadSessionId: string; teamName: string; agentName: string } | null;
 }) {
-  const [tab, setTab] = useState<"transcript" | "debug" | "team">(
-    team ? "team" : "transcript",
-  );
+  type TabId = "transcript" | "team" | "debug";
+  const validTabs: TabId[] = ["transcript", "team", "debug"];
+  const readHash = (): TabId => {
+    if (typeof window === "undefined") return "transcript";
+    const h = window.location.hash.replace("#", "");
+    if (validTabs.includes(h as TabId)) return h as TabId;
+    return "transcript";
+  };
+  const [tab, setTabRaw] = useState<TabId>(readHash);
+  const setTab = (t: TabId) => {
+    setTabRaw(t);
+    window.history.replaceState(null, "", `#${t}`);
+  };
+  // Re-read hash on client mount and whenever the session changes (Next.js
+  // reuses this component across /sessions/[id] navigations, so useState
+  // doesn't reinitialize — the old tab would stick without this).
+  useEffect(() => {
+    setTabRaw(readHash());
+  }, [session.sessionId]);
+  useEffect(() => {
+    const onHash = () => {
+      const h = window.location.hash.replace("#", "");
+      if (validTabs.includes(h as TabId)) setTabRaw(h as TabId);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   // Team tab — playhead (set by TeamTable as the user scrolls) and seek
   // target (set by TeamMinimap clicks). Hoisted to session-view so the
   // sticky-header TeamMinimap and the body's TeamTable share the same
@@ -150,6 +176,13 @@ export function SessionView({
    *  screen real-estate once you're deep in reading. Hysteresis (60
    *  vs 80) prevents flicker at the boundary. */
   const [collapsed, setCollapsed] = useState(false);
+  // When the user explicitly clicks the toggle, suppress auto-collapse
+  // for a short period so the scroll listener doesn't immediately undo it.
+  const manualPinRef = useRef(0);
+  const toggleCollapsed = () => {
+    setCollapsed((v) => !v);
+    manualPinRef.current = Date.now();
+  };
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -175,6 +208,9 @@ export function SessionView({
     const update = () => {
       raf = 0;
       if (locked) return;
+      // Respect manual pin — user clicked the toggle, don't override
+      // their choice for 2 seconds so the next scroll doesn't fight it.
+      if (Date.now() - manualPinRef.current < 2000) return;
       const y = main.scrollTop;
       const dir = y - lastY; // positive = scrolling down
       lastY = y;
@@ -224,12 +260,15 @@ export function SessionView({
   const airTimeMs = session.airTimeMs ?? durationMs;
 
   /** Inbound `<teammate-message>` events are cross-session team traffic
-   *  wrapped in a synthetic user event — they're surfaced on the Team tab,
-   *  not in the lead's own transcript. Filter them out here so they don't
-   *  masquerade as real user input. Debug tab still sees the raw list. */
+   *  wrapped in a synthetic user event. On the LEAD's transcript these are
+   *  protocol noise (idle notifications, task assignments) — hide them and
+   *  point the user to the Team tab. On a MEMBER's transcript the teammate
+   *  messages ARE the task instructions from the lead, so we keep them
+   *  visible — hiding them would strip all context from the member's work. */
+  const isLead = session.isTeamLead;
   const teammateCount = useMemo(
-    () => events.filter((e) => e.teammateMessage).length,
-    [events],
+    () => (isLead ? events.filter((e) => e.teammateMessage).length : 0),
+    [events, isLead],
   );
   const visibleEvents = useMemo(
     () => (teammateCount === 0 ? events : events.filter((e) => !e.teammateMessage)),
@@ -342,9 +381,104 @@ export function SessionView({
           padding: "18px 40px 0",
         }}
       >
-        {/* Collapsible top block — breadcrumb + title + meta-stats + tabs.
-            Hidden once the user scrolls past ~80px so the mini-map alone
-            stays pinned and the transcript gets more vertical space. */}
+        {/* Always-visible compact bar: breadcrumb + tabs + toggle — stays
+            accessible even when the header body is collapsed on scroll. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: collapsed ? 6 : 6,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--af-text-tertiary)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <Link
+              href="/sessions"
+              style={{
+                color: "var(--af-text-tertiary)",
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <ArrowLeft size={12} /> Sessions
+            </Link>
+            <span style={{ margin: "0 8px" }}>/</span>
+            <span style={{ fontFamily: "var(--font-mono)" }}>sesn_{shortId(session.id)}</span>
+            {teamLead && (
+              <>
+                <span style={{ margin: "0 8px" }}>·</span>
+                <Link
+                  href={`/sessions/${teamLead.leadSessionId}#team`}
+                  style={{
+                    color: "var(--af-accent)",
+                    textDecoration: "none",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontWeight: 500,
+                  }}
+                  title={`View team lead for ${teamLead.teamName}`}
+                >
+                  {teamLead.agentName} in {teamLead.teamName} ↗
+                </Link>
+              </>
+            )}
+          </div>
+          <div className="af-tabs" style={{ flexShrink: 0, marginLeft: "auto" }}>
+            <button
+              className={`af-tab-btn ${tab === "transcript" ? "active" : ""}`}
+              onClick={() => setTab("transcript")}
+            >
+              Transcript
+            </button>
+            {team && (
+              <button
+                className={`af-tab-btn ${tab === "team" ? "active" : ""}`}
+                onClick={() => setTab("team")}
+              >
+                Team
+              </button>
+            )}
+            <button
+              className={`af-tab-btn ${tab === "debug" ? "active" : ""}`}
+              onClick={() => setTab("debug")}
+            >
+              Debug
+            </button>
+          </div>
+          <button
+            onClick={toggleCollapsed}
+            title={collapsed ? "Show session details" : "Hide session details"}
+            style={{
+              background: "var(--af-surface-hover)",
+              border: "1px solid var(--af-border-subtle)",
+              borderRadius: 4,
+              width: 24,
+              height: 24,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              color: "var(--af-text-secondary)",
+              flexShrink: 0,
+              transition: "transform 0.2s ease",
+              transform: collapsed ? "rotate(180deg)" : "rotate(0deg)",
+            }}
+          >
+            <ChevronUp size={14} />
+          </button>
+        </div>
+
+        {/* Collapsible block — title + meta-stats + filter toolbar.
+            Hidden on scroll-down so the minimap gets more space. */}
         <div
           style={{
             maxHeight: collapsed ? 0 : 500,
@@ -356,29 +490,6 @@ export function SessionView({
             pointerEvents: collapsed ? "none" : "auto",
           }}
         >
-        {/* Breadcrumb */}
-        <div
-          style={{
-            fontSize: 12,
-            color: "var(--af-text-tertiary)",
-            marginBottom: 6,
-          }}
-        >
-          <Link
-            href="/sessions"
-            style={{
-              color: "var(--af-text-tertiary)",
-              textDecoration: "none",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <ArrowLeft size={12} /> Sessions
-          </Link>
-          <span style={{ margin: "0 8px" }}>/</span>
-          <span style={{ fontFamily: "var(--font-mono)" }}>sesn_{shortId(session.id)}</span>
-        </div>
 
         {/* Single-line compact header — title + inline dot-separated stats */}
         <div
@@ -464,7 +575,7 @@ export function SessionView({
           </span>
         </div>
 
-        {/* Tabs + toolbar */}
+        {/* Toolbar (filter, copy, ask-claude) */}
         <div
           className="flex items-center"
           style={{
@@ -472,37 +583,6 @@ export function SessionView({
             paddingBottom: 8,
           }}
         >
-          <div className="af-tabs">
-            <button
-              className={`af-tab-btn ${tab === "transcript" ? "active" : ""}`}
-              onClick={() => setTab("transcript")}
-            >
-              Transcript
-            </button>
-            <button
-              className={`af-tab-btn ${tab === "debug" ? "active" : ""}`}
-              onClick={() => setTab("debug")}
-            >
-              Debug
-            </button>
-            {team && (
-              <button
-                className={`af-tab-btn ${tab === "team" ? "active" : ""}`}
-                onClick={() => setTab("team")}
-              >
-                Team
-              </button>
-            )}
-          </div>
-
-          <div
-            style={{
-              width: 1,
-              height: 20,
-              background: "var(--af-border-subtle)",
-            }}
-          />
-
           <select
             value={filter}
             onChange={(e) =>
@@ -641,7 +721,22 @@ export function SessionView({
                 }}
               >
                 {teammateCount} inbound team message
-                {teammateCount === 1 ? "" : "s"} hidden — open the Team tab to see them.
+                {teammateCount === 1 ? "" : "s"} hidden —{" "}
+                <button
+                  onClick={() => setTab("team")}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--af-accent)",
+                    cursor: "pointer",
+                    padding: 0,
+                    font: "inherit",
+                    textDecoration: "underline",
+                  }}
+                >
+                  open the Team tab
+                </button>{" "}
+                to see them.
               </div>
             )}
             <TranscriptList
@@ -652,6 +747,7 @@ export function SessionView({
               onToggleTurn={toggleTurn}
               stickyOffset={headerH + 16}
               isSessionLive={isSessionLive}
+              team={team}
             />
           </>
         ) : (
@@ -2216,6 +2312,7 @@ function TranscriptList({
   onToggleTurn,
   stickyOffset,
   isSessionLive,
+  team,
 }: {
   displayRows: DisplayRow[];
   rowRefs: React.MutableRefObject<Record<number, HTMLDivElement | null>>;
@@ -2224,6 +2321,7 @@ function TranscriptList({
   onToggleTurn: (firstPrimaryIndex: number) => void;
   stickyOffset: number;
   isSessionLive?: boolean;
+  team?: (TimelineData & { teamName: string }) | null;
 }) {
   // Find the last collapsed turn index so we can mark it as in-progress
   // when the session is live.
@@ -2251,6 +2349,7 @@ function TranscriptList({
           stickyOffset={stickyOffset}
           onClick={() => onToggleTurn(idx)}
           inProgress={i === lastCollapsedTurnIdx}
+          team={team}
           refCb={(el) => {
             rowRefs.current[idx] = el;
           }}
@@ -2345,6 +2444,7 @@ function CollapsedTurnRow({
   refCb,
   stickyOffset,
   inProgress,
+  team,
 }: {
   turn: TurnMegaRow;
   /** Fires when the user wants to fully expand this turn into the
@@ -2354,6 +2454,7 @@ function CollapsedTurnRow({
   refCb: (el: HTMLDivElement | null) => void;
   stickyOffset: number;
   inProgress?: boolean;
+  team?: (TimelineData & { teamName: string }) | null;
 }) {
   const theme = ROLE_THEMES.agent;
   const s = turn.summary;
@@ -2395,7 +2496,7 @@ function CollapsedTurnRow({
       data-sl-toffset={turn.tOffsetMs ?? 0}
       style={{
         display: "grid",
-        gridTemplateColumns: "20px 74px 1fr auto auto",
+        gridTemplateColumns: "20px 84px 1fr auto auto",
         columnGap: 12,
         alignItems: "start",
         padding: "14px 12px 0 12px",
@@ -2449,7 +2550,7 @@ function CollapsedTurnRow({
 
         {/* Stats line */}
         <div onClick={stop}>
-          <TurnStatsLine summary={s} durationMs={turn.durationMs} rows={turn.rows} />
+          <TurnStatsLine summary={s} durationMs={turn.durationMs} rows={turn.rows} team={team} />
         </div>
 
         {/* 2. Steps list — each middle row as a compact bullet */}
@@ -2692,10 +2793,12 @@ function TurnStatsLine({
   summary,
   durationMs,
   rows,
+  team,
 }: {
   summary: TurnSummary;
   durationMs?: number;
   rows: PresentationRow[];
+  team?: (TimelineData & { teamName: string }) | null;
 }) {
   // Aggregate tool calls into activity categories.
   let editCount = 0;
@@ -2707,6 +2810,7 @@ function TurnStatsLine({
   let agentCount = 0;
   let otherToolCount = 0;
   let lastFilePath: string | undefined;
+  const dispatchedNames: string[] = [];
 
   for (const r of rows) {
     if (r.kind !== "tool-group") continue;
@@ -2742,9 +2846,12 @@ function TurnStatsLine({
         case "Glob":
           globCount++;
           break;
-        case "Agent":
+        case "Agent": {
           agentCount++;
+          const agentName = typeof input?.name === "string" ? input.name : undefined;
+          if (agentName) dispatchedNames.push(agentName);
           break;
+        }
         default:
           otherToolCount++;
           break;
@@ -2786,11 +2893,58 @@ function TurnStatsLine({
     );
   }
   if (agentCount > 0) {
-    phrases.push(
-      <span key="agent">
-        dispatched <b style={{ fontWeight: 600 }}>{agentCount}</b> sub-agent{agentCount === 1 ? "" : "s"}
-      </span>,
-    );
+    // When team data is available and we extracted agent names from the
+    // tool inputs, render clickable member chips instead of a plain count.
+    const nameToSession = team
+      ? new Map(team.tracks.filter((t) => !t.isLead).map((t) => [t.label, t.id]))
+      : null;
+    if (dispatchedNames.length > 0 && nameToSession && nameToSession.size > 0) {
+      phrases.push(
+        <span key="agent" style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+          dispatched{" "}
+          {dispatchedNames.map((n, i) => {
+            const sid = nameToSession.get(n);
+            return sid ? (
+              <Link
+                key={i}
+                href={`/sessions/${sid}`}
+                style={{
+                  fontSize: 10,
+                  padding: "1px 7px",
+                  background: "var(--af-surface-hover)",
+                  border: "1px solid var(--af-border-subtle)",
+                  borderRadius: 10,
+                  color: "var(--af-text-secondary)",
+                  textDecoration: "none",
+                  fontWeight: 600,
+                }}
+              >
+                {n}
+              </Link>
+            ) : (
+              <span
+                key={i}
+                style={{
+                  fontSize: 10,
+                  padding: "1px 7px",
+                  background: "var(--af-surface-hover)",
+                  borderRadius: 10,
+                  color: "var(--af-text-tertiary)",
+                }}
+              >
+                {n}
+              </span>
+            );
+          })}
+        </span>,
+      );
+    } else {
+      phrases.push(
+        <span key="agent">
+          dispatched <b style={{ fontWeight: 600 }}>{agentCount}</b> sub-agent{agentCount === 1 ? "" : "s"}
+        </span>,
+      );
+    }
   }
   if (otherToolCount > 0 && phrases.length === 0) {
     phrases.push(
@@ -2971,6 +3125,8 @@ function TranscriptRow({
   const event = row.kind === "tool-group" ? row.events[0] : row.event;
   const usage = event.usage;
   const hasUsage = row.kind === "agent" && usage && (usage.input > 0 || usage.output > 0);
+  const isTeammateMsg = row.kind === "user" && !!row.event.teammateMessage;
+  const roleLabel = isTeammateMsg ? "Team Lead" : theme.label;
 
   const preview = rowPreview(row);
 
@@ -2985,7 +3141,7 @@ function TranscriptRow({
         // Empty 20px prefix column keeps the role pill at the same x-offset
         // as collapsed turn rows (which have a chevron there). Ensures the
         // User/Agent/Tool tags align vertically in the transcript.
-        gridTemplateColumns: "20px 74px 1fr auto auto",
+        gridTemplateColumns: "20px 84px 1fr auto auto",
         gap: 14,
         alignItems: "center",
         padding: "11px 12px",
@@ -3023,7 +3179,7 @@ function TranscriptRow({
           color: theme.fg,
         }}
       >
-        {theme.label}
+        {roleLabel}
       </span>
 
       <span
