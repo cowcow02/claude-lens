@@ -50,6 +50,14 @@ import {
   shortenToolName,
   TurnStepsList,
 } from "./turn-steps";
+import {
+  ToolUseCard,
+  ToolCardShell,
+  CodeBlock,
+  DiffView,
+  PathLabel,
+  type ToolUseInput,
+} from "./tool-cards";
 
 /* ------------------------------------------------------------------ */
 /*  Constants + theming                                               */
@@ -145,8 +153,18 @@ export function SessionView({
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    const main = el.closest("main") as HTMLElement | null;
-    if (!main) return;
+    const mainEl = el.closest("main") as HTMLElement | null;
+    if (!mainEl) return;
+    // Team tab has its own fixed-height scroll container, so listening
+    // to `main` alone misses all vertical scroll when the inner table
+    // is what's moving. Pick the team table's scroll element as the
+    // scroll target when on team tab (it has data-team-scroll). Falls
+    // back to the main element for every other tab.
+    const teamScroll =
+      tab === "team"
+        ? (document.querySelector("[data-team-scroll]") as HTMLElement | null)
+        : null;
+    const main = teamScroll ?? mainEl;
     // Track scroll direction to avoid jitter. Collapse only when
     // scrolling DOWN past a threshold; expand only at scrollTop===0.
     // This eliminates the loop where collapse changes height → scroll
@@ -161,8 +179,8 @@ export function SessionView({
       const dir = y - lastY; // positive = scrolling down
       lastY = y;
       setCollapsed((prev) => {
-        // Expand: only when user scrolled all the way to the top.
-        if (prev && y <= 0) {
+        // Expand: when user scrolls UP (iOS-style reveal).
+        if (prev && dir < 0) {
           locked = true;
           setTimeout(() => { locked = false; }, 300);
           return false;
@@ -185,7 +203,7 @@ export function SessionView({
       main.removeEventListener("scroll", onScroll);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [tab]);
 
   // Run after every render that changed scrollIntent — the DOM is now
   // guaranteed up-to-date (including any drawer grid reflow).
@@ -558,7 +576,10 @@ export function SessionView({
           <TeamMinimap
             data={team}
             playheadMs={teamPlayheadMs}
-            onSeek={(tsMs, trackId) => setTeamSeekTarget({ tsMs, trackId })}
+            onSeek={(tsMs, trackId) => {
+              setTeamSeekTarget({ tsMs, trackId });
+              if (teamExpanded) setTeamExpanded(false);
+            }}
             expanded={teamExpanded}
             onToggleExpanded={() => setTeamExpanded((v) => !v)}
             visibleTrackIds={teamVisibleTrackIds}
@@ -3953,463 +3974,6 @@ function DrawerContent({ event, row }: { event: SessionEvent; row: PresentationR
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/*  ToolUseCard — pretty rendering of tool_use blocks                 */
-/*                                                                     */
-/*  Claude Code emits tool calls with varying input schemas. Raw JSON */
-/*  dumps are unreadable; instead we dispatch on tool name and render */
-/*  a human-friendly card tailored to each common tool.               */
-/* ------------------------------------------------------------------ */
-
-type ToolUseInput = Record<string, unknown> | unknown;
-
-/** Split an absolute path into (dir, filename) with an abbreviated dir
- *  (last 3 segments max) for compact display.  */
-function splitPath(p: string): { dir: string; file: string } {
-  const parts = p.split("/");
-  const file = parts[parts.length - 1] ?? p;
-  const dirParts = parts.slice(0, -1).filter(Boolean);
-  let dir = dirParts.join("/");
-  if (dirParts.length > 4) {
-    dir = "…/" + dirParts.slice(-3).join("/");
-  }
-  return { dir, file };
-}
-
-function PathLabel({ path }: { path: string }) {
-  const { dir, file } = splitPath(path);
-  return (
-    <code
-      style={{
-        fontSize: 12,
-        background: "var(--af-border-subtle)",
-        padding: "2px 8px",
-        borderRadius: 4,
-        fontFamily: "var(--font-mono)",
-        color: "var(--af-text)",
-      }}
-    >
-      {dir && <span style={{ color: "var(--af-text-tertiary)" }}>{dir}/</span>}
-      <b style={{ fontWeight: 600 }}>{file}</b>
-    </code>
-  );
-}
-
-function ToolCardShell({
-  icon,
-  label,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--af-border-subtle)",
-        borderRadius: 8,
-        background: "var(--background)",
-        overflow: "hidden",
-      }}
-    >
-      <div
-        style={{
-          padding: "8px 12px",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          borderBottom: children ? "1px solid var(--af-border-subtle)" : "none",
-          fontSize: 12,
-          color: "var(--af-text-secondary)",
-        }}
-      >
-        <span style={{ fontSize: 13 }}>{icon}</span>
-        <span>{label}</span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function CodeBlock({ text, maxHeight = 280 }: { text: string; maxHeight?: number }) {
-  return (
-    <pre
-      style={{
-        margin: 0,
-        padding: "10px 12px",
-        fontFamily: "var(--font-mono)",
-        fontSize: 11.5,
-        lineHeight: 1.55,
-        color: "var(--af-text)",
-        whiteSpace: "pre",
-        overflow: "auto",
-        maxHeight,
-      }}
-    >
-      {text}
-    </pre>
-  );
-}
-
-function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
-  const oldLines = oldText.split("\n");
-  const newLines = newText.split("\n");
-  return (
-    <pre
-      style={{
-        margin: 0,
-        padding: "10px 12px",
-        fontFamily: "var(--font-mono)",
-        fontSize: 11.5,
-        lineHeight: 1.55,
-        whiteSpace: "pre",
-        overflow: "auto",
-        maxHeight: 320,
-      }}
-    >
-      {oldLines.map((line, i) => (
-        <div
-          key={`o${i}`}
-          style={{
-            background: "rgba(220, 38, 38, 0.08)",
-            color: "#991B1B",
-            padding: "0 4px",
-            borderLeft: "3px solid #DC2626",
-          }}
-        >
-          <span style={{ opacity: 0.6, userSelect: "none" }}>− </span>
-          {line || "\u00A0"}
-        </div>
-      ))}
-      {newLines.map((line, i) => (
-        <div
-          key={`n${i}`}
-          style={{
-            background: "rgba(5, 150, 105, 0.08)",
-            color: "#065F46",
-            padding: "0 4px",
-            borderLeft: "3px solid #059669",
-          }}
-        >
-          <span style={{ opacity: 0.6, userSelect: "none" }}>+ </span>
-          {line || "\u00A0"}
-        </div>
-      ))}
-    </pre>
-  );
-}
-
-function ToolUseCard({ name, input }: { name: string; input: ToolUseInput }) {
-  const i = (input ?? {}) as Record<string, unknown>;
-  const str = (k: string): string | undefined =>
-    typeof i[k] === "string" ? (i[k] as string) : undefined;
-  const num = (k: string): number | undefined =>
-    typeof i[k] === "number" ? (i[k] as number) : undefined;
-
-  // --- Write -------------------------------------------------------
-  if (name === "Write") {
-    const filePath = str("file_path") ?? "";
-    const content = str("content") ?? "";
-    return (
-      <ToolCardShell
-        icon="📝"
-        label={
-          <>
-            <b>Write</b> <PathLabel path={filePath} />
-          </>
-        }
-      >
-        <CodeBlock text={content} />
-      </ToolCardShell>
-    );
-  }
-
-  // --- Edit --------------------------------------------------------
-  if (name === "Edit") {
-    const filePath = str("file_path") ?? "";
-    const oldStr = str("old_string") ?? "";
-    const newStr = str("new_string") ?? "";
-    const replaceAll = i.replace_all === true;
-    return (
-      <ToolCardShell
-        icon="✏️"
-        label={
-          <>
-            <b>Edit</b> <PathLabel path={filePath} />
-            {replaceAll && (
-              <span
-                style={{
-                  fontSize: 10,
-                  color: "var(--af-warning)",
-                  background: "var(--af-warning-subtle)",
-                  padding: "1px 6px",
-                  borderRadius: 10,
-                }}
-              >
-                replace all
-              </span>
-            )}
-          </>
-        }
-      >
-        <DiffView oldText={oldStr} newText={newStr} />
-      </ToolCardShell>
-    );
-  }
-
-  // --- Read --------------------------------------------------------
-  if (name === "Read") {
-    const filePath = str("file_path") ?? "";
-    const offset = num("offset");
-    const limit = num("limit");
-    const range =
-      offset !== undefined || limit !== undefined
-        ? ` · lines ${offset ?? 1}${limit !== undefined ? `–${(offset ?? 0) + limit}` : "…"}`
-        : "";
-    return (
-      <ToolCardShell
-        icon="📖"
-        label={
-          <>
-            <b>Read</b> <PathLabel path={filePath} />
-            <span style={{ color: "var(--af-text-tertiary)" }}>{range}</span>
-          </>
-        }
-      />
-    );
-  }
-
-  // --- Bash --------------------------------------------------------
-  if (name === "Bash") {
-    const command = str("command") ?? "";
-    const description = str("description");
-    const runInBg = i.run_in_background === true;
-    return (
-      <ToolCardShell
-        icon="⚡"
-        label={
-          <>
-            <b>Bash</b>
-            {description && (
-              <span
-                style={{
-                  color: "var(--af-text)",
-                  fontStyle: "italic",
-                }}
-              >
-                {description}
-              </span>
-            )}
-            {runInBg && (
-              <span
-                style={{
-                  fontSize: 10,
-                  color: "var(--af-info)",
-                  background: "var(--af-info-subtle)",
-                  padding: "1px 6px",
-                  borderRadius: 10,
-                }}
-              >
-                background
-              </span>
-            )}
-          </>
-        }
-      >
-        <CodeBlock text={command} maxHeight={220} />
-      </ToolCardShell>
-    );
-  }
-
-  // --- Grep --------------------------------------------------------
-  if (name === "Grep") {
-    const pattern = str("pattern") ?? "";
-    const path = str("path");
-    const glob = str("glob");
-    const type = str("type");
-    const outputMode = str("output_mode");
-    return (
-      <ToolCardShell
-        icon="🔍"
-        label={
-          <>
-            <b>Grep</b>{" "}
-            <code
-              style={{
-                background: "var(--af-border-subtle)",
-                padding: "1px 6px",
-                borderRadius: 4,
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-              }}
-            >
-              {pattern}
-            </code>
-            {path && (
-              <>
-                {" in "}
-                <PathLabel path={path} />
-              </>
-            )}
-            {(glob || type || outputMode) && (
-              <span
-                style={{
-                  color: "var(--af-text-tertiary)",
-                  fontSize: 11,
-                  marginLeft: 6,
-                }}
-              >
-                {[
-                  glob && `glob=${glob}`,
-                  type && `type=${type}`,
-                  outputMode && `mode=${outputMode}`,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-            )}
-          </>
-        }
-      />
-    );
-  }
-
-  // --- Glob --------------------------------------------------------
-  if (name === "Glob") {
-    const pattern = str("pattern") ?? "";
-    const path = str("path");
-    return (
-      <ToolCardShell
-        icon="📁"
-        label={
-          <>
-            <b>Glob</b>{" "}
-            <code
-              style={{
-                background: "var(--af-border-subtle)",
-                padding: "1px 6px",
-                borderRadius: 4,
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-              }}
-            >
-              {pattern}
-            </code>
-            {path && (
-              <>
-                {" in "}
-                <PathLabel path={path} />
-              </>
-            )}
-          </>
-        }
-      />
-    );
-  }
-
-  // --- Skill -------------------------------------------------------
-  if (name === "Skill") {
-    const skill = str("skill") ?? "";
-    const args = str("args");
-    return (
-      <ToolCardShell
-        icon="🧩"
-        label={
-          <>
-            <b>/{skill}</b>
-            {args && <span style={{ color: "var(--af-text-secondary)" }}>{args}</span>}
-          </>
-        }
-      />
-    );
-  }
-
-  // --- ToolSearch --------------------------------------------------
-  if (name === "ToolSearch") {
-    const query = str("query") ?? "";
-    const max = num("max_results");
-    return (
-      <ToolCardShell
-        icon="🔎"
-        label={
-          <>
-            <b>ToolSearch</b>{" "}
-            <code
-              style={{
-                background: "var(--af-border-subtle)",
-                padding: "1px 6px",
-                borderRadius: 4,
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-              }}
-            >
-              {query}
-            </code>
-            {max !== undefined && (
-              <span style={{ color: "var(--af-text-tertiary)", fontSize: 11 }}>max={max}</span>
-            )}
-          </>
-        }
-      />
-    );
-  }
-
-  // --- TodoWrite ---------------------------------------------------
-  if (name === "TodoWrite") {
-    const todos = Array.isArray(i.todos) ? (i.todos as Array<Record<string, unknown>>) : [];
-    return (
-      <ToolCardShell icon="✅" label={<b>TodoWrite · {todos.length} items</b>}>
-        <div style={{ padding: "10px 12px", fontSize: 12 }}>
-          {todos.map((t, ti) => {
-            const status = String(t.status ?? "pending");
-            const content =
-              typeof t.content === "string"
-                ? t.content
-                : typeof t.activeForm === "string"
-                  ? t.activeForm
-                  : "";
-            const icon = status === "completed" ? "✔" : status === "in_progress" ? "◐" : "○";
-            return (
-              <div
-                key={ti}
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  padding: "2px 0",
-                  opacity: status === "completed" ? 0.6 : 1,
-                  textDecoration: status === "completed" ? "line-through" : "none",
-                }}
-              >
-                <span style={{ color: "var(--af-text-tertiary)" }}>{icon}</span>
-                <span>{content}</span>
-              </div>
-            );
-          })}
-        </div>
-      </ToolCardShell>
-    );
-  }
-
-  // --- MCP tools (linear, slack, etc.) -----------------------------
-  if (name.startsWith("mcp__")) {
-    const short = shortenToolName(name);
-    return (
-      <ToolCardShell icon="🔌" label={<b>{short}</b>}>
-        <CodeBlock text={JSON.stringify(input, null, 2)} maxHeight={200} />
-      </ToolCardShell>
-    );
-  }
-
-  // --- Fallback ----------------------------------------------------
-  return (
-    <ToolCardShell icon="🔧" label={<b>{name}</b>}>
-      <CodeBlock text={JSON.stringify(input, null, 2)} maxHeight={220} />
-    </ToolCardShell>
-  );
-}
-
 function BlockView({ block }: { block: ContentBlock }) {
   if (block.type === "text") {
     return (
