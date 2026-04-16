@@ -42,10 +42,13 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
           s.projectName.toLowerCase().includes(q),
       );
     }
-    // "Longest" uses active time (airTimeMs), not wall-clock duration.
-    // Otherwise a session that sat idle for 14 days with one message
-    // would out-rank a session that was actively coding for 4 hours.
-    if (sortBy === "longest")
+    if (sortBy === "newest")
+      rows.sort(
+        (a, b) =>
+          (b.firstTimestamp ? Date.parse(b.firstTimestamp) : 0) -
+          (a.firstTimestamp ? Date.parse(a.firstTimestamp) : 0),
+      );
+    else if (sortBy === "longest")
       rows.sort(
         (a, b) =>
           (b.airTimeMs ?? b.durationMs ?? 0) - (a.airTimeMs ?? a.durationMs ?? 0),
@@ -212,6 +215,20 @@ const sessionTableColumns: Column<SessionMeta>[] = [
       >
         {s.firstUserPreview || "—"}
       </div>
+    ),
+  },
+  {
+    key: "created",
+    header: "Created",
+    sortValue: (s) => (s.firstTimestamp ? Date.parse(s.firstTimestamp) : 0),
+    align: "right",
+    render: (s) => (
+      <span
+        suppressHydrationWarning
+        style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}
+      >
+        {s.firstTimestamp ? formatRelative(s.firstTimestamp) : "—"}
+      </span>
     ),
   },
   {

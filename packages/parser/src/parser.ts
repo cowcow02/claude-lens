@@ -375,12 +375,23 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       const rawContent =
         typeof rawMsg?.content === "string" ? rawMsg.content : "";
       const isHidden =
-        e.teammateMessage !== undefined ||
         rawContent.startsWith("<command-name>") ||
         rawContent.startsWith("Base directory for this skill:") ||
         rawContent.startsWith("<task-notification>");
-      if (!isHidden) {
-        if (!firstUserPreview) firstUserPreview = e.preview;
+      // Teammate messages on LEAD sessions are protocol noise (idle
+      // notifications, task assignments) — skip them for preview/turn
+      // counting. On MEMBER sessions the teammate message IS the task
+      // instruction from the lead, so use it as the preview.
+      // Members have agentName set; leads don't. Use this as a proxy
+      // since the full isTeamLead flag is computed after the event loop.
+      const isTeamNoise =
+        e.teammateMessage !== undefined && !agentName;
+      if (!isHidden && !isTeamNoise) {
+        if (!firstUserPreview) {
+          firstUserPreview = e.teammateMessage
+            ? e.teammateMessage.body
+            : e.preview;
+        }
         turnCount++;
         // Track the most recent "real" user message so the live widget
         // can surface "what am I working on RIGHT NOW" instead of the
