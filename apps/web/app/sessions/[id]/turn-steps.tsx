@@ -131,13 +131,17 @@ export function shortenToolName(name: string): string {
 export function TurnStepsList({
   rows,
   onStepClick,
+  showAll,
 }: {
   rows: PresentationRow[];
   /** Optional: when set, each step line becomes a button. */
   onStepClick?: (row: PresentationRow, index: number) => void;
+  /** Bypass the MAX_INLINE_STEPS cap and show every row. */
+  showAll?: boolean;
 }) {
-  const overflow = Math.max(0, rows.length - MAX_INLINE_STEPS);
-  const shown = overflow > 0 ? rows.slice(-MAX_INLINE_STEPS) : rows;
+  const cap = showAll ? rows.length : MAX_INLINE_STEPS;
+  const overflow = Math.max(0, rows.length - cap);
+  const shown = overflow > 0 ? rows.slice(-cap) : rows;
   const baseIndex = overflow > 0 ? rows.length - shown.length : 0;
 
   return (
