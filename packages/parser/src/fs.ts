@@ -815,3 +815,30 @@ export async function loadTeamForSession(
   if (!view) return null;
   return { view, details };
 }
+
+/** Lightweight lookup: given a team member session, return the lead
+ *  session ID + team name without loading full details. Returns null if
+ *  the session isn't a team member or no lead is found. */
+export async function findTeamLead(
+  sessionId: string,
+  opts: { root?: string } = {},
+): Promise<{ leadSessionId: string; teamName: string; agentName: string } | null> {
+  const { root = DEFAULT_ROOT } = opts;
+  const all = await listSessions({ root });
+  const self = all.find((s) => s.sessionId === sessionId);
+  if (!self || !self.teamName || !self.agentName) return null;
+  // Already a lead — no parent to navigate to.
+  if (self.isTeamLead) return null;
+  const candidates = all.filter(
+    (s) =>
+      s.teamName === self.teamName &&
+      s.isTeamLead &&
+      !s.filePath.includes("/subagents/"),
+  );
+  if (candidates.length === 0) return null;
+  return {
+    leadSessionId: candidates[0]!.sessionId,
+    teamName: self.teamName,
+    agentName: self.agentName,
+  };
+}

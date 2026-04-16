@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/data";
-import { loadTeamForSession } from "@claude-lens/parser/fs";
+import { loadTeamForSession, findTeamLead } from "@claude-lens/parser/fs";
 import {
   teamViewToTimelineData,
   type TimelineData,
@@ -32,6 +32,13 @@ export default async function SessionDetailPage({
     }
   }
 
+  // For team member sessions, find the lead so we can show a "back to
+  // team lead" navigation link.
+  let teamLeadInfo: { leadSessionId: string; teamName: string; agentName: string } | null = null;
+  if (!session.isTeamLead && session.teamName && session.agentName) {
+    teamLeadInfo = await findTeamLead(id);
+  }
+
   // Strip the `raw` field from every event before serializing to the
   // client. The parser keeps `raw` around for the Debug tab, but it's a
   // full verbatim copy of the JSONL line — for an 8.7 MB session file
@@ -43,5 +50,5 @@ export default async function SessionDetailPage({
     events: session.events.map((e) => ({ ...e, raw: undefined })),
   };
 
-  return <SessionView session={stripped} team={teamProps} />;
+  return <SessionView session={stripped} team={teamProps} teamLead={teamLeadInfo} />;
 }
