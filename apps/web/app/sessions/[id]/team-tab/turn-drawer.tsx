@@ -11,7 +11,7 @@ import type {
   SessionEvent,
 } from "@claude-lens/parser";
 import type { TeamTurn } from "./adapter";
-import { TurnStepsList, shortenToolName } from "../turn-steps";
+import { TurnStepsList, MAX_INLINE_STEPS, shortenToolName } from "../turn-steps";
 import { ToolUseCard, type ToolUseInput } from "../tool-cards";
 
 type Props = {
@@ -217,7 +217,8 @@ function FullTurnCard({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {userRow && userRow.kind === "user" && (
-        <UserBlock
+        <ExpandableTextBlock
+          label="Human"
           color={color}
           text={userRow.displayPreview ?? userRow.event.preview ?? ""}
         />
@@ -234,12 +235,11 @@ function FullTurnCard({
       <TurnStatsRow summary={s} rows={turn.rows} durationMs={turn.durationMs} />
 
       {middleRows.length > 0 && (
-        <div>
-          <SectionLabel color={color}>STEPS</SectionLabel>
-          <div style={{ marginTop: 4 }}>
-            <TurnStepsList rows={middleRows} onStepClick={onStepClick} showAll />
-          </div>
-        </div>
+        <StepsSection
+          color={color}
+          rows={middleRows}
+          onStepClick={onStepClick}
+        />
       )}
 
       {finalAgentRow && finalAgentRow.kind === "agent" && (
@@ -254,18 +254,26 @@ function FullTurnCard({
   );
 }
 
-function UserBlock({ color, text }: { color: string; text: string }) {
+function ExpandableTextBlock({
+  label,
+  color,
+  text,
+}: {
+  label: string;
+  color: string;
+  text: string;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const isLong = text.length > 200;
   return (
     <div
-      onClick={isLong ? () => setExpanded((v) => !v) : undefined}
+      onClick={() => setExpanded((v) => !v)}
       style={{
-        padding: "10px 12px",
-        background: "var(--af-surface-hover)",
-        borderLeft: `3px solid ${color}`,
-        borderRadius: 4,
-        cursor: isLong ? "pointer" : undefined,
+        padding: "8px 12px",
+        borderRadius: 6,
+        background: expanded ? "var(--af-surface-hover)" : "transparent",
+        border: `1px solid ${expanded ? "var(--af-border-subtle)" : "transparent"}`,
+        cursor: "pointer",
+        transition: "all 0.12s",
       }}
     >
       <div
@@ -273,17 +281,22 @@ function UserBlock({ color, text }: { color: string; text: string }) {
           display: "flex",
           alignItems: "center",
           gap: 6,
-          marginBottom: 4,
+          fontSize: 10,
+          color: "var(--af-text-tertiary)",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          fontWeight: 600,
+          fontFamily: "ui-monospace, monospace",
         }}
       >
-        {isLong &&
-          (expanded ? <ChevronDown size={11} style={{ color }} /> : <ChevronRight size={11} style={{ color }} />)}
-        <SectionLabel color={color}>HUMAN</SectionLabel>
+        {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <span style={{ color }}>{label}</span>
       </div>
       <div
         style={
-          expanded || !isLong
+          expanded
             ? {
+                marginTop: 6,
                 fontSize: 13,
                 lineHeight: 1.45,
                 color: "var(--af-text)",
@@ -291,6 +304,7 @@ function UserBlock({ color, text }: { color: string; text: string }) {
                 wordBreak: "break-word",
               }
             : {
+                marginTop: 4,
                 fontSize: 13,
                 lineHeight: 1.45,
                 color: "var(--af-text)",
@@ -303,6 +317,56 @@ function UserBlock({ color, text }: { color: string; text: string }) {
       >
         {text}
       </div>
+    </div>
+  );
+}
+
+function StepsSection({
+  color,
+  rows,
+  onStepClick,
+}: {
+  color: string;
+  rows: PresentationRow[];
+  onStepClick: (row: PresentationRow, index: number) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const overflow = rows.length - MAX_INLINE_STEPS;
+  return (
+    <div>
+      <SectionLabel color={color}>STEPS</SectionLabel>
+      <div style={{ marginTop: 4 }}>
+        <TurnStepsList
+          rows={rows}
+          onStepClick={onStepClick}
+          showAll={showAll}
+        />
+      </div>
+      {overflow > 0 && !showAll && (
+        <button
+          onClick={() => setShowAll(true)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            width: "100%",
+            padding: "6px 10px",
+            marginTop: 6,
+            background: "var(--af-surface-hover)",
+            border: "1px solid var(--af-border-subtle)",
+            borderRadius: 6,
+            fontSize: 11,
+            fontWeight: 500,
+            color: "var(--af-text-secondary)",
+            fontFamily: "inherit",
+            cursor: "pointer",
+          }}
+        >
+          <ChevronDown size={12} />
+          Show all {rows.length} steps
+        </button>
+      )}
     </div>
   );
 }
