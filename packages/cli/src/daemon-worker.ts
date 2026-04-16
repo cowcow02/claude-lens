@@ -69,22 +69,16 @@ async function teamTick(): Promise<void> {
   if (!config) return;
 
   try {
-    const { scanProjects } = await import("@claude-lens/parser/fs");
-    const { parseTranscript } = await import("@claude-lens/parser");
-
-    const projectDirs = scanProjects();
-    const allSessions: import("@claude-lens/parser").SessionMeta[] = [];
+    const { listSessions } = await import("@claude-lens/parser/fs");
     const today = new Date().toISOString().slice(0, 10);
 
-    for (const dir of projectDirs) {
-      const sessions = parseTranscript(dir);
-      for (const s of sessions) {
-        const sessionDay = s.firstTimestamp ? new Date(s.firstTimestamp).toISOString().slice(0, 10) : null;
-        if (sessionDay === today) allSessions.push(s);
-      }
-    }
+    const allSessions = await listSessions();
+    const todaySessions = allSessions.filter((s) => {
+      const sessionDay = s.firstTimestamp ? new Date(s.firstTimestamp).toISOString().slice(0, 10) : null;
+      return sessionDay === today;
+    });
 
-    const rollup = buildDailyRollup(allSessions, today);
+    const rollup = buildDailyRollup(todaySessions, today);
     const payload = buildIngestPayload(rollup);
     const result = await pushToTeamServer(config, payload);
 
