@@ -14,9 +14,18 @@ export function parseRange(value: string | string[] | undefined): RangeKey {
   return "all";
 }
 
-/** Return the cutoff ms for a given range, or undefined for "all". */
+/**
+ * Return the cutoff ms for a given range, or undefined for "all".
+ * Calendar-day semantics: "30d" means the last 30 local calendar days
+ * (today + 29 prior), not a rolling 30×24h window. Keeps the daily-bucket
+ * bars and the filter boundary aligned, and keeps the answer stable
+ * across page refreshes within the same day.
+ */
 export function cutoffMs(range: RangeKey, now = Date.now()): number | undefined {
   if (range === "all") return undefined;
   const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-  return now - days * 24 * 60 * 60 * 1000;
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - (days - 1));
+  return d.getTime();
 }

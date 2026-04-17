@@ -23,7 +23,8 @@ export default async function TeamLayout({
   if (!teamRes.rowCount) notFound();
   const team = teamRes.rows[0];
 
-  if (!session.memberships.some((m) => m.team_id === team.id)) redirect("/login");
+  const myMembership = session.memberships.find((m) => m.team_id === team.id);
+  if (!myMembership) redirect("/login");
 
   const memberCount = await pool.query(
     "SELECT COUNT(*)::int AS n FROM memberships WHERE revoked_at IS NULL AND team_id = $1",
@@ -32,7 +33,7 @@ export default async function TeamLayout({
   const state = await instanceState(pool);
   const created = new Date(team.created_at);
   const issueNum = String(Math.floor((Date.now() - created.getTime()) / (7 * 24 * 3600 * 1000)) + 1).padStart(2, "0");
-  const isAdmin = session.memberships.some((m) => m.team_id === team.id && m.role === "admin");
+  const isAdmin = myMembership.role === "admin";
 
   return (
     <>
@@ -51,7 +52,11 @@ export default async function TeamLayout({
       <div className="shell">
         <nav className="shell-nav">
           <div className="shell-nav-label">Team</div>
-          <a href={`/team/${slug}`}>Roster <span className="mono">01</span></a>
+          {isAdmin ? (
+            <a href={`/team/${slug}`}>Roster <span className="mono">01</span></a>
+          ) : (
+            <a href={`/team/${slug}/members/${myMembership.id}`}>My profile <span className="mono">01</span></a>
+          )}
           {isAdmin && <a href={`/team/${slug}/settings`}>Settings <span className="mono">02</span></a>}
           {state.allowMultipleTeams && <a href="/teams/new">+ New team</a>}
           <div className="shell-nav-label">Account</div>

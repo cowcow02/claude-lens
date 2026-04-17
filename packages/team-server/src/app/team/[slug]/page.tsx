@@ -18,7 +18,11 @@ export default async function RosterPage({ params }: { params: Promise<{ slug: s
   const teamRes = await pool.query("SELECT id FROM teams WHERE slug = $1", [slug]);
   if (!teamRes.rowCount) return <div>Team not found.</div>;
   const teamId = teamRes.rows[0].id;
-  if (!session.memberships.some((m) => m.team_id === teamId)) redirect("/login");
+  const myMembership = session.memberships.find((m) => m.team_id === teamId);
+  if (!myMembership) redirect("/login");
+
+  // Non-admin members see only their own profile — send them straight there.
+  if (myMembership.role !== "admin") redirect(`/team/${slug}/members/${myMembership.id}`);
 
   const roster = await loadRoster(teamId, pool);
   const totalAgentMs = roster.reduce((sum, m) => sum + Number(m.week_agent_time_ms), 0);

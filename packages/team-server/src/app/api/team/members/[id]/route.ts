@@ -14,8 +14,13 @@ export async function GET(
   const member = await loadMember(id, session.pool);
   if (!member) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const belongs = session.memberships.some((m) => m.team_id === member.team_id);
-  if (!belongs) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const myMembership = session.memberships.find((m) => m.team_id === member.team_id);
+  if (!myMembership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  // Members can only read their own profile; admins can read anyone.
+  if (myMembership.role !== "admin" && myMembership.id !== id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const rollups = await loadMemberRollups(member.team_id, id, 30, session.pool);
   return NextResponse.json({ member, rollups });
