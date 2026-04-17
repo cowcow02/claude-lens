@@ -1,4 +1,4 @@
-import { sha256, generateToken } from "./crypto.js";
+import { sha256, generateToken } from "./crypto";
 import type pg from "pg";
 
 export function hashToken(token: string): string {

@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPool } from "../../../../db/pool.js";
-import { claimTeam } from "../../../../lib/teams.js";
-import { bootstrapState } from "../../../../lib/bootstrap-state.js";
+import { getPool } from "../../../../db/pool";
+import { claimTeam } from "../../../../lib/teams";
+import { getBootstrapState, clearBootstrapState } from "../../../../lib/bootstrap-state";
 
 export async function POST(req: NextRequest) {
-  if (!bootstrapState) {
+  const pool = getPool();
+  const bootstrap = await getBootstrapState(pool);
+  if (!bootstrap) {
     return NextResponse.json({ error: "Bootstrap not initialized" }, { status: 503 });
   }
 
   try {
     const body = await req.json();
-    const pool = getPool();
-    const result = await claimTeam(body, bootstrapState.hash, bootstrapState.expiresAt, pool);
+    const result = await claimTeam(body, bootstrap.hash, bootstrap.expiresAt, pool);
+    await clearBootstrapState(pool);
 
     const res = NextResponse.json(
       { team: result.team, admin: result.admin, recoveryToken: result.recoveryToken },
@@ -19,7 +21,7 @@ export async function POST(req: NextRequest) {
     );
     res.cookies.set("fleetlens_session", result.sessionToken, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 90 * 24 * 60 * 60,
       path: "/",

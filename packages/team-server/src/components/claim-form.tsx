@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { RecoveryTokenModal } from "./recovery-token-modal.js";
+import { RecoveryTokenModal } from "./recovery-token-modal";
 
 export function ClaimForm() {
   const [error, setError] = useState<string | null>(null);

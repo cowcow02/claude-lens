@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
-import { getPool } from "../../../../../db/pool.js";
-import { validateAdminSession } from "../../../../../lib/auth.js";
-import { loadMember, loadMemberRollups } from "../../../../../lib/queries.js";
-import { MemberProfile } from "../../../../../components/member-profile.js";
+import { getPool } from "../../../../../db/pool";
+import { validateAdminSession } from "../../../../../lib/auth";
+import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
+import { MemberProfile } from "../../../../../components/member-profile";
 
 export default async function MemberPage({
   params,

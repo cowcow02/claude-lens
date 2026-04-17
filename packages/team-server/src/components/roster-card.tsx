@@ -1,5 +1,5 @@
-import { formatAgentTime, formatTokens, timeAgo } from "../lib/format.js";
-import type { RosterRow } from "../lib/queries.js";
+import { formatAgentTime, formatTokens, timeAgo } from "../lib/format";
+import type { RosterRow } from "../lib/queries";
 
 export function RosterCard({ member, teamSlug }: { member: RosterRow; teamSlug: string }) {
   return (

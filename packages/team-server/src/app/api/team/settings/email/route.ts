@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession, requireAdminRole } from "../../../../../lib/route-helpers.js";
-import { encryptAesGcm } from "../../../../../lib/crypto.js";
+import { requireAdminSession, requireAdminRole } from "../../../../../lib/route-helpers";
+import { encryptAesGcm } from "../../../../../lib/crypto";
 
 export async function PUT(req: NextRequest) {
   const ctx = await requireAdminSession(req);

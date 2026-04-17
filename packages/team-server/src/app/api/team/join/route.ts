@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPool } from "../../../../db/pool.js";
-import { joinTeam } from "../../../../lib/members.js";
+import { getPool } from "../../../../db/pool";
+import { joinTeam } from "../../../../lib/members";
 
 export async function POST(req: NextRequest) {
   const host = req.headers.get("host") || "";

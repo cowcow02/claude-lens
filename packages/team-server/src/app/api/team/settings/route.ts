@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession, requireAdminRole } from "../../../../lib/route-helpers.js";
+import { requireAdminSession, requireAdminRole } from "../../../../lib/route-helpers";
 
 export async function GET(req: NextRequest) {
   const ctx = await requireAdminSession(req);

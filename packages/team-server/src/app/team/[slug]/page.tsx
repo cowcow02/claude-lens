@@ -1,9 +1,9 @@
 import { cookies } from "next/headers";
-import { getPool } from "../../../db/pool.js";
-import { validateAdminSession } from "../../../lib/auth.js";
-import { loadRoster } from "../../../lib/queries.js";
-import { RosterCard } from "../../../components/roster-card.js";
-import { LiveRefresher } from "../../../components/live-refresher.js";
+import { getPool } from "../../../db/pool";
+import { validateAdminSession } from "../../../lib/auth";
+import { loadRoster } from "../../../lib/queries";
+import { RosterCard } from "../../../components/roster-card";
+import { LiveRefresher } from "../../../components/live-refresher";
 
 export default async function RosterPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;

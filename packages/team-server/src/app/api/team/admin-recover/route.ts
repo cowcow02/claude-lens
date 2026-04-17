@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPool } from "../../../../db/pool.js";
-import { createAdminSession, validateRecoveryToken } from "../../../../lib/auth.js";
+import { getPool } from "../../../../db/pool";
+import { createAdminSession, validateRecoveryToken } from "../../../../lib/auth";
 
 export async function POST(req: NextRequest) {
   const { recoveryToken } = await req.json();
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   const res = NextResponse.json({ ok: true });
   res.cookies.set("fleetlens_session", cookieToken, {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     maxAge: 90 * 24 * 60 * 60,
     path: "/",

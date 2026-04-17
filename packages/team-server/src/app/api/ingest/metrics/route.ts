@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPool } from "../../../../db/pool.js";
-import { processIngest } from "../../../../lib/ingest.js";
-import { resolveMemberFromToken } from "../../../../lib/auth.js";
+import { getPool } from "../../../../db/pool";
+import { processIngest } from "../../../../lib/ingest";
+import { resolveMemberFromToken } from "../../../../lib/auth";
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");

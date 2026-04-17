@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
-import { getPool } from "../db/pool.js";
-import { ClaimForm } from "../components/claim-form.js";
+import { getPool } from "../db/pool";
+import { ClaimForm } from "../components/claim-form";
 
 export default async function RootPage() {
   const teams = await getPool().query("SELECT slug FROM teams LIMIT 1");

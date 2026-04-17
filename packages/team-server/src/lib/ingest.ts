@@ -1,7 +1,7 @@
 import pg from "pg";
-import { getPool } from "../db/pool.js";
-import { IngestPayload } from "./zod-schemas.js";
-import { broadcastEvent } from "./sse.js";
+import { getPool } from "../db/pool";
+import { IngestPayload } from "./zod-schemas";
+import { broadcastEvent } from "./sse";
 
 export async function processIngest(
   raw: unknown,

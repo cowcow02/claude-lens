@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
-import { addClient } from "../../../../lib/sse.js";
-import { validateAdminSession } from "../../../../lib/auth.js";
-import { getPool } from "../../../../db/pool.js";
+import { addClient } from "../../../../lib/sse";
+import { validateAdminSession } from "../../../../lib/auth";
+import { getPool } from "../../../../db/pool";
 
 export async function GET(req: NextRequest) {
   const cookieToken = req.cookies.get("fleetlens_session")?.value;

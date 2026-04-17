@@ -1,6 +1,6 @@
 import type pg from "pg";
-import { generateToken, sha256 } from "./crypto.js";
-import { JoinPayload, InvitePayload } from "./zod-schemas.js";
+import { generateToken, sha256 } from "./crypto";
+import { JoinPayload, InvitePayload } from "./zod-schemas";
 
 export async function createInvite(raw: unknown, adminId: string, teamId: string, serverBaseUrl: string, pool: pg.Pool) {
   const payload = InvitePayload.parse(raw);

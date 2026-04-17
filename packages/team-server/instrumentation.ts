@@ -1,8 +1,8 @@
+import { runMigrations } from "./src/db/migrate";
+import { startScheduler } from "./src/lib/scheduler";
+
 export async function register() {
-  if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { runMigrations } = await import("./src/db/migrate.js");
-    const { startScheduler } = await import("./src/lib/scheduler.js");
-    await runMigrations();
-    startScheduler();
-  }
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  await runMigrations();
+  startScheduler();
 }

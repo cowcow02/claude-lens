@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession, requireAdminRole } from "../../../../../lib/route-helpers.js";
-import { loadMember, loadMemberRollups } from "../../../../../lib/queries.js";
+import { requireAdminSession, requireAdminRole } from "../../../../../lib/route-helpers";
+import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
 
 export async function GET(
   req: NextRequest,

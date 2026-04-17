@@ -16,10 +16,9 @@ RUN pnpm -F @claude-lens/team-server build
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-# Copy standalone output
+# Copy standalone output (schema is bundled inline via src/db/schema.ts)
 COPY --from=builder /app/packages/team-server/.next/standalone ./
 COPY --from=builder /app/packages/team-server/.next/static ./packages/team-server/.next/static
-COPY --from=builder /app/packages/team-server/src/db/schema.sql ./packages/team-server/src/db/schema.sql
 
 ENV PORT=3322
 ENV HOSTNAME=0.0.0.0

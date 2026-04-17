@@ -1,3 +1,4 @@
+export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS teams (
   id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug                   text UNIQUE NOT NULL,
@@ -77,3 +78,10 @@ CREATE TABLE IF NOT EXISTS ingest_log (
   received_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ingest_log_received ON ingest_log (received_at);
+
+CREATE TABLE IF NOT EXISTS server_config (
+  key        text PRIMARY KEY,
+  value      text NOT NULL,
+  expires_at timestamptz
+);
+`;

@@ -1,4 +1,4 @@
-import { getPool } from "../../../db/pool.js";
+import { getPool } from "../../../db/pool";
 import { notFound } from "next/navigation";
 
 export default async function TeamLayout({

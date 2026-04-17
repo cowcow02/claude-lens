@@ -1,18 +1,19 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { getPool } from "./pool.js";
-import { generateBootstrapToken } from "../lib/auth.js";
-import { setBootstrapState, bootstrapState } from "../lib/bootstrap-state.js";
+import { getPool } from "./pool";
+import { SCHEMA_SQL } from "./schema";
+import { generateBootstrapToken } from "../lib/auth";
+import { getBootstrapState, setBootstrapState } from "../lib/bootstrap-state";
 
 export async function runMigrations(): Promise<void> {
-  const sql = readFileSync(join(import.meta.dirname, "schema.sql"), "utf8");
-  await getPool().query(sql);
+  await getPool().query(SCHEMA_SQL);
 
   const teams = await getPool().query("SELECT 1 FROM teams LIMIT 1");
-  if (teams.rowCount === 0 && !bootstrapState) {
-    const { token, hash, expiresAt } = generateBootstrapToken();
-    setBootstrapState({ hash, expiresAt });
-    console.log(`fleetlens-server: bootstrap token = ${token} (valid for 15 minutes)`);
-    console.log(`fleetlens-server: to claim this instance, open the server URL and paste the token`);
-  }
+  if (teams.rowCount) return;
+
+  const existing = await getBootstrapState();
+  if (existing && existing.expiresAt > new Date()) return;
+
+  const { token, hash, expiresAt } = generateBootstrapToken();
+  await setBootstrapState(hash, expiresAt);
+  console.log(`fleetlens-server: bootstrap token = ${token} (valid for 15 minutes)`);
+  console.log(`fleetlens-server: to claim this instance, open the server URL and paste the token`);
 }

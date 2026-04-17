@@ -1,5 +1,5 @@
-import { formatAgentTime, formatTokens } from "../lib/format.js";
-import type { MemberRow, RollupRow } from "../lib/queries.js";
+import { formatAgentTime, formatTokens } from "../lib/format";
+import type { MemberRow, RollupRow } from "../lib/queries";
 
 export function MemberProfile({ member, rollups }: { member: MemberRow; rollups: RollupRow[] }) {
   const totalAgentTime = rollups.reduce((sum, r) => sum + Number(r.agent_time_ms), 0);

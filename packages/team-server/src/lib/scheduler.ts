@@ -1,4 +1,4 @@
-import { getPool } from "../db/pool.js";
+import { getPool } from "../db/pool";
 
 let started = false;
 

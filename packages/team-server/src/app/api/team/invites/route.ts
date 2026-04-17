@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createInvite } from "../../../../lib/members.js";
-import { requireAdminSession } from "../../../../lib/route-helpers.js";
+import { createInvite } from "../../../../lib/members";
+import { requireAdminSession } from "../../../../lib/route-helpers";
 
 export async function POST(req: NextRequest) {
   const ctx = await requireAdminSession(req);

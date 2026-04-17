@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type pg from "pg";
-import { getPool } from "../db/pool.js";
-import { validateAdminSession } from "./auth.js";
+import { getPool } from "../db/pool";
+import { validateAdminSession } from "./auth";
 
 export type AdminContext = {
   memberId: string;

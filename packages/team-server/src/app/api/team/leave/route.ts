@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPool } from "../../../../db/pool.js";
-import { resolveMemberFromToken } from "../../../../lib/auth.js";
-import { leaveTeam } from "../../../../lib/members.js";
+import { getPool } from "../../../../db/pool";
+import { resolveMemberFromToken } from "../../../../lib/auth";
+import { leaveTeam } from "../../../../lib/members";
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");

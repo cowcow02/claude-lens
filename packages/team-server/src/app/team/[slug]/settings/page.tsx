@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
-import { getPool } from "../../../../db/pool.js";
-import { validateAdminSession } from "../../../../lib/auth.js";
-import { SettingsPanel } from "../../../../components/settings-panel.js";
+import { getPool } from "../../../../db/pool";
+import { validateAdminSession } from "../../../../lib/auth";
+import { SettingsPanel } from "../../../../components/settings-panel";
 
 export default async function SettingsPage() {
   const pool = getPool();

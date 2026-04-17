@@ -1,6 +1,6 @@
 import type pg from "pg";
-import { generateToken, sha256 } from "./crypto.js";
-import { ClaimPayload } from "./zod-schemas.js";
+import { generateToken, sha256 } from "./crypto";
+import { ClaimPayload } from "./zod-schemas";
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
