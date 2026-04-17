@@ -2,47 +2,39 @@ import { formatAgentTime, formatTokens, timeAgo } from "../lib/format";
 import type { RosterRow } from "../lib/queries";
 
 export function RosterCard({ member, teamSlug }: { member: RosterRow; teamSlug: string }) {
+  const lastSeenMs = member.last_seen_at ? Date.now() - new Date(member.last_seen_at).getTime() : Infinity;
+  const isActive = lastSeenMs < 15 * 60 * 1000;
+
   return (
-    <a href={`/team/${teamSlug}/members/${member.id}`}
-       style={{
-         display: "block",
-         border: "1px solid #e5e7eb",
-         borderRadius: 8,
-         padding: 16,
-         textDecoration: "none",
-         color: "inherit",
-       }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+    <a href={`/team/${teamSlug}/members/${member.id}`} className="roster-card">
+      <div className="roster-card-chevron">→</div>
+      <div className="roster-card-head">
         <div>
-          <div style={{ fontWeight: 600 }}>{member.display_name || member.email || "Anonymous"}</div>
+          <div className="roster-card-name">{member.display_name || member.email || "Anonymous"}</div>
           {member.email && member.display_name && (
-            <div style={{ color: "#6b7280", fontSize: 13 }}>{member.email}</div>
+            <div className="roster-card-email">{member.email}</div>
           )}
+          <div className={`roster-card-lastseen ${isActive ? "active" : ""}`} style={{ marginTop: 10 }}>
+            {timeAgo(member.last_seen_at).toLowerCase()}
+          </div>
         </div>
-        <span style={{
-          fontSize: 12,
-          color: member.role === "admin" ? "#7c3aed" : "#6b7280",
-          textTransform: "uppercase",
-          fontWeight: 500,
-        }}>
+        <span className={`roster-card-role ${member.role === "admin" ? "admin" : ""}`}>
           {member.role}
         </span>
       </div>
-      <div style={{ color: "#6b7280", fontSize: 13, marginBottom: 12 }}>
-        Last seen: {timeAgo(member.last_seen_at)}
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 13 }}>
-        <div>
-          <div style={{ color: "#6b7280" }}>Agent time</div>
-          <div style={{ fontWeight: 600 }}>{formatAgentTime(Number(member.week_agent_time_ms))}</div>
+
+      <div className="roster-card-stats">
+        <div className="roster-card-stat">
+          <span className="roster-card-stat-label">Agent</span>
+          <span className="roster-card-stat-value">{formatAgentTime(Number(member.week_agent_time_ms))}</span>
         </div>
-        <div>
-          <div style={{ color: "#6b7280" }}>Sessions</div>
-          <div style={{ fontWeight: 600 }}>{member.week_sessions}</div>
+        <div className="roster-card-stat">
+          <span className="roster-card-stat-label">Sessions</span>
+          <span className="roster-card-stat-value">{member.week_sessions}</span>
         </div>
-        <div>
-          <div style={{ color: "#6b7280" }}>Tokens</div>
-          <div style={{ fontWeight: 600 }}>{formatTokens(Number(member.week_tokens))}</div>
+        <div className="roster-card-stat">
+          <span className="roster-card-stat-label">Tokens</span>
+          <span className="roster-card-stat-value">{formatTokens(Number(member.week_tokens))}</span>
         </div>
       </div>
     </a>

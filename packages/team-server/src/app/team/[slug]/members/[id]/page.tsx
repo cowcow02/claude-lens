@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { getPool } from "../../../../../db/pool";
-import { validateAdminSession } from "../../../../../lib/auth";
+import { validateSession } from "../../../../../lib/auth";
 import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
 import { MemberProfile } from "../../../../../components/member-profile";
 
@@ -13,23 +14,22 @@ export default async function MemberPage({
   const pool = getPool();
 
   const cookieStore = await cookies();
-  const cookieToken = cookieStore.get("fleetlens_session")?.value;
-  if (!cookieToken) return <div>Unauthorized.</div>;
-
-  const session = await validateAdminSession(cookieToken, pool);
-  if (!session) return <div>Session expired.</div>;
+  const token = cookieStore.get("fleetlens_session")?.value;
+  const session = token ? await validateSession(token, pool) : null;
+  if (!session) redirect("/login");
 
   const member = await loadMember(id, pool);
   if (!member) return <div>Member not found.</div>;
+  if (!session.memberships.some((m) => m.team_id === member.team_id)) redirect("/login");
 
   const rollups = await loadMemberRollups(member.team_id, id, 30, pool);
 
   return (
-    <div>
-      <a href={`/team/${slug}`} style={{ color: "#6b7280", fontSize: 14, textDecoration: "none" }}>
-        ← Back to Roster
+    <>
+      <a href={`/team/${slug}`} className="kicker" style={{ display: "inline-block", marginBottom: 24, color: "var(--mute)" }}>
+        ← Back to roster
       </a>
       <MemberProfile member={member} rollups={rollups} />
-    </div>
+    </>
   );
 }

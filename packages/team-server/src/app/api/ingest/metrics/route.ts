@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "../../../../db/pool";
 import { processIngest } from "../../../../lib/ingest";
-import { resolveMemberFromToken } from "../../../../lib/auth";
+import { resolveMembershipFromBearer } from "../../../../lib/auth";
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -10,18 +10,18 @@ export async function POST(req: NextRequest) {
   }
   const token = authHeader.slice(7);
   const pool = getPool();
-  const member = await resolveMemberFromToken(token, pool);
-  if (!member) {
+  const membership = await resolveMembershipFromBearer(token, pool);
+  if (!membership) {
     return NextResponse.json({ error: "Invalid or revoked token" }, { status: 401 });
   }
 
   try {
     const body = await req.json();
-    const result = await processIngest(body, member.id, member.teamId, pool);
+    const result = await processIngest(body, membership.id, membership.teamId, pool);
     return NextResponse.json(result, { status: result.deduplicated ? 202 : 200 });
   } catch (err) {
     if (err instanceof Error && err.name === "ZodError") {
-      return NextResponse.json({ error: "Validation failed", details: err.message }, { status: 400 });
+      return NextResponse.json({ error: "Validation failed" }, { status: 400 });
     }
     throw err;
   }

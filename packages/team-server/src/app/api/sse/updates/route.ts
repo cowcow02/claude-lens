@@ -1,17 +1,25 @@
 import { NextRequest } from "next/server";
 import { addClient } from "../../../../lib/sse";
-import { validateAdminSession } from "../../../../lib/auth";
+import { validateSession } from "../../../../lib/auth";
 import { getPool } from "../../../../db/pool";
 
 export async function GET(req: NextRequest) {
   const cookieToken = req.cookies.get("fleetlens_session")?.value;
   if (!cookieToken) return new Response("Unauthorized", { status: 401 });
 
-  const pool = getPool();
-  const session = await validateAdminSession(cookieToken, pool);
-  if (!session) return new Response("Unauthorized", { status: 401 });
+  const ctx = await validateSession(cookieToken, getPool());
+  if (!ctx) return new Response("Unauthorized", { status: 401 });
 
-  const { teamId } = session;
+  const slug = req.nextUrl.searchParams.get("team");
+  if (!slug) return new Response("team slug required", { status: 400 });
+
+  const teamRes = await getPool().query("SELECT id FROM teams WHERE slug = $1", [slug]);
+  if (!teamRes.rowCount) return new Response("Team not found", { status: 404 });
+  const teamId = teamRes.rows[0].id;
+
+  if (!ctx.memberships.some((m) => m.team_id === teamId)) {
+    return new Response("Forbidden", { status: 403 });
+  }
 
   const stream = new ReadableStream({
     start(controller) {

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession, requireAdminRole } from "../../../../../lib/route-helpers";
+import { requireTeamMembership, requireAdmin } from "../../../../../lib/route-helpers";
 import { encryptAesGcm } from "../../../../../lib/crypto";
 
 export async function PUT(req: NextRequest) {
-  const ctx = await requireAdminSession(req);
+  const slug = req.nextUrl.searchParams.get("team");
+  if (!slug) return NextResponse.json({ error: "team slug required" }, { status: 400 });
+
+  const ctx = await requireTeamMembership(req, slug, { bySlug: true });
   if (ctx instanceof NextResponse) return ctx;
-  const roleErr = requireAdminRole(ctx);
-  if (roleErr) return roleErr;
+  const adminErr = requireAdmin(ctx);
+  if (adminErr) return adminErr;
 
   const encKey = process.env.FLEETLENS_ENCRYPTION_KEY;
   if (!encKey) {
@@ -27,7 +30,7 @@ export async function PUT(req: NextRequest) {
   const encrypted = encryptAesGcm(apiKey, encKey);
   await ctx.pool.query(
     "UPDATE teams SET resend_api_key_enc = $1 WHERE id = $2",
-    [encrypted, ctx.teamId],
+    [encrypted, ctx.membership.team_id],
   );
   return NextResponse.json({ saved: true });
 }

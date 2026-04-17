@@ -1,45 +1,41 @@
 import { writeTeamConfig } from "./config.js";
 
 export async function joinTeam(args: string[]) {
-  const [serverUrl, inviteToken] = args;
-  if (!serverUrl || !inviteToken) {
-    console.error("Usage: fleetlens team join <server-url> <invite-token>");
+  const [serverUrl, bearerToken] = args;
+  if (!serverUrl || !bearerToken) {
+    console.error("Usage: fleetlens team join <server-url> <device-token>");
+    console.error("");
+    console.error("Get the device token from the dashboard after signup,");
+    console.error("or from Settings → My device token.");
     process.exit(1);
   }
 
-  // Auto-detect from git config
-  const { execSync } = await import("node:child_process");
-  let email: string | undefined;
-  let displayName: string | undefined;
-  try { email = execSync("git config user.email", { encoding: "utf8" }).trim(); } catch {}
-  try { displayName = execSync("git config user.name", { encoding: "utf8" }).trim(); } catch {}
-
-  const res = await fetch(`${serverUrl}/api/team/join`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ inviteToken, email, displayName }),
+  const res = await fetch(`${serverUrl}/api/team/whoami`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${bearerToken}` },
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    console.error(`Join failed: ${(err as { error?: string }).error || res.statusText}`);
+    console.error(`Pairing failed: ${res.status} ${res.statusText}`);
+    console.error("The device token may be revoked or the server URL wrong.");
     process.exit(1);
   }
 
-  const data = await res.json() as {
-    serverBaseUrl?: string;
-    member: { id: string; displayName?: string; email?: string };
-    bearerToken: string;
-    teamSlug: string;
+  const data = (await res.json()) as {
+    membership: { id: string; role: string };
+    team: { id: string; slug: string; name: string };
+    user: { email: string; displayName: string | null };
   };
+
   writeTeamConfig({
-    serverUrl: data.serverBaseUrl || serverUrl,
-    memberId: data.member.id,
-    bearerToken: data.bearerToken,
-    teamSlug: data.teamSlug,
+    serverUrl,
+    memberId: data.membership.id,
+    bearerToken,
+    teamSlug: data.team.slug,
     pairedAt: new Date().toISOString(),
   });
 
-  console.log(`Joined team "${data.teamSlug}" as ${data.member.displayName || data.member.email || "anonymous"}`);
-  console.log("  Your daemon will start pushing metrics on the next cycle (~5 min).");
+  console.log(`Paired with "${data.team.name}" as ${data.user.displayName || data.user.email}`);
+  console.log(`  role: ${data.membership.role}`);
+  console.log("  Your daemon will push metrics on the next 5-minute cycle.");
 }

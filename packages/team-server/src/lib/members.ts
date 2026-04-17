@@ -1,71 +1,73 @@
 import type pg from "pg";
 import { generateToken, sha256 } from "./crypto";
-import { JoinPayload, InvitePayload } from "./zod-schemas";
 
-export async function createInvite(raw: unknown, adminId: string, teamId: string, serverBaseUrl: string, pool: pg.Pool) {
-  const payload = InvitePayload.parse(raw);
+export async function createInvite(
+  teamId: string,
+  createdBy: string,
+  opts: { email?: string; role?: "admin" | "member"; expiresInDays?: number } = {},
+  pool: pg.Pool,
+): Promise<{ inviteId: string; token: string; expiresAt: string }> {
   const token = "iv_" + generateToken(16);
-  const expiresAt = new Date(Date.now() + (payload.expiresInDays ?? 7) * 24 * 60 * 60 * 1000);
+  const role = opts.role ?? "member";
+  const expiresAt = new Date(Date.now() + (opts.expiresInDays ?? 7) * 24 * 60 * 60 * 1000);
 
   const res = await pool.query(
-    `INSERT INTO invites (team_id, created_by_user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [teamId, adminId, sha256(token), expiresAt]
+    `INSERT INTO invites (team_id, created_by, email, role, token_hash, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [teamId, createdBy, opts.email?.toLowerCase() ?? null, role, sha256(token), expiresAt]
   );
 
   await pool.query(
-    "INSERT INTO events (team_id, member_id, action, payload) VALUES ($1, $2, 'member.invite', $3)",
-    [teamId, adminId, JSON.stringify({ inviteId: res.rows[0].id })]
+    "INSERT INTO events (team_id, actor_id, action, payload) VALUES ($1, $2, 'member.invite', $3)",
+    [teamId, createdBy, JSON.stringify({ inviteId: res.rows[0].id, email: opts.email ?? null, role })]
   );
 
-  return {
-    inviteId: res.rows[0].id,
-    joinUrl: `${serverBaseUrl}/join?token=${token}`,
-    tokenPlaintext: token,
-    expiresAt: expiresAt.toISOString(),
-  };
+  return { inviteId: res.rows[0].id, token, expiresAt: expiresAt.toISOString() };
 }
 
-export async function joinTeam(raw: unknown, pool: pg.Pool) {
-  const payload = JoinPayload.parse(raw);
-  const hash = sha256(payload.inviteToken);
+export type InviteRow = {
+  id: string;
+  team_id: string;
+  email: string | null;
+  role: "admin" | "member";
+  expires_at: Date;
+};
 
-  const inviteRes = await pool.query(
-    `SELECT id, team_id FROM invites WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
-    [hash]
+export async function lookupInvite(token: string, pool: pg.Pool): Promise<InviteRow | null> {
+  const res = await pool.query<InviteRow>(
+    `SELECT id, team_id, email, role, expires_at FROM invites
+     WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+    [sha256(token)]
   );
-  if (!inviteRes.rowCount || inviteRes.rowCount === 0) throw new Error("Invalid or expired invite");
+  return res.rowCount ? res.rows[0] : null;
+}
 
-  const invite = inviteRes.rows[0];
+export async function redeemInvite(
+  inviteToken: string,
+  userAccountId: string,
+  pool: pg.Pool,
+): Promise<{ membershipId: string; bearerToken: string; teamId: string } | null> {
+  const invite = await lookupInvite(inviteToken, pool);
+  if (!invite) return null;
+
   const bearerToken = "bt_" + generateToken(32);
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-
     await client.query("UPDATE invites SET used_at = now() WHERE id = $1", [invite.id]);
-
-    const memberRes = await client.query(
-      `INSERT INTO members (team_id, email, display_name, role, bearer_token_hash)
-       VALUES ($1, $2, $3, 'member', $4) RETURNING id, email, display_name, role`,
-      [invite.team_id, payload.email || null, payload.displayName || null, sha256(bearerToken)]
+    const mRes = await client.query(
+      `INSERT INTO memberships (user_account_id, team_id, role, bearer_token_hash)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_account_id, team_id) DO UPDATE SET revoked_at = NULL, bearer_token_hash = EXCLUDED.bearer_token_hash
+       RETURNING id`,
+      [userAccountId, invite.team_id, invite.role, sha256(bearerToken)]
     );
-    const member = memberRes.rows[0];
-
-    const teamRes = await client.query("SELECT slug FROM teams WHERE id = $1", [invite.team_id]);
-
     await client.query(
-      "INSERT INTO events (team_id, member_id, action) VALUES ($1, $2, 'member.join')",
-      [invite.team_id, member.id]
+      "INSERT INTO events (team_id, actor_id, action, payload) VALUES ($1, $2, 'member.join', $3)",
+      [invite.team_id, userAccountId, JSON.stringify({ via: "invite", inviteId: invite.id })]
     );
-
     await client.query("COMMIT");
-
-    return {
-      member: { id: member.id, email: member.email, displayName: member.display_name, role: member.role },
-      bearerToken,
-      teamSlug: teamRes.rows[0].slug,
-    };
+    return { membershipId: mRes.rows[0].id, bearerToken, teamId: invite.team_id };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -74,6 +76,9 @@ export async function joinTeam(raw: unknown, pool: pg.Pool) {
   }
 }
 
-export async function leaveTeam(memberId: string, pool: pg.Pool) {
-  await pool.query("UPDATE members SET revoked_at = now() WHERE id = $1", [memberId]);
+export async function revokeMembership(membershipId: string, pool: pg.Pool): Promise<void> {
+  await pool.query(
+    "UPDATE memberships SET revoked_at = now(), bearer_token_hash = NULL WHERE id = $1",
+    [membershipId]
+  );
 }

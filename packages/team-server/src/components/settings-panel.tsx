@@ -11,22 +11,40 @@ type MemberRow = {
   revoked_at: string | null;
 };
 
-export function SettingsPanel({ team, members }: { team: TeamRow; members: MemberRow[] }) {
+export function SettingsPanel({ team, members, teamSlug }: { team: TeamRow; members: MemberRow[]; teamSlug: string }) {
   const [teamName, setTeamName] = useState(team.name);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
 
   async function saveProfile() {
     setSaving(true);
     setMessage(null);
-    const res = await fetch("/api/team/settings", {
+    const res = await fetch(`/api/team/settings?team=${teamSlug}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: teamName }),
     });
     setSaving(false);
-    if (res.ok) setMessage("Saved");
-    else setMessage("Failed to save");
+    setMessage(res.ok ? "Saved." : "Failed to save.");
+  }
+
+  async function createInvite(role: "admin" | "member") {
+    setInviteError(null);
+    setInviteUrl(null);
+    const res = await fetch(`/api/team/invites?team=${teamSlug}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, expiresInDays: 7 }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setInviteError(d.error || "Failed to create invite");
+      return;
+    }
+    const data = await res.json();
+    setInviteUrl(data.joinUrl);
   }
 
   async function revokeMember(memberId: string) {
@@ -36,56 +54,79 @@ export function SettingsPanel({ team, members }: { team: TeamRow; members: Membe
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
-      {/* Team Profile */}
-      <section>
-        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>Team Profile</h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input value={teamName} onChange={e => setTeamName(e.target.value)}
-                 style={{ padding: 8, border: "1px solid #d1d5db", borderRadius: 4, width: 300 }} />
-          <button onClick={saveProfile} disabled={saving}
-                  style={{ padding: "8px 16px", borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>
-            {saving ? "Saving..." : "Save"}
+    <div>
+      <section className="settings-section">
+        <div className="subsection-head">
+          <h2>Team profile</h2>
+          <span className="kicker">Slug · {team.slug}</span>
+        </div>
+        <div className="settings-row" style={{ maxWidth: 520 }}>
+          <input
+            value={teamName}
+            onChange={(e) => setTeamName(e.target.value)}
+            style={{ flex: 1, padding: "9px 12px", border: "1px solid var(--rule)", background: "var(--bg)", fontSize: 14, fontFamily: "JetBrains Mono, monospace" }}
+          />
+          <button onClick={saveProfile} disabled={saving} className="btn">
+            {saving ? "Saving" : "Save"}
           </button>
-          {message && <span style={{ color: "#6b7280", fontSize: 14 }}>{message}</span>}
         </div>
-        <div style={{ color: "#6b7280", fontSize: 13, marginTop: 8 }}>
-          Slug: {team.slug} · Created: {new Date(team.created_at).toLocaleDateString()}
-        </div>
+        {message && (
+          <div className="mono" style={{ fontSize: 11, color: "var(--mute)", marginTop: 10, letterSpacing: "0.1em" }}>
+            {message.toUpperCase()}
+          </div>
+        )}
       </section>
 
-      {/* Members */}
-      <section>
-        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>Members</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+      <section className="settings-section">
+        <div className="subsection-head">
+          <h2>Invite a member</h2>
+          <span className="kicker">Share-link · 7-day expiry</span>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => createInvite("member")} className="btn">+ Member invite</button>
+          <button onClick={() => createInvite("admin")} className="btn secondary">+ Admin invite</button>
+        </div>
+        {inviteError && <div className="form-error" style={{ marginTop: 12 }}>{inviteError}</div>}
+        {inviteUrl && (
+          <div className="help-box" style={{ marginTop: 16 }}>
+            <p>Invite link created. Copy it and share out-of-band:</p>
+            <code className="help-example">{inviteUrl}</code>
+            <p className="help-note">Expires in 7 days. The invitee creates their password on first click.</p>
+          </div>
+        )}
+      </section>
+
+      <section className="settings-section">
+        <div className="subsection-head">
+          <h2>Members</h2>
+          <span className="kicker">{members.filter((m) => !m.revoked_at).length} active</span>
+        </div>
+        <table className="member-table">
           <thead>
-            <tr style={{ borderBottom: "2px solid #e5e7eb" }}>
-              <th style={{ textAlign: "left", padding: 8 }}>Name</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Email</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Role</th>
-              <th style={{ textAlign: "left", padding: 8 }}>Status</th>
-              <th style={{ padding: 8 }}></th>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {members.map((m) => (
-              <tr key={m.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                <td style={{ padding: 8 }}>{m.display_name || "—"}</td>
-                <td style={{ padding: 8, color: "#6b7280" }}>{m.email || "—"}</td>
-                <td style={{ padding: 8 }}>{m.role}</td>
-                <td style={{ padding: 8 }}>
-                  {m.revoked_at ? (
-                    <span style={{ color: "#ef4444" }}>Revoked</span>
-                  ) : (
-                    <span style={{ color: "#22c55e" }}>Active</span>
-                  )}
+              <tr key={m.id}>
+                <td>{m.display_name || <span style={{ color: "var(--mute)" }}>—</span>}</td>
+                <td className="mono" style={{ fontSize: 12, color: "var(--mute)" }}>{m.email || "—"}</td>
+                <td className="mono" style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: m.role === "admin" ? "var(--accent)" : "var(--mute)" }}>
+                  {m.role}
                 </td>
-                <td style={{ padding: 8 }}>
+                <td>
+                  <span className={`status-badge ${m.revoked_at ? "revoked" : "active"}`}>
+                    {m.revoked_at ? "Revoked" : "Active"}
+                  </span>
+                </td>
+                <td style={{ textAlign: "right" }}>
                   {!m.revoked_at && m.role !== "admin" && (
-                    <button onClick={() => revokeMember(m.id)}
-                            style={{ color: "#ef4444", background: "none", border: "none", cursor: "pointer", fontSize: 13 }}>
-                      Revoke
-                    </button>
+                    <button onClick={() => revokeMember(m.id)} className="btn danger-ghost">Revoke</button>
                   )}
                 </td>
               </tr>

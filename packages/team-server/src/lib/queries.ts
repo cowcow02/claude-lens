@@ -48,16 +48,17 @@ export function weekStartIso(now = new Date()): string {
 export async function loadRoster(teamId: string, pool: pg.Pool): Promise<RosterRow[]> {
   const res = await pool.query(`
     SELECT
-      m.id, m.email, m.display_name, m.role, m.joined_at, m.last_seen_at,
+      m.id, u.email, u.display_name, m.role, m.joined_at, m.last_seen_at,
       COALESCE(SUM(r.agent_time_ms), 0)::bigint AS week_agent_time_ms,
       COALESCE(SUM(r.sessions), 0)::int AS week_sessions,
       COALESCE(SUM(r.tool_calls), 0)::int AS week_tool_calls,
       COALESCE(SUM(r.turns), 0)::int AS week_turns,
       COALESCE(SUM(r.tokens_input + r.tokens_output), 0)::bigint AS week_tokens
-    FROM members m
-    LEFT JOIN daily_rollups r ON r.member_id = m.id AND r.team_id = m.team_id AND r.day >= $2
+    FROM memberships m
+    JOIN user_accounts u ON u.id = m.user_account_id
+    LEFT JOIN daily_rollups r ON r.membership_id = m.id AND r.team_id = m.team_id AND r.day >= $2
     WHERE m.team_id = $1 AND m.revoked_at IS NULL
-    GROUP BY m.id
+    GROUP BY m.id, u.email, u.display_name
     ORDER BY m.last_seen_at DESC NULLS LAST
   `, [teamId, weekStartIso()]);
   return res.rows;
@@ -65,7 +66,7 @@ export async function loadRoster(teamId: string, pool: pg.Pool): Promise<RosterR
 
 export async function loadMemberRollups(
   teamId: string,
-  memberId: string,
+  membershipId: string,
   days: number,
   pool: pg.Pool,
 ): Promise<RollupRow[]> {
@@ -74,16 +75,18 @@ export async function loadMemberRollups(
     SELECT day::text, agent_time_ms, sessions, tool_calls, turns,
            tokens_input, tokens_output, tokens_cache_read, tokens_cache_write
     FROM daily_rollups
-    WHERE team_id = $1 AND member_id = $2 AND day >= $3
+    WHERE team_id = $1 AND membership_id = $2 AND day >= $3
     ORDER BY day ASC
-  `, [teamId, memberId, since]);
+  `, [teamId, membershipId, since]);
   return res.rows;
 }
 
-export async function loadMember(memberId: string, pool: pg.Pool): Promise<MemberRow | null> {
+export async function loadMember(membershipId: string, pool: pg.Pool): Promise<MemberRow | null> {
   const res = await pool.query(
-    "SELECT id, team_id, email, display_name, role, joined_at, last_seen_at FROM members WHERE id = $1",
-    [memberId]
+    `SELECT m.id, m.team_id, u.email, u.display_name, m.role, m.joined_at, m.last_seen_at
+     FROM memberships m JOIN user_accounts u ON u.id = m.user_account_id
+     WHERE m.id = $1`,
+    [membershipId]
   );
   return res.rowCount ? res.rows[0] : null;
 }

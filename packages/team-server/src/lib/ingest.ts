@@ -5,7 +5,7 @@ import { broadcastEvent } from "./sse";
 
 export async function processIngest(
   raw: unknown,
-  memberId: string,
+  membershipId: string,
   teamId: string,
   pool?: pg.Pool
 ) {
@@ -18,8 +18,8 @@ export async function processIngest(
     await client.query("BEGIN");
 
     const logRes = await client.query(
-      "INSERT INTO ingest_log (ingest_id, team_id, member_id) VALUES ($1, $2, $3) ON CONFLICT (ingest_id) DO NOTHING RETURNING 1",
-      [payload.ingestId, teamId, memberId]
+      "INSERT INTO ingest_log (ingest_id, team_id, membership_id) VALUES ($1, $2, $3) ON CONFLICT (ingest_id) DO NOTHING RETURNING 1",
+      [payload.ingestId, teamId, membershipId]
     );
     if (logRes.rowCount === 0) {
       await client.query("ROLLBACK");
@@ -27,10 +27,10 @@ export async function processIngest(
     }
 
     await client.query(`
-      INSERT INTO daily_rollups (team_id, member_id, day, agent_time_ms, sessions, tool_calls, turns,
+      INSERT INTO daily_rollups (team_id, membership_id, day, agent_time_ms, sessions, tool_calls, turns,
                                  tokens_input, tokens_output, tokens_cache_read, tokens_cache_write)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT (team_id, member_id, day) DO UPDATE SET
+      ON CONFLICT (team_id, membership_id, day) DO UPDATE SET
         agent_time_ms = EXCLUDED.agent_time_ms,
         sessions = EXCLUDED.sessions,
         tool_calls = EXCLUDED.tool_calls,
@@ -39,10 +39,10 @@ export async function processIngest(
         tokens_output = EXCLUDED.tokens_output,
         tokens_cache_read = EXCLUDED.tokens_cache_read,
         tokens_cache_write = EXCLUDED.tokens_cache_write
-    `, [teamId, memberId, r.day, r.agentTimeMs, r.sessions, r.toolCalls, r.turns,
+    `, [teamId, membershipId, r.day, r.agentTimeMs, r.sessions, r.toolCalls, r.turns,
         r.tokens.input, r.tokens.output, r.tokens.cacheRead, r.tokens.cacheWrite]);
 
-    await client.query("UPDATE members SET last_seen_at = now() WHERE id = $1", [memberId]);
+    await client.query("UPDATE memberships SET last_seen_at = now() WHERE id = $1", [membershipId]);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
@@ -51,6 +51,6 @@ export async function processIngest(
     client.release();
   }
 
-  broadcastEvent(teamId, "roster-updated", { memberId });
+  broadcastEvent(teamId, "roster-updated", { membershipId });
   return { accepted: true, nextSyncAfter: new Date(Date.now() + 5 * 60 * 1000).toISOString() };
 }

@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession, requireAdminRole } from "../../../../../lib/route-helpers";
+import { requireSession, requireTeamMembership, requireAdmin } from "../../../../../lib/route-helpers";
 import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
+import { revokeMembership } from "../../../../../lib/members";
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await requireAdminSession(req);
-  if (ctx instanceof NextResponse) return ctx;
+  const session = await requireSession(req);
+  if (session instanceof NextResponse) return session;
 
   const { id } = await params;
-  const member = await loadMember(id, ctx.pool);
+  const member = await loadMember(id, session.pool);
   if (!member) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const rollups = await loadMemberRollups(member.team_id, id, 30, ctx.pool);
+  const belongs = session.memberships.some((m) => m.team_id === member.team_id);
+  if (!belongs) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const rollups = await loadMemberRollups(member.team_id, id, 30, session.pool);
   return NextResponse.json({ member, rollups });
 }
 
@@ -21,12 +25,22 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await requireAdminSession(req);
-  if (ctx instanceof NextResponse) return ctx;
-  const roleErr = requireAdminRole(ctx);
-  if (roleErr) return roleErr;
+  const session = await requireSession(req);
+  if (session instanceof NextResponse) return session;
 
   const { id } = await params;
-  await ctx.pool.query("UPDATE members SET revoked_at = now() WHERE id = $1", [id]);
+  const member = await loadMember(id, session.pool);
+  if (!member) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const ctx = await requireTeamMembership(req, member.team_id);
+  if (ctx instanceof NextResponse) return ctx;
+  const adminErr = requireAdmin(ctx);
+  if (adminErr) return adminErr;
+
+  await revokeMembership(id, session.pool);
+  await session.pool.query(
+    "INSERT INTO events (team_id, actor_id, action, payload) VALUES ($1, $2, 'member.revoke', $3)",
+    [member.team_id, session.user.id, JSON.stringify({ membershipId: id })]
+  );
   return NextResponse.json({ revoked: true });
 }

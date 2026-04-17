@@ -3,16 +3,12 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-export function LiveRefresher() {
+export function LiveRefresher({ teamSlug }: { teamSlug: string }) {
   const router = useRouter();
-
   useEffect(() => {
-    const es = new EventSource("/api/sse/updates");
-    es.addEventListener("roster-updated", () => {
-      router.refresh();
-    });
+    const es = new EventSource(`/api/sse/updates?team=${encodeURIComponent(teamSlug)}`);
+    es.addEventListener("roster-updated", () => router.refresh());
     return () => es.close();
-  }, [router]);
-
+  }, [router, teamSlug]);
   return null;
 }

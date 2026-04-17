@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "../../../../db/pool";
-import { resolveMemberFromToken } from "../../../../lib/auth";
-import { leaveTeam } from "../../../../lib/members";
+import { resolveMembershipFromBearer } from "../../../../lib/auth";
+import { revokeMembership } from "../../../../lib/members";
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -10,11 +10,11 @@ export async function POST(req: NextRequest) {
   }
   const token = authHeader.slice(7);
   const pool = getPool();
-  const member = await resolveMemberFromToken(token, pool);
-  if (!member) {
+  const membership = await resolveMembershipFromBearer(token, pool);
+  if (!membership) {
     return NextResponse.json({ error: "Invalid or revoked token" }, { status: 401 });
   }
 
-  await leaveTeam(member.id, pool);
-  return NextResponse.json({ ok: true }, { status: 200 });
+  await revokeMembership(membership.id, pool);
+  return NextResponse.json({ ok: true });
 }
