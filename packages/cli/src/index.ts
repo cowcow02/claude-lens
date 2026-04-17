@@ -40,6 +40,11 @@ async function main() {
       await usage(args.slice(1));
       break;
     }
+    case "capsules": {
+      const { capsules } = await import("./commands/capsules.js");
+      await capsules(args.slice(1));
+      break;
+    }
     case "daemon": {
       const { daemon } = await import("./commands/daemon.js");
       await daemon(args.slice(1));
@@ -64,6 +69,7 @@ Common:
 Terminal:
   stats [--live] [-s D] [--days N]  Daily token usage table
   usage [--save]                    Plan utilization (5h/7d) in one shot
+  capsules --days N [--json]        Per-session insight capsules in range
 
 Advanced:
   web [page] [--no-open]            Open dashboard in browser without auto-starting daemon
