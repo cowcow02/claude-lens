@@ -1,25 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { resetDb } from "../helpers/db.js";
 import { getPool } from "../../src/db/pool.js";
-import { runMigrations } from "../../src/db/migrate.js";
 import { slugify, uniqueSlug, createTeamWithAdmin } from "../../src/lib/teams.js";
 import { createUserAccount } from "../../src/lib/auth.js";
-
-process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://localhost:5432/fleetlens_dev";
-
 let pool: ReturnType<typeof getPool>;
 
 beforeAll(async () => {
-  pool = getPool();
-  await runMigrations();
-  await pool.query("DELETE FROM events");
-  await pool.query("DELETE FROM daily_rollups");
-  await pool.query("DELETE FROM ingest_log");
-  await pool.query("DELETE FROM invites");
-  await pool.query("DELETE FROM memberships");
-  await pool.query("DELETE FROM sessions");
-  await pool.query("DELETE FROM server_config");
-  await pool.query("DELETE FROM teams");
-  await pool.query("DELETE FROM user_accounts");
+  pool = await resetDb();
 });
 
 afterAll(async () => {

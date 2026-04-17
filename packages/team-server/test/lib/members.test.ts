@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { resetDb } from "../helpers/db.js";
 import { getPool } from "../../src/db/pool.js";
-import { runMigrations } from "../../src/db/migrate.js";
 import {
   createInvite,
   lookupInvite,
@@ -9,26 +9,12 @@ import {
 } from "../../src/lib/members.js";
 import { createUserAccount } from "../../src/lib/auth.js";
 import { createTeamWithAdmin } from "../../src/lib/teams.js";
-
-process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://localhost:5432/fleetlens_dev";
-
 let pool: ReturnType<typeof getPool>;
 let adminUserId: string;
 let teamId: string;
 
 beforeAll(async () => {
-  pool = getPool();
-  await runMigrations();
-  await pool.query("DELETE FROM events");
-  await pool.query("DELETE FROM daily_rollups");
-  await pool.query("DELETE FROM ingest_log");
-  await pool.query("DELETE FROM invites");
-  await pool.query("DELETE FROM memberships");
-  await pool.query("DELETE FROM sessions");
-  await pool.query("DELETE FROM server_config");
-  await pool.query("DELETE FROM teams");
-  await pool.query("DELETE FROM user_accounts");
-
+  pool = await resetDb();
   const admin = await createUserAccount("members-admin@example.com", "pass1234", "Admin", {}, pool);
   adminUserId = admin.id;
   const { team } = await createTeamWithAdmin("Members Test Team", admin.id, pool);

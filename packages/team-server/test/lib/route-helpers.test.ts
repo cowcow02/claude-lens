@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { resetDb } from "../helpers/db.js";
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "../../src/db/pool.js";
-import { runMigrations } from "../../src/db/migrate.js";
 import {
   requireSession,
   requireTeamMembership,
@@ -22,9 +22,6 @@ function makeNextReqWithCookie(cookie: string, url = "http://localhost/api/test"
     headers: { cookie: `fleetlens_session=${cookie}` },
   });
 }
-
-process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://localhost:5432/fleetlens_dev";
-
 let pool: ReturnType<typeof getPool>;
 let adminCookieToken: string;
 let memberCookieToken: string;
@@ -35,18 +32,7 @@ let memberMembershipId: string;
 
 
 beforeAll(async () => {
-  pool = getPool();
-  await runMigrations();
-  await pool.query("DELETE FROM events");
-  await pool.query("DELETE FROM daily_rollups");
-  await pool.query("DELETE FROM ingest_log");
-  await pool.query("DELETE FROM invites");
-  await pool.query("DELETE FROM memberships");
-  await pool.query("DELETE FROM sessions");
-  await pool.query("DELETE FROM server_config");
-  await pool.query("DELETE FROM teams");
-  await pool.query("DELETE FROM user_accounts");
-
+  pool = await resetDb();
   const admin = await createUserAccount("rh-admin@example.com", "pass1234", null, {}, pool);
   const { team, membership } = await createTeamWithAdmin("RH Team", admin.id, pool);
   teamSlug = team.slug;
