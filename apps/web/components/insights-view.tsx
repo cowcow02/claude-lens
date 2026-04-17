@@ -1,49 +1,45 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { Lightbulb, Loader2, Square } from "lucide-react";
-
-type Range = "7d" | "30d" | "90d";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, Square, Zap } from "lucide-react";
+import { InsightReport, type ReportData } from "@/components/insight-report";
 
 type RunState =
   | { kind: "idle" }
-  | { kind: "running"; status: string; narrative: string }
-  | { kind: "done"; status: string; narrative: string; capsuleCount: number; promptTokens?: number }
-  | { kind: "error"; narrative: string; message: string };
+  | { kind: "running"; steps: string[] }
+  | { kind: "done"; report: ReportData }
+  | { kind: "error"; message: string };
+
+type Range = "week" | "4weeks";
 
 export function InsightsView() {
-  const [range, setRange] = useState<Range>("7d");
+  const [range, setRange] = useState<Range>("week");
   const [state, setState] = useState<RunState>({ kind: "idle" });
   const abortRef = useRef<AbortController | null>(null);
 
   const start = useCallback(
-    async (chosenRange: Range) => {
+    async (chosen: Range) => {
       if (state.kind === "running") return;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      setState({ kind: "running", status: "Starting…", narrative: "" });
-
-      let narrative = "";
-      let status = "Starting…";
-      let capsuleCount = 0;
-      let promptTokens: number | undefined;
+      const steps: string[] = [];
+      setState({ kind: "running", steps });
 
       try {
         const res = await fetch("/api/insights", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ range: chosenRange, mode: "compact" }),
+          body: JSON.stringify({ range_type: chosen }),
           signal: ctrl.signal,
         });
         if (!res.ok || !res.body) {
-          setState({ kind: "error", narrative: "", message: (await res.text()) || `HTTP ${res.status}` });
+          setState({ kind: "error", message: await res.text() || `HTTP ${res.status}` });
           return;
         }
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let lastStep = "";
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -56,37 +52,24 @@ export function InsightsView() {
             if (!json) continue;
             try {
               const data = JSON.parse(json) as {
-                type: string; text?: string; message?: string;
-                capsuleCount?: number; promptTokens?: number;
+                type: string; text?: string; report?: ReportData; message?: string;
               };
-              if (data.type === "status" && data.text) {
-                status = data.text;
-                setState({ kind: "running", status, narrative });
-              } else if (data.type === "delta" && data.text) {
-                narrative += data.text;
-                setState({ kind: "running", status, narrative });
-              } else if (data.type === "done") {
-                capsuleCount = data.capsuleCount ?? 0;
-                promptTokens = data.promptTokens;
-                setState({ kind: "done", status, narrative, capsuleCount, promptTokens });
+              if (data.type === "status" && data.text && data.text !== lastStep) {
+                lastStep = data.text;
+                steps.push(data.text);
+                setState({ kind: "running", steps: [...steps] });
+              } else if (data.type === "report" && data.report) {
+                setState({ kind: "done", report: data.report });
               } else if (data.type === "error") {
-                setState({ kind: "error", narrative, message: data.message ?? "unknown error" });
+                setState({ kind: "error", message: data.message ?? "unknown error" });
                 return;
               }
-            } catch {
-              // skip
-            }
+            } catch { /* skip malformed */ }
           }
-        }
-        // If stream closed without a done event, treat trailing state as done.
-        if (narrative) {
-          setState((prev) =>
-            prev.kind === "done" ? prev : { kind: "done", status, narrative, capsuleCount, promptTokens },
-          );
         }
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
-          setState({ kind: "error", narrative, message: (err as Error).message });
+          setState({ kind: "error", message: (err as Error).message });
         }
       } finally {
         abortRef.current = null;
@@ -95,144 +78,81 @@ export function InsightsView() {
     [state.kind],
   );
 
-  const stop = () => {
-    abortRef.current?.abort();
-    setState((prev) =>
-      prev.kind === "running"
-        ? { kind: "error", narrative: prev.narrative, message: "Stopped by user" }
-        : prev,
-    );
-  };
+  const stop = () => abortRef.current?.abort();
 
-  const running = state.kind === "running";
-  const narrative =
-    state.kind === "running" || state.kind === "done" || state.kind === "error"
-      ? state.narrative
-      : "";
+  // Auto-run once on first mount if idle
+  useEffect(() => {
+    if (state.kind === "idle") void start(range);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (state.kind === "done") {
+    return <InsightReport data={state.report} />;
+  }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            color: "var(--af-text-secondary)",
-            marginRight: "auto",
-          }}
-        >
-          <Lightbulb size={14} color="var(--af-accent)" />
-          <span>Range</span>
-        </div>
-        <div style={{ display: "inline-flex", gap: 4, border: "1px solid var(--af-border)", borderRadius: 8, padding: 2 }}>
-          {(["7d", "30d", "90d"] as Range[]).map((r) => (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 20,
+      maxWidth: 760, margin: "0 auto", padding: "60px 40px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={rangeGroup}>
+          {(["week", "4weeks"] as Range[]).map((r) => (
             <button
               key={r}
               type="button"
-              disabled={running}
+              disabled={state.kind === "running"}
               onClick={() => setRange(r)}
               style={{
-                padding: "5px 12px",
-                fontSize: 12,
-                fontWeight: 600,
+                ...rangeBtn,
                 background: range === r ? "var(--af-accent)" : "transparent",
                 color: range === r ? "white" : "var(--af-text-secondary)",
-                border: "none",
-                borderRadius: 6,
-                cursor: running ? "not-allowed" : "pointer",
-                opacity: running ? 0.5 : 1,
               }}
             >
-              {r}
+              {r === "week" ? "This week" : "Last 4 weeks"}
             </button>
           ))}
         </div>
-        {running ? (
-          <button
-            type="button"
-            onClick={stop}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 14px",
-              border: "1px solid var(--af-border)",
-              borderRadius: 7,
-              background: "var(--af-surface)",
-              color: "var(--af-text)",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
+        {state.kind === "running" ? (
+          <button type="button" onClick={stop} style={secondaryBtn}>
             <Square size={12} /> Stop
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => start(range)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 14px",
-              border: "1px solid var(--af-accent)",
-              borderRadius: 7,
-              background: "var(--af-accent)",
-              color: "white",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Generate insights
+          <button type="button" onClick={() => start(range)} style={primaryBtn}>
+            <Zap size={12} /> Generate
           </button>
         )}
       </div>
 
       {state.kind === "running" && (
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-            fontSize: 12,
-            color: "var(--af-text-secondary)",
-          }}
-        >
-          <Loader2 size={13} className="af-spin" />
-          {state.status}
+        <div style={stepsPanel}>
+          <div style={stepsHeader}>
+            <Loader2 size={13} className="af-spin" /> Running insights pipeline
+          </div>
+          <ol style={stepsList}>
+            {state.steps.map((s, i) => (
+              <li key={i} style={{
+                ...stepItem,
+                opacity: i === state.steps.length - 1 ? 1 : 0.55,
+                fontWeight: i === state.steps.length - 1 ? 500 : 400,
+              }}>
+                <span style={stepDot}>{i === state.steps.length - 1 ? "•" : "✓"}</span>
+                {s}
+              </li>
+            ))}
+          </ol>
         </div>
       )}
-      {state.kind === "done" && (
-        <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-          {state.capsuleCount} capsules
-          {state.promptTokens !== undefined ? ` · ${state.promptTokens.toLocaleString()} prompt tokens` : ""}
-        </div>
-      )}
+
       {state.kind === "error" && (
-        <div style={{ fontSize: 12, color: "var(--af-danger)", background: "var(--af-surface)", padding: 12, borderRadius: 8, border: "1px solid var(--af-border)" }}>
+        <div style={errorPanel}>
           <strong>Error:</strong> {state.message}
         </div>
       )}
 
-      {narrative && (
-        <div
-          className="af-panel"
-          style={{ padding: "24px 28px", fontSize: 14, lineHeight: 1.65, color: "var(--af-text)" }}
-        >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{narrative}</ReactMarkdown>
-        </div>
-      )}
-
       {state.kind === "idle" && (
-        <div
-          className="af-empty"
-          style={{ padding: "40px 20px", textAlign: "center", fontSize: 13, color: "var(--af-text-tertiary)" }}
-        >
-          Pick a time range and press <strong>Generate insights</strong>. Claude will read a compact per-session summary of that window and write you a narrative retrospective.
+        <div style={{ fontSize: 13, color: "var(--af-text-tertiary)", textAlign: "center" }}>
+          Pick a range and press Generate. Claude reads per-session capsules and composes a structured report.
         </div>
       )}
 
@@ -243,3 +163,63 @@ export function InsightsView() {
     </div>
   );
 }
+
+const rangeGroup: React.CSSProperties = {
+  display: "inline-flex", gap: 4,
+  border: "1px solid var(--af-border)", borderRadius: 8, padding: 2,
+};
+
+const rangeBtn: React.CSSProperties = {
+  padding: "6px 14px", fontSize: 12, fontWeight: 600,
+  border: "none", borderRadius: 6, cursor: "pointer",
+};
+
+const primaryBtn: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  padding: "7px 14px", border: "1px solid var(--af-accent)", borderRadius: 8,
+  background: "var(--af-accent)", color: "white",
+  fontSize: 12, fontWeight: 600, cursor: "pointer",
+  marginLeft: "auto",
+};
+
+const secondaryBtn: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  padding: "7px 14px", border: "1px solid var(--af-border)", borderRadius: 8,
+  background: "var(--af-surface)", color: "var(--af-text)",
+  fontSize: 12, fontWeight: 500, cursor: "pointer",
+  marginLeft: "auto",
+};
+
+const stepsPanel: React.CSSProperties = {
+  background: "var(--af-surface)",
+  border: "1px solid var(--af-border-subtle)",
+  borderRadius: 12, padding: "18px 22px",
+};
+
+const stepsHeader: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8,
+  fontSize: 12, color: "var(--af-text-secondary)",
+  marginBottom: 14, fontWeight: 600,
+};
+
+const stepsList: React.CSSProperties = {
+  listStyle: "none", padding: 0, margin: 0,
+  display: "flex", flexDirection: "column", gap: 6,
+  fontFamily: "var(--font-mono)", fontSize: 12,
+  color: "var(--af-text)",
+};
+
+const stepItem: React.CSSProperties = {
+  display: "flex", alignItems: "baseline", gap: 8,
+};
+
+const stepDot: React.CSSProperties = {
+  color: "var(--af-accent)", fontSize: 14, width: 10,
+};
+
+const errorPanel: React.CSSProperties = {
+  padding: 14, borderRadius: 10,
+  border: "1px solid var(--af-border)",
+  background: "var(--af-surface)",
+  fontSize: 12, color: "var(--af-danger, #c13f33)",
+};
