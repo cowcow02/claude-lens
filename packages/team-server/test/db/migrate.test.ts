@@ -12,7 +12,7 @@ afterAll(async () => {
 });
 
 describe("migrations", () => {
-  it("creates all 7 tables", async () => {
+  it("creates all tables", async () => {
     const pool = getPool();
     const result = await pool.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
@@ -20,13 +20,19 @@ describe("migrations", () => {
        ORDER BY table_name`
     );
     const tables = result.rows.map((r) => r.table_name);
-    expect(tables).toContain("teams");
-    expect(tables).toContain("members");
-    expect(tables).toContain("invites");
-    expect(tables).toContain("admin_sessions");
-    expect(tables).toContain("daily_rollups");
-    expect(tables).toContain("events");
-    expect(tables).toContain("ingest_log");
+    for (const expected of [
+      "user_accounts",
+      "teams",
+      "memberships",
+      "invites",
+      "sessions",
+      "daily_rollups",
+      "events",
+      "ingest_log",
+      "server_config",
+    ]) {
+      expect(tables).toContain(expected);
+    }
   });
 
   it("is idempotent — running twice does not throw", async () => {
