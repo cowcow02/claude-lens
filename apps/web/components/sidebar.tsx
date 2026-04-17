@@ -13,6 +13,7 @@ import {
   Search,
   Activity,
   Gauge,
+  Lightbulb,
 } from "lucide-react";
 import { formatRelative, prettyProjectName } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -192,6 +193,13 @@ export function Sidebar({
           icon={<Gauge size={15} />}
         >
           Usage
+        </NavLink>
+        <NavLink
+          href="/insights"
+          active={pathname === "/insights"}
+          icon={<Lightbulb size={15} />}
+        >
+          Insights
         </NavLink>
       </nav>
 
