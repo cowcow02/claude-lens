@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  toLocalDay,
   daysBetween,
   dailyActivity,
   computeParallelism,
@@ -55,7 +54,6 @@ describe("dailyActivity", () => {
     ];
     const buckets = dailyActivity(sessions);
     expect(buckets.length).toBeGreaterThanOrEqual(3); // at least 04-08, 04-09, 04-10
-    const byDate = Object.fromEntries(buckets.map((b) => [b.date, b]));
     // Depending on TZ, the day bucket may be one off; just verify we have contiguous coverage.
     const emptyDayCount = buckets.filter((b) => b.sessions === 0).length;
     expect(emptyDayCount).toBeGreaterThanOrEqual(1);

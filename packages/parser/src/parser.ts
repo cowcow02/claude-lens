@@ -83,7 +83,7 @@ function toEvent(raw: unknown, index: number): SessionEvent | null {
 
     const first = content[0];
     let role: EventRole = "agent";
-    let preview = "";
+    let preview: string;
     let toolName: string | undefined;
     let toolUseId: string | undefined;
 

@@ -8,19 +8,22 @@
     "build": "next build",
     "start": "next start --port 3322",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint"
   },
   "dependencies": {
+    "@claude-lens/parser": "workspace:*",
     "next": "^16.2.2",
+    "pg": "^8.13.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "pg": "^8.13.0",
-    "zod": "^3.24.0",
-    "@claude-lens/parser": "workspace:*"
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",
     "@types/react": "^19.1.0",
+    "@vitest/coverage-v8": "^3.2.4",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0"
   }

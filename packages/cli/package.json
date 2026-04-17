@@ -17,12 +17,14 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist .turbo"
+    "clean": "rm -rf dist .turbo",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint"
   },
-  "dependencies": {},
   "devDependencies": {
     "@claude-lens/parser": "workspace:*",
     "@types/node": "^20.11.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "esbuild": "^0.25.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"

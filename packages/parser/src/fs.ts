@@ -132,7 +132,7 @@ export async function walkJsonlFiles(root: string = DEFAULT_ROOT): Promise<FileR
     return fileListCache.files;
   }
 
-  let topEntries: import("node:fs").Dirent[] = [];
+  let topEntries: import("node:fs").Dirent[];
   try {
     topEntries = await fs.readdir(root, { withFileTypes: true });
   } catch {
