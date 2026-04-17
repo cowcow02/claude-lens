@@ -17,11 +17,13 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "env": ["DATABASE_URL", "NODE_ENV", "FLEETLENS_ENCRYPTION_KEY", "BASE_URL"]
     },
     "test:coverage": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "env": ["DATABASE_URL", "NODE_ENV", "FLEETLENS_ENCRYPTION_KEY", "BASE_URL"]
     },
     "clean": {
       "cache": false
