@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SessionMeta } from "@claude-lens/parser";
+import { dailyActivity, type DailyBucket, type SessionMeta } from "@claude-lens/parser";
 import type { TeamConfig } from "./config.js";
 
 export type DailyRollup = {
@@ -22,40 +22,21 @@ export type IngestPayload = {
   dailyRollup: DailyRollup;
 };
 
-export function buildDailyRollup(sessions: SessionMeta[], day: string): DailyRollup {
-  let agentTimeMs = 0;
-  let toolCalls = 0;
-  let turns = 0;
-  let tokensInput = 0;
-  let tokensOutput = 0;
-  let tokensCacheRead = 0;
-  let tokensCacheWrite = 0;
-
-  for (const s of sessions) {
-    agentTimeMs += s.airTimeMs ?? 0;
-    toolCalls += s.toolCallCount ?? 0;
-    turns += s.turnCount ?? 0;
-    if (s.totalUsage) {
-      tokensInput += s.totalUsage.input ?? 0;
-      tokensOutput += s.totalUsage.output ?? 0;
-      tokensCacheRead += s.totalUsage.cacheRead ?? 0;
-      tokensCacheWrite += s.totalUsage.cacheWrite ?? 0;
-    }
-  }
-
+export function bucketToRollup(b: DailyBucket): DailyRollup {
   return {
-    day,
-    agentTimeMs,
-    sessions: sessions.length,
-    toolCalls,
-    turns,
-    tokens: {
-      input: tokensInput,
-      output: tokensOutput,
-      cacheRead: tokensCacheRead,
-      cacheWrite: tokensCacheWrite,
-    },
+    day: b.date,
+    agentTimeMs: b.airTimeMs,
+    sessions: b.sessions,
+    toolCalls: b.toolCalls,
+    turns: b.turns,
+    tokens: { ...b.tokens },
   };
+}
+
+export function buildRollupsForRange(sessions: SessionMeta[], sinceDay?: string): DailyRollup[] {
+  const buckets = dailyActivity(sessions);
+  const kept = sinceDay ? buckets.filter((b) => b.date >= sinceDay) : buckets;
+  return kept.map(bucketToRollup);
 }
 
 export function buildIngestPayload(rollup: DailyRollup): IngestPayload {

@@ -11,6 +11,7 @@ export type TeamConfig = {
   bearerToken: string;
   teamSlug: string;
   pairedAt: string;
+  lastSyncedDay?: string;
 };
 
 export function readTeamConfig(dir = DEFAULT_DIR): TeamConfig | null {

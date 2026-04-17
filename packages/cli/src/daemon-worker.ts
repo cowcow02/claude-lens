@@ -19,9 +19,7 @@ import { fetchUsage, UsageApiError } from "./usage/api.js";
 import { appendSnapshot } from "./usage/storage.js";
 import { isUsable, readOAuthCredentials } from "./usage/token.js";
 import { BASE_INTERVAL_MS, nextIntervalMs, type PollOutcome } from "./usage/backoff.js";
-import { readTeamConfig } from "./team/config.js";
-import { buildDailyRollup, buildIngestPayload, pushToTeamServer, type IngestPayload } from "./team/push.js";
-import { enqueuePayload, dequeuePayloads } from "./team/queue.js";
+import { runTeamSync } from "./team/sync.js";
 
 const STATE_DIR = join(homedir(), ".cclens");
 const USAGE_LOG = join(STATE_DIR, "usage.jsonl");
@@ -64,44 +62,6 @@ async function tick(): Promise<PollOutcome> {
   }
 }
 
-async function teamTick(): Promise<void> {
-  const config = readTeamConfig();
-  if (!config) return;
-
-  try {
-    const { listSessions } = await import("@claude-lens/parser/fs");
-    const { toLocalDay } = await import("@claude-lens/parser");
-    const today = toLocalDay(Date.now());
-
-    const allSessions = await listSessions();
-    const todaySessions = allSessions.filter((s) => {
-      if (!s.firstTimestamp) return false;
-      const ms = Date.parse(s.firstTimestamp);
-      return !Number.isNaN(ms) && toLocalDay(ms) === today;
-    });
-
-    const rollup = buildDailyRollup(todaySessions, today);
-    const payload = buildIngestPayload(rollup);
-    const result = await pushToTeamServer(config, payload);
-
-    if (result.ok) {
-      log("info", `team push ok: ${rollup.sessions} sessions, ${Math.round(rollup.agentTimeMs / 60000)}m agent time`);
-      const queued = dequeuePayloads() as IngestPayload[];
-      for (let i = 0; i < queued.length; i++) {
-        const qResult = await pushToTeamServer(config, queued[i]);
-        if (!qResult.ok) {
-          for (const remaining of queued.slice(i)) enqueuePayload(remaining);
-          break;
-        }
-      }
-    } else {
-      log("warn", `team push failed (${result.status}): ${JSON.stringify(result.body)}`);
-      enqueuePayload(payload);
-    }
-  } catch (err) {
-    log("warn", `team push error: ${(err as Error).message}`);
-  }
-}
 
 function scheduleAfter(now: number, outcome: PollOutcome): void {
   const prev = currentIntervalMs;
@@ -154,9 +114,11 @@ async function runLoop(): Promise<void> {
         }
         const outcome = await tick();
         scheduleAfter(Date.now(), outcome);
-        // Team push is independent of usage poll outcome
-        await teamTick();
       }
+
+      // Team push is independent of Claude OAuth state — it uses its own bearer
+      // and a different server. Runs whether or not the usage poll fired.
+      await runTeamSync(log);
     }
     await sleep(WATCHDOG_INTERVAL_MS);
   }

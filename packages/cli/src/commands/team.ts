@@ -21,12 +21,28 @@ export async function team(args: string[]) {
       await teamLogs();
       break;
     }
+    case "sync": {
+      const { runTeamSync } = await import("../team/sync.js");
+      const outcome = await runTeamSync((level, msg) => console.log(`[${level}] ${msg}`));
+      if (!outcome.paired) {
+        console.error("Not paired. Run 'fleetlens team join <url> <device-token>' first.");
+        process.exit(1);
+      }
+      if (outcome.error) process.exit(1);
+      console.log(
+        `✓ ${outcome.pushed} day${outcome.pushed === 1 ? "" : "s"} pushed` +
+        (outcome.queuedDrained ? `, ${outcome.queuedDrained} queued retried` : "") +
+        (outcome.queued ? `, ${outcome.queued} queued for retry (will fire next cycle)` : "")
+      );
+      break;
+    }
     default:
-      console.log(`Usage: fleetlens team <join|status|leave|logs>
+      console.log(`Usage: fleetlens team <join|status|leave|logs|sync>
 
-  join <url> <token>    Pair with a team server using an invite token
-  status                Show team pairing state and sync info
-  leave                 Unpair from the team server
-  logs                  Show recent team-related daemon log entries`);
+  join <url> <device-token>    Pair daemon with a team server
+  status                       Show team pairing state and sync info
+  leave                        Unpair from the team server
+  logs                         Show recent team-related daemon log entries
+  sync                         Push any un-synced days now (skip 5-min wait)`);
   }
 }
