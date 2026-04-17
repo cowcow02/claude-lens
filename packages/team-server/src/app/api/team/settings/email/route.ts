@@ -1,0 +1,36 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requireTeamMembership, requireAdmin } from "../../../../../lib/route-helpers";
+import { encryptAesGcm } from "../../../../../lib/crypto";
+
+export async function PUT(req: NextRequest) {
+  const slug = req.nextUrl.searchParams.get("team");
+  if (!slug) return NextResponse.json({ error: "team slug required" }, { status: 400 });
+
+  const ctx = await requireTeamMembership(req, slug, { bySlug: true });
+  if (ctx instanceof NextResponse) return ctx;
+  const adminErr = requireAdmin(ctx);
+  if (adminErr) return adminErr;
+
+  const encKey = process.env.FLEETLENS_ENCRYPTION_KEY;
+  if (!encKey) {
+    return NextResponse.json(
+      { error: "FLEETLENS_ENCRYPTION_KEY env var must be set to store Resend keys at rest" },
+      { status: 501 },
+    );
+  }
+
+  const { apiKey } = await req.json();
+  if (!apiKey) return NextResponse.json({ error: "API key required" }, { status: 400 });
+
+  const validate = await fetch("https://api.resend.com/domains", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!validate.ok) return NextResponse.json({ error: "Invalid Resend API key" }, { status: 400 });
+
+  const encrypted = encryptAesGcm(apiKey, encKey);
+  await ctx.pool.query(
+    "UPDATE teams SET resend_api_key_enc = $1 WHERE id = $2",
+    [encrypted, ctx.membership.team_id],
+  );
+  return NextResponse.json({ saved: true });
+}

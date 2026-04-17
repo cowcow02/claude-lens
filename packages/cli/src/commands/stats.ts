@@ -4,8 +4,6 @@ import { estimateCost } from "../pricing.js";
 import { renderTable, type TableRow } from "../table.js";
 import { getServerStatus } from "../server.js";
 
-declare const CLI_VERSION: string;
-
 export async function stats(args: string[]): Promise<void> {
   const live = args.includes("--live");
   const sinceIdx = args.indexOf("-s");
