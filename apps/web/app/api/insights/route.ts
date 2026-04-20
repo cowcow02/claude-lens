@@ -1,14 +1,15 @@
 /**
- * Insights agent — structured ReportData pipeline.
+ * Insights agent — structured ReportData pipeline with persistence.
  *
  * POST /api/insights
- *   { range_type: "week" | "4weeks" | "custom",
+ *   { range_type: "prior_week" | "week" | "4weeks_completed" | "4weeks" | "custom",
  *     since?: "YYYY-MM-DD", until?: "YYYY-MM-DD" }
  *
  * Streams SSE:
- *   { type: "status", text }    progress updates (agentic visibility)
- *   { type: "report", report }  full ReportData (one event when ready)
- *   { type: "done", promptTokens? }
+ *   { type: "status", phase: "data"|"analyst"|"compose", text }
+ *   { type: "report", report }
+ *   { type: "saved", key, saved_at }
+ *   { type: "done" }
  *   { type: "error", message }
  */
 import { listSessions, getSession, loadUsageByDay } from "@claude-lens/parser/fs";
@@ -17,12 +18,14 @@ import {
   buildPeriodBundle,
   aggregateConcurrency,
   calendarWeek,
-  last4WeeksRange,
+  priorCalendarWeek,
+  last4CompletedWeeks,
   computeBurstsFromSessions,
   type SessionCapsule,
   type PeriodBundle,
 } from "@claude-lens/parser";
 import { INSIGHTS_SYSTEM_PROMPT } from "@/lib/ai/insights-prompt";
+import { saveReport, keyForRange } from "@/lib/ai/saved-reports";
 import { spawn } from "node:child_process";
 import type { ReportData, IconKey } from "@/components/insight-report";
 
@@ -56,6 +59,45 @@ function safeIcon(v: string): IconKey {
   return VALID_ICONS.includes(v as IconKey) ? (v as IconKey) : "Sparkles";
 }
 
+function resolveRange(body: { range_type?: string; since?: string; until?: string }): {
+  start: Date; end: Date; range_type: ReportData["range_type"]; in_progress: boolean;
+} {
+  switch (body.range_type) {
+    case "prior_week": {
+      const r = priorCalendarWeek();
+      return { ...r, range_type: "week", in_progress: false };
+    }
+    case "4weeks_completed": {
+      const r = last4CompletedWeeks();
+      return { ...r, range_type: "4weeks", in_progress: false };
+    }
+    case "4weeks": {
+      // "current" 4-week window, extending to this week's Sunday (in progress)
+      const { start: prior_start, end: prior_end } = last4CompletedWeeks();
+      const cur = calendarWeek();
+      const end = cur.end; // this week's Sunday
+      const start = new Date(end);
+      start.setDate(end.getDate() - 27);
+      void prior_start; void prior_end;
+      return { start, end, range_type: "4weeks", in_progress: true };
+    }
+    case "custom": {
+      if (!body.since || !body.until) throw new Error("custom range requires since + until");
+      return {
+        start: new Date(body.since),
+        end: new Date(body.until),
+        range_type: "custom",
+        in_progress: false,
+      };
+    }
+    case "week":
+    default: {
+      const r = calendarWeek();
+      return { ...r, range_type: "week", in_progress: true };
+    }
+  }
+}
+
 export async function POST(request: Request) {
   let body: { range_type?: string; since?: string; until?: string };
   try {
@@ -70,12 +112,11 @@ export async function POST(request: Request) {
       let closed = false;
       function send(data: Record<string, unknown>) {
         if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-        } catch {
-          closed = true;
-        }
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)); }
+        catch { closed = true; }
       }
+      const status = (phase: "data" | "analyst" | "compose", text: string) =>
+        send({ type: "status", phase, text });
       function finish() {
         if (!closed) {
           try { controller.close(); } catch { /* already closed */ }
@@ -83,33 +124,26 @@ export async function POST(request: Request) {
         }
       }
 
-      try {
-        // ── 1. Resolve range ────────────────────────────────────
-        let range: { start: Date; end: Date; range_type: "week" | "4weeks" | "custom" };
-        if (body.range_type === "4weeks") {
-          range = { ...last4WeeksRange(), range_type: "4weeks" };
-        } else if (body.range_type === "custom" && body.since && body.until) {
-          range = {
-            start: new Date(body.since),
-            end: new Date(body.until),
-            range_type: "custom",
-          };
-        } else {
-          range = { ...calendarWeek(), range_type: "week" };
-        }
-        const rangeLabel = range.range_type === "4weeks" ? "last 4 weeks" : "this week";
-        send({ type: "status", text: `Scanning sessions for ${rangeLabel}…` });
+      const t0 = Date.now();
 
-        // ── 2. Load sessions in range ───────────────────────────
+      try {
+        const range = resolveRange(body);
+        const rangeLabel = range.range_type === "week"
+          ? (range.in_progress ? "this week (in progress)" : "last week")
+          : range.range_type === "4weeks"
+            ? (range.in_progress ? "last 4 weeks (incl. current)" : "last 4 completed weeks")
+            : "custom range";
+        status("data", `Window: ${rangeLabel}`);
+
+        // Phase 1 · Data
         const metas = await listSessions({ limit: 10000 });
         const inRange = metas.filter((m) => {
           if (!m.firstTimestamp) return false;
           const t = new Date(m.firstTimestamp).getTime();
           return t >= range.start.getTime() && t <= range.end.getTime();
         });
-        send({ type: "status", text: `Found ${inRange.length} sessions. Building capsules…` });
+        status("data", `${inRange.length} sessions found in range`);
 
-        // ── 3. Build capsules ───────────────────────────────────
         const caps: SessionCapsule[] = [];
         let trivial = 0;
         for (let i = 0; i < inRange.length; i++) {
@@ -117,57 +151,58 @@ export async function POST(request: Request) {
             const d = await getSession(inRange[i]!.id);
             if (!d) continue;
             const cap = buildCapsule(d, { compact: true });
-            if (cap.outcome === "trivial") {
-              trivial++;
-            } else {
-              caps.push(cap);
-            }
+            if (cap.outcome === "trivial") trivial++;
+            else caps.push(cap);
           } catch { /* skip */ }
-          if ((i + 1) % 10 === 0) {
-            send({ type: "status", text: `Built ${caps.length}/${inRange.length} capsules…` });
+          if ((i + 1) % 10 === 0 || i === inRange.length - 1) {
+            status("data", `Built ${caps.length}/${inRange.length} capsules (${trivial} trivial)`);
           }
         }
 
-        // ── 4. Aggregates + concurrency + usage ─────────────────
-        send({ type: "status", text: `Aggregating ${caps.length} sessions across ${range.range_type === "4weeks" ? 28 : 7} days…` });
+        status("data", `Aggregating ${caps.length} sessions over ${Math.round((range.end.getTime() - range.start.getTime()) / 86400000) + 1} days`);
         const bundle: PeriodBundle = buildPeriodBundle(caps, {
           period: range,
           trivial_dropped: trivial,
           sessions_total: inRange.length,
         });
 
-        send({ type: "status", text: "Computing concurrency bursts…" });
-        const bursts = computeBurstsFromSessions(inRange);
-        bundle.concurrency = aggregateConcurrency(bursts, range);
+        status("data", "Computing concurrency bursts");
+        bundle.concurrency = aggregateConcurrency(computeBurstsFromSessions(inRange), range);
 
-        send({ type: "status", text: "Loading plan utilization…" });
-        try {
-          bundle.usage = await loadUsageByDay(range.start, range.end);
-        } catch { /* optional */ }
+        status("data", "Loading license utilization");
+        try { bundle.usage = await loadUsageByDay(range.start, range.end); }
+        catch { /* optional */ }
 
-        // ── 5. Call the analyst ─────────────────────────────────
-        send({ type: "status", text: `${caps.length} substantive sessions · calling analyst…` });
-        const payload = {
-          period: bundle.period,
-          aggregates: bundle,
-          capsules: caps,
-        };
-        const userPrompt = `Period payload:\n\n${JSON.stringify(payload, null, 0)}\n\n---\n\nReturn the JSON per your system instructions.`;
+        // Phase 2 · Analyst
+        const payloadBytes = JSON.stringify({ period: bundle.period, aggregates: bundle, capsules: caps }).length;
+        status("analyst", `Sending ${(payloadBytes / 1024).toFixed(0)} KB to Claude (sonnet)`);
 
-        const narrative = await callAnalyst(userPrompt, send);
+        const narrative = await callAnalyst(bundle, caps, status);
         if (!narrative) {
           send({ type: "error", message: "Analyst returned no parseable JSON." });
           finish();
           return;
         }
 
-        // ── 6. Merge aggregates + narrative → ReportData ────────
-        send({ type: "status", text: "Composing report…" });
-        const startedAt = Date.now();
-        const report = mergeReport(bundle, narrative, caps);
-        report.meta.pipeline_ms = Date.now() - startedAt + /* placeholder */ 0;
+        // Phase 3 · Compose
+        status("compose", "Merging aggregates + narrative");
+        const report = mergeReport(bundle, narrative, caps, range);
+        report.meta.pipeline_ms = Date.now() - t0;
 
         send({ type: "report", report });
+
+        // Persistence
+        if (!range.in_progress) {
+          status("compose", "Saving report to disk");
+          const key = keyForRange(range.range_type, bundle.period.start);
+          try {
+            await saveReport(key, report);
+            send({ type: "saved", key, saved_at: new Date().toISOString() });
+          } catch (e) {
+            send({ type: "status", phase: "compose", text: `(save failed: ${(e as Error).message})` });
+          }
+        }
+
         send({ type: "done" });
         finish();
       } catch (err) {
@@ -192,9 +227,16 @@ export async function POST(request: Request) {
 // ──────────────────────────────────────────────────────────────────
 
 async function callAnalyst(
-  userPrompt: string,
-  send: (data: Record<string, unknown>) => void,
+  bundle: PeriodBundle,
+  caps: SessionCapsule[],
+  status: (phase: "data" | "analyst" | "compose", text: string) => void,
 ): Promise<Narrative | null> {
+  const userPrompt = `Period payload:\n\n${JSON.stringify({
+    period: bundle.period,
+    aggregates: bundle,
+    capsules: caps,
+  }, null, 0)}\n\n---\n\nReturn the JSON per your system instructions.`;
+
   return new Promise((resolve) => {
     const args = [
       "-p",
@@ -212,7 +254,8 @@ async function callAnalyst(
     proc.stdin.end();
 
     let buffer = "";
-    let streamed = 0;
+    let lastReportedKb = -1;
+    const phaseStart = Date.now();
     proc.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
       for (const line of text.split("\n")) {
@@ -227,41 +270,32 @@ async function callAnalyst(
               for (const block of content) {
                 if (block.type === "text" && typeof block.text === "string") {
                   buffer += block.text;
-                  streamed += block.text.length;
-                  if (streamed % 200 < 40) {
-                    send({ type: "status", text: `Analyst writing… (${streamed} chars)` });
+                  const kb = Math.floor(buffer.length / 1024);
+                  if (kb > lastReportedKb) {
+                    lastReportedKb = kb;
+                    const secs = Math.round((Date.now() - phaseStart) / 1000);
+                    status("analyst", `Claude composing… ${buffer.length.toLocaleString()} chars (${secs}s)`);
                   }
                 }
               }
             }
           }
-        } catch { /* skip non-JSON framing lines */ }
+        } catch { /* skip non-JSON framing */ }
       }
     });
-
-    proc.stderr.on("data", () => { /* silence */ });
-
     proc.on("close", () => {
       const json = extractJsonBlock(buffer);
-      if (!json) {
-        resolve(null);
-        return;
-      }
-      try {
-        resolve(JSON.parse(json) as Narrative);
-      } catch {
-        resolve(null);
-      }
+      if (!json) { resolve(null); return; }
+      try { resolve(JSON.parse(json) as Narrative); }
+      catch { resolve(null); }
     });
     proc.on("error", () => resolve(null));
   });
 }
 
 function extractJsonBlock(s: string): string | null {
-  // Prefer a ```json fence
   const fence = /```json\s*([\s\S]*?)```/m.exec(s);
   if (fence) return fence[1]!.trim();
-  // Fallback: first { … last } spanning block
   const first = s.indexOf("{");
   const last = s.lastIndexOf("}");
   if (first !== -1 && last > first) return s.slice(first, last + 1);
@@ -276,6 +310,7 @@ function mergeReport(
   bundle: PeriodBundle,
   n: Narrative,
   caps: SessionCapsule[],
+  range: { in_progress: boolean },
 ): ReportData {
   const skillEntries = Object.entries(bundle.skills_total).sort((a, b) => b[1] - a[1]);
   const top_skills = skillEntries.slice(0, 6).map(([name, count]) => ({ name, count }));
@@ -344,12 +379,12 @@ function mergeReport(
     });
   }
 
-  const totalSubagentTurns = caps.filter((c) => c.numbers.subagent_turns > 0).length;
-  const loopSessions = caps.filter((c) => c.numbers.consec_same_tool_max >= 8).length;
+  const periodPrefix = bundle.period.range_type === "4weeks" ? "Last 4 weeks ·" : "Week of";
+  const in_progress_suffix = range.in_progress ? " · in progress" : "";
 
   return {
-    period_label: `Week of ${bundle.period.label}`,
-    period_sublabel: `Calendar ${bundle.period.range_type === "4weeks" ? "4-week rollup" : "week · Mon–Sun"}`,
+    period_label: `${periodPrefix} ${bundle.period.label}`,
+    period_sublabel: `Calendar ${bundle.period.range_type === "4weeks" ? "4-week rollup" : "week · Mon–Sun"}${in_progress_suffix}`,
     range_type: bundle.period.range_type,
     archetype: {
       label: n.archetype.label,
@@ -364,10 +399,7 @@ function mergeReport(
     projects,
     shipped,
     patterns: n.patterns.map((p) => ({
-      icon: safeIcon(p.icon),
-      title: p.title,
-      stat: p.stat,
-      note: p.note,
+      icon: safeIcon(p.icon), title: p.title, stat: p.stat, note: p.note,
     })),
     concurrency: {
       multi_agent_days: bundle.concurrency?.multi_agent_days ?? 0,

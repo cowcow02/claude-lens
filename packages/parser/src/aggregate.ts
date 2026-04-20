@@ -304,8 +304,19 @@ export function calendarWeek(ref: Date = new Date()): { start: Date; end: Date }
   return { start: monday, end: sunday };
 }
 
-export function last4WeeksRange(ref: Date = new Date()): { start: Date; end: Date } {
-  const { end } = calendarWeek(ref);
+/** Calendar week that ended most recently — i.e. the week before `ref`'s. */
+export function priorCalendarWeek(ref: Date = new Date()): { start: Date; end: Date } {
+  const cur = calendarWeek(ref);
+  const prevEnd = new Date(cur.start);
+  prevEnd.setDate(cur.start.getDate() - 1);
+  const prevStart = new Date(prevEnd);
+  prevStart.setDate(prevEnd.getDate() - 6);
+  return { start: prevStart, end: prevEnd };
+}
+
+/** Last 4 COMPLETED weeks (ends on the most recent Sunday, exclusive of the ongoing week). */
+export function last4CompletedWeeks(ref: Date = new Date()): { start: Date; end: Date } {
+  const { end } = priorCalendarWeek(ref);
   const start = new Date(end);
   start.setDate(end.getDate() - 27);
   return { start, end };
