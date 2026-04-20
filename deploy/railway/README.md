@@ -1,31 +1,26 @@
 # Deploy Fleetlens Team Edition on Railway
 
-One-click template (Postgres + team-server, env vars pre-wired):
+Zero-config template (Postgres + team-server, every variable pre-filled):
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/sGuijx?PORT=3322&NODE_ENV=production&RAILWAY_DOCKERFILE_PATH=packages%2Fteam-server%2FDockerfile)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/sGuijx)
 
 ## What the template provisions
 
 - `fleetlens-team-server` — the Next.js 16 server built from `packages/team-server/Dockerfile`, public domain auto-generated
 - `Postgres` — Postgres 18 with a 5 GB volume at `/var/lib/postgresql/data`
 
-## What's pre-wired
+## Everything is pre-wired
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (private network, auto) |
-| `BASE_URL` | `https://${{RAILWAY_PUBLIC_DOMAIN}}` (auto after domain is assigned) |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (private network) |
+| `BASE_URL` | `https://${{RAILWAY_PUBLIC_DOMAIN}}` |
 | `NODE_ENV` | `production` |
 | `PORT` | `3322` |
 | `RAILWAY_DOCKERFILE_PATH` | `packages/team-server/Dockerfile` |
+| `FLEETLENS_ENCRYPTION_KEY` | `${{ secret(64, 'abcdef0123456789') }}` — unique per deploy |
 
-## One value you fill in
-
-`FLEETLENS_ENCRYPTION_KEY` — any 32-byte hex string. Used to encrypt SMTP credentials for invite emails; if you skip SMTP setup entirely, any placeholder works. Generate one locally:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
+Postgres variables (`POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD`, etc.) are all defaulted or auto-generated.
 
 ## First-run flow
 

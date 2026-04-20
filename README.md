@@ -10,9 +10,9 @@ Nothing leaves your machine.
 
 ## Team Edition (self-hosted)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/sGuijx?PORT=3322&NODE_ENV=production&RAILWAY_DOCKERFILE_PATH=packages%2Fteam-server%2FDockerfile)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/sGuijx)
 
-One click spins up the Fleetlens team server + Postgres on Railway. Postgres + private-network DB connection + public domain are all pre-wired. Fill in one `FLEETLENS_ENCRYPTION_KEY` (any 32-byte hex string — `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`), hit Deploy, and you'll have a signup page live at your `*.up.railway.app` URL in ~90 seconds. The first account to sign up becomes the admin of team #1. Full setup notes in [`deploy/railway/`](./deploy/railway/README.md). Docker Compose and AWS Terraform alternatives live under [`deploy/`](./deploy).
+One click spins up the Fleetlens team server + Postgres on Railway. Postgres, private-network DB connection, public domain, and a freshly-generated encryption key are all pre-wired — no fields to fill in. Hit Deploy and you'll have a signup page live at your `*.up.railway.app` URL in ~90 seconds. The first account to sign up becomes the admin of team #1. Full setup notes in [`deploy/railway/`](./deploy/railway/README.md). Docker Compose and AWS Terraform alternatives live under [`deploy/`](./deploy).
 
 ## What makes it different
 
