@@ -249,8 +249,8 @@ function HistoryView({
   onGenerate: (r: RangeChoice) => void;
   onOpen: (key: string) => void;
 }) {
-  const savedKeys = new Set(saved.map((s) => s.key));
-  const recommendedAlreadyGenerated = savedKeys.has(`week-${isoDay(priorWeekStart())}`);
+  const priorKey = `week-${isoDay(priorWeekStart())}`;
+  const priorSaved = saved.find((s) => s.key === priorKey);
 
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", padding: "32px 40px 64px", display: "flex", flexDirection: "column", gap: 28 }}>
@@ -262,18 +262,34 @@ function HistoryView({
         </p>
       </header>
 
-      {/* Primary CTA */}
+      {/* Primary CTA — view the saved one if it exists, otherwise generate */}
       <div style={ctaPanelStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={ctaIconWrap}><Calendar size={16} color="var(--af-accent)" /></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <div style={ctaEyebrow}>{recommendedAlreadyGenerated ? "Regenerate" : "Recommended"}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+            <div style={ctaEyebrow}>{priorSaved ? "Last week" : "Recommended"}</div>
             <div style={ctaTitle}>{defaultRange.label}</div>
-            <div style={ctaPeriod}>{defaultRange.period} · {defaultRange.note}</div>
+            <div style={ctaPeriod}>
+              {defaultRange.period}
+              {priorSaved
+                ? ` · saved ${timeAgo(priorSaved.saved_at)} · ${priorSaved.archetype_label}`
+                : ` · ${defaultRange.note}`}
+            </div>
           </div>
-          <button type="button" onClick={() => onGenerate(defaultRange)} style={{ ...primaryBtn, marginLeft: "auto" }}>
-            <Zap size={13} /> {recommendedAlreadyGenerated ? "Regenerate" : "Generate"}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", flexShrink: 0 }}>
+            {priorSaved && (
+              <button type="button" onClick={() => onGenerate(defaultRange)} style={ghostBtn} title="Discard saved report and re-run the pipeline">
+                <Zap size={11} /> Regenerate
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => priorSaved ? onOpen(priorSaved.key) : onGenerate(defaultRange)}
+              style={primaryBtn}
+            >
+              {priorSaved ? <>View report <ChevronRight size={13} /></> : <><Zap size={13} /> Generate</>}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -281,7 +297,7 @@ function HistoryView({
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={miniSectionTitle}>Other windows</div>
         {ranges.slice(1).map((r) => {
-          const already = r.id === "prior_week" && savedKeys.has(`week-${isoDay(priorWeekStart())}`);
+          const already = r.id === "prior_week" && !!priorSaved;
           const inProgress = r.id === "week";
           return (
             <div key={r.id} style={altRangeRow}>
@@ -317,17 +333,15 @@ function HistoryView({
             {saved.map((s) => (
               <li key={s.key}>
                 <button type="button" onClick={() => onOpen(s.key)} style={savedRowStyle}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                    <div style={savedIconWrap}>
-                      {ARCHETYPE_ICONS[s.archetype_icon] ?? <Sparkles size={14} />}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0, flex: 1 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em" }}>
                         {s.period_label}
                       </div>
-                      <div style={{ fontSize: 11, color: "var(--af-text-secondary)" }}>
+                      <div style={{ fontSize: 11, color: "var(--af-text-secondary)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ color: "var(--af-accent)", fontWeight: 500 }}>{s.archetype_label}</span>
-                        <span style={{ color: "var(--af-text-tertiary)", marginLeft: 8 }}>
+                        <span style={{ color: "var(--af-text-tertiary)" }}>·</span>
+                        <span style={{ color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
                           {s.sessions_used} sess · {s.prs} PR · saved {timeAgo(s.saved_at)}
                         </span>
                       </div>
@@ -548,6 +562,13 @@ const secondaryBtn: React.CSSProperties = {
   border: "1px solid var(--af-border)", borderRadius: 8,
   background: "var(--af-surface)", color: "var(--af-text)",
   fontSize: 12, fontWeight: 500, cursor: "pointer",
+};
+
+const ghostBtn: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 10px",
+  border: "1px solid transparent", borderRadius: 7,
+  background: "transparent", color: "var(--af-text-secondary)",
+  fontSize: 11.5, fontWeight: 500, cursor: "pointer",
 };
 
 const topNavStyle: React.CSSProperties = {
