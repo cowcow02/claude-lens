@@ -1,19 +1,6 @@
 import { listSessions, getSession } from "@claude-lens/parser/fs";
 import { buildCapsule, type SessionCapsule } from "@claude-lens/parser";
-
-function parseDateArg(raw: string | undefined): Date | null {
-  if (!raw) return null;
-  // YYYYMMDD or YYYY-MM-DD
-  const compact = raw.replace(/-/g, "");
-  if (!/^\d{8}$/.test(compact)) return null;
-  const d = new Date(`${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function flag(args: string[], name: string): string | undefined {
-  const idx = args.indexOf(name);
-  return idx === -1 ? undefined : args[idx + 1];
-}
+import { parseDateArg, flag } from "../args.js";
 
 export async function capsules(args: string[]): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
@@ -21,9 +8,9 @@ export async function capsules(args: string[]): Promise<void> {
     return;
   }
 
-  const compact = args.includes("--compact");
+  const compact = !args.includes("--full");
   const pretty = args.includes("--pretty");
-  const json = args.includes("--json") || !pretty; // default to json
+  const json = args.includes("--json") || !pretty;
   const daysArg = flag(args, "--days");
 
   let sinceDate = parseDateArg(flag(args, "--since"));
@@ -54,15 +41,19 @@ export async function capsules(args: string[]): Promise<void> {
   });
 
   const out: SessionCapsule[] = [];
-  for (const m of inRange) {
-    try {
-      const d = await getSession(m.id);
-      if (!d) continue;
-      const cap = buildCapsule(d, { compact });
-      if (cap.outcome === "trivial") continue;
+  const CONCURRENCY = 8;
+  for (let i = 0; i < inRange.length; i += CONCURRENCY) {
+    const slice = inRange.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(slice.map(async (m) => {
+      try {
+        const d = await getSession(m.id);
+        if (!d) return null;
+        return buildCapsule(d, { compact });
+      } catch { return null; }
+    }));
+    for (const cap of results) {
+      if (!cap || cap.outcome === "trivial") continue;
       out.push(cap);
-    } catch {
-      /* skip */
     }
   }
   out.sort((a, b) => (a.start_iso ?? "").localeCompare(b.start_iso ?? ""));
@@ -100,12 +91,12 @@ Options:
   --since DATE    inclusive start (YYYYMMDD or YYYY-MM-DD). Default: 7 days ago.
   --until DATE    inclusive end. Default: now.
   --days N        alternative to --since (last N days).
-  --compact       session-level only, omit per-turn detail (default: full).
+  --full          include per-turn detail (heavy: ~15 KB/session). Default: compact.
   --json          structured JSON (default when piping).
   --pretty        pretty-printed JSON (with --json) or human-readable table (without).
 
 Examples:
-  fleetlens capsules --days 7 --compact --json | jq '.[] | .outcome' | sort | uniq -c
+  fleetlens capsules --days 7 --json | jq '.[] | .outcome' | sort | uniq -c
   fleetlens capsules --since 2026-04-14 --until 2026-04-20 --pretty
-  fleetlens capsules --days 30 --compact > /tmp/month.json`);
+  fleetlens capsules --days 30 > /tmp/month.json`);
 }

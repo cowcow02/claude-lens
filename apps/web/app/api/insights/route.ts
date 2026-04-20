@@ -72,13 +72,9 @@ function resolveRange(body: { range_type?: string; since?: string; until?: strin
       return { ...r, range_type: "4weeks", in_progress: false };
     }
     case "4weeks": {
-      // "current" 4-week window, extending to this week's Sunday (in progress)
-      const { start: prior_start, end: prior_end } = last4CompletedWeeks();
-      const cur = calendarWeek();
-      const end = cur.end; // this week's Sunday
+      const end = calendarWeek().end;
       const start = new Date(end);
       start.setDate(end.getDate() - 27);
-      void prior_start; void prior_end;
       return { start, end, range_type: "4weeks", in_progress: true };
     }
     case "custom": {
@@ -146,17 +142,22 @@ export async function POST(request: Request) {
 
         const caps: SessionCapsule[] = [];
         let trivial = 0;
-        for (let i = 0; i < inRange.length; i++) {
-          try {
-            const d = await getSession(inRange[i]!.id);
-            if (!d) continue;
-            const cap = buildCapsule(d, { compact: true });
+        const CONCURRENCY = 8;
+        for (let i = 0; i < inRange.length; i += CONCURRENCY) {
+          const slice = inRange.slice(i, i + CONCURRENCY);
+          const results = await Promise.all(slice.map(async (m) => {
+            try {
+              const d = await getSession(m.id);
+              if (!d) return null;
+              return buildCapsule(d, { compact: true });
+            } catch { return null; }
+          }));
+          for (const cap of results) {
+            if (!cap) continue;
             if (cap.outcome === "trivial") trivial++;
             else caps.push(cap);
-          } catch { /* skip */ }
-          if ((i + 1) % 10 === 0 || i === inRange.length - 1) {
-            status("data", `Built ${caps.length}/${inRange.length} capsules (${trivial} trivial)`);
           }
+          status("data", `Built ${caps.length}/${inRange.length} capsules (${trivial} trivial)`);
         }
 
         status("data", `Aggregating ${caps.length} sessions over ${Math.round((range.end.getTime() - range.start.getTime()) / 86400000) + 1} days`);
@@ -173,11 +174,12 @@ export async function POST(request: Request) {
         try { bundle.usage = await loadUsageByDay(range.start, range.end); }
         catch { /* optional */ }
 
-        // Phase 2 · Analyst
-        const payloadBytes = JSON.stringify({ period: bundle.period, aggregates: bundle, capsules: caps }).length;
-        status("analyst", `Sending ${(payloadBytes / 1024).toFixed(0)} KB to Claude (sonnet)`);
+        // Phase 2 · Analyst — stringify the payload once; reuse for status, prompt, and context_kb.
+        const payloadJson = JSON.stringify({ period: bundle.period, aggregates: bundle, capsules: caps });
+        const payloadKb = Math.round(payloadJson.length / 1024);
+        status("analyst", `Sending ${payloadKb} KB to Claude (sonnet)`);
 
-        const narrative = await callAnalyst(bundle, caps, status);
+        const narrative = await callAnalyst(payloadJson, status);
         if (!narrative) {
           send({ type: "error", message: "Analyst returned no parseable JSON." });
           finish();
@@ -186,7 +188,7 @@ export async function POST(request: Request) {
 
         // Phase 3 · Compose
         status("compose", "Merging aggregates + narrative");
-        const report = mergeReport(bundle, narrative, caps, range);
+        const report = mergeReport(bundle, narrative, range, payloadKb);
         report.meta.pipeline_ms = Date.now() - t0;
 
         send({ type: "report", report });
@@ -227,15 +229,10 @@ export async function POST(request: Request) {
 // ──────────────────────────────────────────────────────────────────
 
 async function callAnalyst(
-  bundle: PeriodBundle,
-  caps: SessionCapsule[],
+  payloadJson: string,
   status: (phase: "data" | "analyst" | "compose", text: string) => void,
 ): Promise<Narrative | null> {
-  const userPrompt = `Period payload:\n\n${JSON.stringify({
-    period: bundle.period,
-    aggregates: bundle,
-    capsules: caps,
-  }, null, 0)}\n\n---\n\nReturn the JSON per your system instructions.`;
+  const userPrompt = `Period payload:\n\n${payloadJson}\n\n---\n\nReturn the JSON per your system instructions.`;
 
   return new Promise((resolve) => {
     const args = [
@@ -309,8 +306,8 @@ function extractJsonBlock(s: string): string | null {
 function mergeReport(
   bundle: PeriodBundle,
   n: Narrative,
-  caps: SessionCapsule[],
   range: { in_progress: boolean },
+  contextKb: number,
 ): ReportData {
   const skillEntries = Object.entries(bundle.skills_total).sort((a, b) => b[1] - a[1]);
   const top_skills = skillEntries.slice(0, 6).map(([name, count]) => ({ name, count }));
@@ -423,7 +420,7 @@ function mergeReport(
       trivial_dropped: bundle.counts.trivial_dropped,
       model: "claude-sonnet-4-6",
       pipeline_ms: 0,
-      context_kb: Math.round(JSON.stringify({ bundle, caps }).length / 1024),
+      context_kb: contextKb,
     },
   };
 }

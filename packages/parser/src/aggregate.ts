@@ -9,7 +9,7 @@
  * snapshots) are computed separately and attached by the caller.
  */
 import type { SessionCapsule } from "./capsule.js";
-import type { ParallelismBurst } from "./analytics.js";
+import { canonicalProjectName, toLocalDay, type ParallelismBurst } from "./analytics.js";
 
 export type DayBucket = {
   date: string;          // "2026-04-14"
@@ -93,11 +93,7 @@ export type PeriodBundle = {
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function isoDay(d: Date): string {
-  // Local YYYY-MM-DD to match Fleetlens's existing daily bucketing convention.
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return toLocalDay(d.getTime());
 }
 
 function rangeDays(start: Date, end: Date): Date[] {
@@ -109,16 +105,6 @@ function rangeDays(start: Date, end: Date): Date[] {
     cur.setDate(cur.getDate() + 1);
   }
   return out;
-}
-
-/** Strip `/.worktrees/<name>` or `/.claude/worktrees/<name>` from the tail of a cwd path. */
-function canonicalProjectName(cwdPath: string): string {
-  const markers = ["/.claude/worktrees/", "/.worktrees/"];
-  for (const m of markers) {
-    const idx = cwdPath.indexOf(m);
-    if (idx !== -1) return cwdPath.slice(0, idx);
-  }
-  return cwdPath;
 }
 
 function prettyProjectName(p: string): string {

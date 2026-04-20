@@ -26,7 +26,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseTranscript } from "./parser.js";
-import { canonicalProjectName, worktreeName } from "./analytics.js";
+import { canonicalProjectName, toLocalDay, worktreeName } from "./analytics.js";
 import { groupByTeam, type TeamView } from "./team.js";
 import type { SessionDetail, SessionEvent, SessionMeta, SubagentRun, Usage } from "./types.js";
 
@@ -856,20 +856,11 @@ type UsageSnapshot = {
   seven_day_sonnet?: { utilization?: number } | null;
 };
 
-function toLocalDayKey(ms: number): string {
-  const d = new Date(ms);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 /**
  * Per-day peak 5-hour plan utilization for the range [start, end] (inclusive),
  * computed from the daemon's JSONL log. The 5-hour window is the most
- * actionable signal for "how hot did I run today."
- *
- * Returns days in the range without any snapshots with peak_util_pct = 0.
+ * actionable signal for "how hot did I run today." Lines are in write order
+ * (ascending time) so we break early once past endMs.
  */
 export async function loadUsageByDay(
   start: Date,
@@ -893,8 +884,10 @@ export async function loadUsageByDay(
       const snap = JSON.parse(trimmed) as UsageSnapshot;
       if (!snap.captured_at) continue;
       const ms = Date.parse(snap.captured_at);
-      if (Number.isNaN(ms) || ms < startMs || ms > endMs) continue;
-      const key = toLocalDayKey(ms);
+      if (Number.isNaN(ms)) continue;
+      if (ms < startMs) continue;
+      if (ms > endMs) break;
+      const key = toLocalDay(ms);
       const util = snap.five_hour?.utilization ?? 0;
       const cur = byDay.get(key) ?? 0;
       if (util > cur) byDay.set(key, util);
@@ -908,7 +901,7 @@ export async function loadUsageByDay(
   const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const stop = new Date(end.getFullYear(), end.getMonth(), end.getDate());
   while (cur.getTime() <= stop.getTime()) {
-    const k = toLocalDayKey(cur.getTime());
+    const k = toLocalDay(cur.getTime());
     out.push({ date: k, peak_util_pct: byDay.get(k) ?? 0 });
     cur.setDate(cur.getDate() + 1);
   }

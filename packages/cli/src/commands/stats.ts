@@ -4,24 +4,12 @@ import {
   buildPeriodBundle,
   aggregateConcurrency,
   calendarWeek,
-  last4WeeksRange,
+  last4CompletedWeeks,
   computeBurstsFromSessions,
   type SessionCapsule,
   type PeriodBundle,
 } from "@claude-lens/parser";
-
-function parseDateArg(raw: string | undefined): Date | null {
-  if (!raw) return null;
-  const compact = raw.replace(/-/g, "");
-  if (!/^\d{8}$/.test(compact)) return null;
-  const d = new Date(`${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function flag(args: string[], name: string): string | undefined {
-  const idx = args.indexOf(name);
-  return idx === -1 ? undefined : args[idx + 1];
-}
+import { parseDateArg, flag } from "../args.js";
 
 export async function stats(args: string[]): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
@@ -36,7 +24,7 @@ export async function stats(args: string[]): Promise<void> {
   if (args.includes("--week")) {
     range = { ...calendarWeek(), range_type: "week" };
   } else if (args.includes("--4weeks")) {
-    range = { ...last4WeeksRange(), range_type: "4weeks" };
+    range = { ...last4CompletedWeeks(), range_type: "4weeks" };
   } else {
     const sinceArg = parseDateArg(flag(args, "--since"));
     const untilArg = parseDateArg(flag(args, "--until"));
@@ -83,18 +71,20 @@ async function buildBundle(range: {
 
   const caps: SessionCapsule[] = [];
   let trivial = 0;
-  for (const m of inRange) {
-    try {
-      const d = await getSession(m.id);
-      if (!d) continue;
-      const cap = buildCapsule(d, { compact: true });
-      if (cap.outcome === "trivial") {
-        trivial++;
-      } else {
-        caps.push(cap);
-      }
-    } catch {
-      /* skip */
+  const CONCURRENCY = 8;
+  for (let i = 0; i < inRange.length; i += CONCURRENCY) {
+    const slice = inRange.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(slice.map(async (m) => {
+      try {
+        const d = await getSession(m.id);
+        if (!d) return null;
+        return buildCapsule(d, { compact: true });
+      } catch { return null; }
+    }));
+    for (const cap of results) {
+      if (!cap) continue;
+      if (cap.outcome === "trivial") trivial++;
+      else caps.push(cap);
     }
   }
 
@@ -104,9 +94,7 @@ async function buildBundle(range: {
     sessions_total: inRange.length,
   });
 
-  // Concurrency: use SessionMeta (already have activeSegments)
-  const bursts = computeBurstsFromSessions(inRange);
-  bundle.concurrency = aggregateConcurrency(bursts, range);
+  bundle.concurrency = aggregateConcurrency(computeBurstsFromSessions(inRange), range);
 
   // Usage by day
   try {

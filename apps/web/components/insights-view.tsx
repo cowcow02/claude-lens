@@ -1,38 +1,31 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import {
-  ArrowLeft, BrainCircuit, Calendar, CheckCircle2, ChevronRight,
-  Circle, Compass, FileClock, Layers3, Loader2, Network, Repeat,
-  Sparkles, Square, Users, Zap,
+  ArrowLeft, Calendar, CheckCircle2, ChevronRight,
+  Circle, FileClock, Loader2, Square, Zap,
 } from "lucide-react";
+import { calendarWeek, priorCalendarWeek } from "@claude-lens/parser";
 import { InsightReport, type ReportData } from "@/components/insight-report";
+import type { SavedReportMeta } from "@/lib/ai/saved-reports";
 
-type RangeChoice =
-  | { id: "prior_week"; label: string; period: string; note: string }
-  | { id: "4weeks_completed"; label: string; period: string; note: string }
-  | { id: "week"; label: string; period: string; note: string };
+type RangeId = "prior_week" | "4weeks_completed" | "week";
+type RangeChoice = { id: RangeId; label: string; period: string; note: string };
 
 type PhaseId = "data" | "analyst" | "compose";
 type Phase = { id: PhaseId; label: string; status: "pending" | "running" | "done"; steps: string[] };
 
-type SavedMeta = {
-  key: string;
-  period_label: string;
-  period_sublabel: string;
-  range_type: string;
-  archetype_label: string;
-  archetype_icon: string;
-  saved_at: string;
-  sessions_used: number;
-  prs: number;
-};
+type InsightsEvent =
+  | { type: "status"; phase: PhaseId; text: string }
+  | { type: "report"; report: ReportData }
+  | { type: "saved"; key: string; saved_at: string }
+  | { type: "done" }
+  | { type: "error"; message: string };
 
 type View =
   | { kind: "loading_history" }
-  | { kind: "history"; saved: SavedMeta[] }
-  | { kind: "generating"; rangeId: RangeChoice["id"]; label: string; phases: Phase[]; elapsedMs: number; errorTransient?: string }
+  | { kind: "history"; saved: SavedReportMeta[] }
+  | { kind: "generating"; rangeId: RangeId; label: string; phases: Phase[]; elapsedMs: number }
   | { kind: "report"; report: ReportData; key: string | null }
   | { kind: "error"; message: string };
 
@@ -41,15 +34,6 @@ const INITIAL_PHASES: Phase[] = [
   { id: "analyst", label: "Claude analyst", status: "pending", steps: [] },
   { id: "compose", label: "Compose report", status: "pending", steps: [] },
 ];
-
-const ARCHETYPE_ICONS: Record<string, React.ReactNode> = {
-  Network: <Network size={14} />,
-  BrainCircuit: <BrainCircuit size={14} />,
-  Zap: <Zap size={14} />,
-  Compass: <Compass size={14} />,
-  Layers3: <Layers3 size={14} />,
-  Sparkles: <Sparkles size={14} />,
-};
 
 export function InsightsView() {
   const [view, setView] = useState<View>({ kind: "loading_history" });
@@ -68,7 +52,7 @@ export function InsightsView() {
   async function refreshHistory() {
     try {
       const res = await fetch("/api/insights/saved");
-      const json = await res.json() as { reports: SavedMeta[] };
+      const json = await res.json() as { reports: SavedReportMeta[] };
       setView({ kind: "history", saved: json.reports });
     } catch (err) {
       setView({ kind: "error", message: (err as Error).message });
@@ -91,8 +75,15 @@ export function InsightsView() {
     const phases: Phase[] = INITIAL_PHASES.map((p) => ({ ...p, steps: [] }));
     phases[0]!.status = "running";
     const startMs = Date.now();
+    // Tick only when the whole-second reading changes — avoids re-rendering
+    // the phase tree twice a second when nothing visible moved.
     startTimerRef.current = window.setInterval(() => {
-      setView((v) => v.kind === "generating" ? { ...v, elapsedMs: Date.now() - startMs } : v);
+      setView((v) => {
+        if (v.kind !== "generating") return v;
+        const next = Date.now() - startMs;
+        if (Math.floor(next / 1000) === Math.floor(v.elapsedMs / 1000)) return v;
+        return { ...v, elapsedMs: next };
+      });
     }, 500);
     setView({ kind: "generating", rangeId: range.id, label: range.label, phases, elapsedMs: 0 });
 
@@ -126,23 +117,17 @@ export function InsightsView() {
           if (!line.startsWith("data: ")) continue;
           const raw = line.slice(6).trim();
           if (!raw) continue;
-          let data: {
-            type: string; phase?: PhaseId; text?: string; message?: string;
-            report?: ReportData; key?: string; saved_at?: string;
-          };
+          let data: InsightsEvent;
           try { data = JSON.parse(raw); } catch { continue; }
 
-          if (data.type === "status" && data.phase && data.text) {
-            const ph = data.phase;
-            const txt = data.text;
+          if (data.type === "status") {
+            const { phase: ph, text: txt } = data;
             setView((v) => {
               if (v.kind !== "generating") return v;
-              const next = { ...v, phases: v.phases.map((p) => ({ ...p, steps: [...p.steps] })) };
+              const next = { ...v, phases: v.phases.map((p) => p.id === ph ? { ...p, steps: [...p.steps] } : p) };
               for (const phase of next.phases) {
                 if (phase.id === ph) {
                   phase.status = "running";
-                  // Replace latest step if same phase just appended with similar prefix,
-                  // otherwise append. Keeps the list tight.
                   const last = phase.steps[phase.steps.length - 1];
                   if (last && isSupersedingUpdate(last, txt)) {
                     phase.steps[phase.steps.length - 1] = txt;
@@ -155,9 +140,9 @@ export function InsightsView() {
               }
               return next;
             });
-          } else if (data.type === "report" && data.report) {
+          } else if (data.type === "report") {
             report = data.report;
-          } else if (data.type === "saved" && data.key) {
+          } else if (data.type === "saved") {
             savedKey = data.key;
           } else if (data.type === "done") {
             done = true;
@@ -165,7 +150,7 @@ export function InsightsView() {
               ? { ...v, phases: v.phases.map((p) => ({ ...p, status: "done" as const })) }
               : v);
           } else if (data.type === "error") {
-            setView({ kind: "error", message: data.message ?? "unknown" });
+            setView({ kind: "error", message: data.message });
             return;
           }
         }
@@ -243,7 +228,7 @@ export function InsightsView() {
 function HistoryView({
   saved, ranges, defaultRange, onGenerate, onOpen,
 }: {
-  saved: SavedMeta[];
+  saved: SavedReportMeta[];
   ranges: RangeChoice[];
   defaultRange: RangeChoice;
   onGenerate: (r: RangeChoice) => void;
@@ -445,51 +430,21 @@ function isSupersedingUpdate(prev: string, next: string): boolean {
 }
 
 function buildRangeChoices(): RangeChoice[] {
-  const prior = priorCalendarWeekJs();
-  const priorStart = prior.start;
-  const priorEnd = prior.end;
-  const last4End = priorEnd;
-  const last4Start = new Date(priorEnd); last4Start.setDate(priorEnd.getDate() - 27);
-  const cur = calendarWeekJs();
+  const prior = priorCalendarWeek();
+  const last4Start = new Date(prior.end); last4Start.setDate(prior.end.getDate() - 27);
+  const cur = calendarWeek();
   return [
-    {
-      id: "prior_week",
-      label: "Last completed week",
-      period: `${fmtDate(priorStart)} — ${fmtDate(priorEnd)}`,
-      note: "Mon–Sun · finished",
-    },
-    {
-      id: "4weeks_completed",
-      label: "Last 4 completed weeks",
-      period: `${fmtDate(last4Start)} — ${fmtDate(last4End)}`,
-      note: "28-day rollup",
-    },
-    {
-      id: "week",
-      label: "Current week",
-      period: `${fmtDate(cur.start)} — ${fmtDate(cur.end)}`,
-      note: "won't be auto-saved",
-    },
+    { id: "prior_week", label: "Last completed week",
+      period: `${fmtDate(prior.start)} — ${fmtDate(prior.end)}`, note: "Mon–Sun · finished" },
+    { id: "4weeks_completed", label: "Last 4 completed weeks",
+      period: `${fmtDate(last4Start)} — ${fmtDate(prior.end)}`, note: "28-day rollup" },
+    { id: "week", label: "Current week",
+      period: `${fmtDate(cur.start)} — ${fmtDate(cur.end)}`, note: "won't be auto-saved" },
   ];
 }
 
-function calendarWeekJs(ref: Date = new Date()): { start: Date; end: Date } {
-  const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
-  const daysSinceMon = (d.getDay() + 6) % 7;
-  const monday = new Date(d); monday.setDate(d.getDate() - daysSinceMon);
-  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
-  return { start: monday, end: sunday };
-}
-
-function priorCalendarWeekJs(ref: Date = new Date()): { start: Date; end: Date } {
-  const cur = calendarWeekJs(ref);
-  const prevEnd = new Date(cur.start); prevEnd.setDate(cur.start.getDate() - 1);
-  const prevStart = new Date(prevEnd); prevStart.setDate(prevEnd.getDate() - 6);
-  return { start: prevStart, end: prevEnd };
-}
-
 function priorWeekStart(): Date {
-  return priorCalendarWeekJs().start;
+  return priorCalendarWeek().start;
 }
 
 function isoDay(d: Date): string {
@@ -504,15 +459,11 @@ function fmtDate(d: Date): string {
 }
 
 function timeAgo(iso: string): string {
-  const ms = Date.now() - Date.parse(iso);
-  const s = Math.floor(ms / 1000);
+  const s = Math.floor((Date.now() - Date.parse(iso)) / 1000);
   if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -629,13 +580,6 @@ const savedRowStyle: React.CSSProperties = {
   width: "100%", padding: "11px 14px", borderRadius: 10,
   border: "1px solid var(--af-border-subtle)", background: "var(--af-surface)",
   color: "var(--af-text)", cursor: "pointer", textAlign: "left",
-};
-
-const savedIconWrap: React.CSSProperties = {
-  width: 28, height: 28, borderRadius: 7,
-  background: "color-mix(in srgb, var(--af-accent) 14%, transparent)",
-  color: "var(--af-accent)",
-  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
 };
 
 const phaseStripStyle: React.CSSProperties = {
