@@ -26,7 +26,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseTranscript } from "./parser.js";
-import { canonicalProjectName, worktreeName } from "./analytics.js";
+import { canonicalProjectName, toLocalDay, worktreeName } from "./analytics.js";
 import { groupByTeam, type TeamView } from "./team.js";
 import type { SessionDetail, SessionEvent, SessionMeta, SubagentRun, Usage } from "./types.js";
 
@@ -841,4 +841,69 @@ export async function findTeamLead(
     teamName: self.teamName,
     agentName: self.agentName,
   };
+}
+
+// ──────────────────────────────────────────────────────────────────
+//         Usage daemon snapshots (~/.cclens/usage.jsonl)
+// ──────────────────────────────────────────────────────────────────
+
+const USAGE_LOG = path.join(os.homedir(), ".cclens", "usage.jsonl");
+
+type UsageSnapshot = {
+  captured_at?: string;
+  five_hour?: { utilization?: number };
+  seven_day?: { utilization?: number };
+  seven_day_sonnet?: { utilization?: number } | null;
+};
+
+/**
+ * Per-day peak 5-hour plan utilization for the range [start, end] (inclusive),
+ * computed from the daemon's JSONL log. The 5-hour window is the most
+ * actionable signal for "how hot did I run today." Lines are in write order
+ * (ascending time) so we break early once past endMs.
+ */
+export async function loadUsageByDay(
+  start: Date,
+  end: Date,
+): Promise<{ by_day: { date: string; peak_util_pct: number }[] }> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(USAGE_LOG, "utf8");
+  } catch {
+    return { by_day: [] };
+  }
+
+  const startMs = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+  const endMs = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999).getTime();
+
+  const byDay = new Map<string, number>();
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const snap = JSON.parse(trimmed) as UsageSnapshot;
+      if (!snap.captured_at) continue;
+      const ms = Date.parse(snap.captured_at);
+      if (Number.isNaN(ms)) continue;
+      if (ms < startMs) continue;
+      if (ms > endMs) break;
+      const key = toLocalDay(ms);
+      const util = snap.five_hour?.utilization ?? 0;
+      const cur = byDay.get(key) ?? 0;
+      if (util > cur) byDay.set(key, util);
+    } catch {
+      /* skip malformed */
+    }
+  }
+
+  // Fill the day range so callers don't need to
+  const out: { date: string; peak_util_pct: number }[] = [];
+  const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const stop = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  while (cur.getTime() <= stop.getTime()) {
+    const k = toLocalDay(cur.getTime());
+    out.push({ date: k, peak_util_pct: byDay.get(k) ?? 0 });
+    cur.setDate(cur.getDate() + 1);
+  }
+  return { by_day: out };
 }
