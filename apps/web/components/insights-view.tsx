@@ -1,16 +1,34 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft, Calendar, CheckCircle2, ChevronRight,
-  Circle, FileClock, Loader2, Square, Zap,
+  ArrowLeft, CheckCircle2, ChevronRight,
+  Circle, Loader2, Square,
 } from "lucide-react";
-import { calendarWeek, priorCalendarWeek } from "@claude-lens/parser";
+import { priorCalendarWeek } from "@claude-lens/parser";
 import { InsightReport, type ReportData } from "@/components/insight-report";
 import type { SavedReportMeta } from "@/lib/ai/saved-reports";
 
-type RangeId = "prior_week" | "4weeks_completed" | "week";
-type RangeChoice = { id: RangeId; label: string; period: string; note: string };
+type RangeChoice = {
+  /** Stable id used for the generating-state label. For picker rows, use `week-YYYY-MM-DD`. */
+  id: string;
+  label: string;
+  /** Body posted to /api/insights. */
+  body: { range_type: "prior_week" | "4weeks_completed" | "week" | "4weeks" | "custom"; since?: string; until?: string };
+};
+
+type WeekRow = {
+  iso_week: number;
+  start: string;
+  end: string;
+  label: string;
+  sessions: number;
+  in_progress: boolean;
+  saved_key: string | null;
+  archetype_label?: string;
+  sessions_used?: number;
+  prs?: number;
+};
 
 type PhaseId = "data" | "analyst" | "compose";
 type Phase = { id: PhaseId; label: string; status: "pending" | "running" | "done"; steps: string[] };
@@ -25,7 +43,7 @@ type InsightsEvent =
 type View =
   | { kind: "loading_history" }
   | { kind: "history"; saved: SavedReportMeta[] }
-  | { kind: "generating"; rangeId: RangeId; label: string; phases: Phase[]; elapsedMs: number }
+  | { kind: "generating"; rangeId: string; label: string; phases: Phase[]; elapsedMs: number }
   | { kind: "report"; report: ReportData; key: string | null }
   | { kind: "error"; message: string };
 
@@ -40,13 +58,9 @@ export function InsightsView() {
   const abortRef = useRef<AbortController | null>(null);
   const startTimerRef = useRef<number | null>(null);
 
-  const ranges: RangeChoice[] = useMemo(() => buildRangeChoices(), []);
-  const defaultRange = ranges[0]!; // prior_week
-
   // Load saved reports on mount
   useEffect(() => {
     void refreshHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshHistory() {
@@ -94,7 +108,7 @@ export function InsightsView() {
       const res = await fetch("/api/insights", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ range_type: range.id }),
+        body: JSON.stringify(range.body),
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) {
@@ -182,13 +196,12 @@ export function InsightsView() {
     return (
       <div style={errorStyle}>
         <strong>Error:</strong> {view.message}
-        <button type="button" onClick={refreshHistory} style={{ ...primaryBtn, marginLeft: 12 }}>Back to reports</button>
+        <button type="button" onClick={() => { void refreshHistory(); }} style={{ ...primaryBtn, marginLeft: 12 }}>Back to reports</button>
       </div>
     );
   }
 
   if (view.kind === "report") {
-    const rangeForKey = rangeFromKey(view.key, ranges, defaultRange);
     return (
       <div style={{ position: "relative" }}>
         <div style={topNavStyle} className="no-print">
@@ -201,10 +214,7 @@ export function InsightsView() {
             </span>
           )}
         </div>
-        <InsightReport
-          data={view.report}
-          onRegenerate={rangeForKey ? () => generate(rangeForKey) : undefined}
-        />
+        <InsightReport data={view.report} savedKey={view.key} />
       </div>
     );
   }
@@ -217,8 +227,6 @@ export function InsightsView() {
   return (
     <HistoryView
       saved={view.saved}
-      ranges={ranges}
-      defaultRange={defaultRange}
       onGenerate={generate}
       onOpen={openSaved}
     />
@@ -230,121 +238,181 @@ export function InsightsView() {
 // ──────────────────────────────────────────────────────────────────
 
 function HistoryView({
-  saved, ranges, defaultRange, onGenerate, onOpen,
+  saved, onGenerate, onOpen,
 }: {
   saved: SavedReportMeta[];
-  ranges: RangeChoice[];
-  defaultRange: RangeChoice;
   onGenerate: (r: RangeChoice) => void;
   onOpen: (key: string) => void;
 }) {
-  const priorKey = `week-${isoDay(priorWeekStart())}`;
-  const priorSaved = saved.find((s) => s.key === priorKey);
+  const [tab, setTab] = useState<"weeks" | "months">("weeks");
+  const [weeks, setWeeks] = useState<WeekRow[] | null>(null);
+  const [includeInProgress, setIncludeInProgress] = useState(false);
+
+  useEffect(() => {
+    void fetch("/api/insights/weeks-index?count=12")
+      .then((r) => r.json())
+      .then((j: { weeks: WeekRow[] }) => setWeeks(j.weeks))
+      .catch(() => setWeeks([]));
+  }, []);
 
   return (
-    <div style={{ maxWidth: 820, margin: "0 auto", padding: "32px 40px 64px", display: "flex", flexDirection: "column", gap: 28 }}>
+    <div style={{ maxWidth: 820, margin: "0 auto", padding: "32px 40px 64px", display: "flex", flexDirection: "column", gap: 24 }}>
       <header style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", margin: 0 }}>Insights</h1>
         <p style={{ fontSize: 13, color: "var(--af-text-secondary)", margin: 0, lineHeight: 1.55 }}>
-          Narrative retrospectives generated by a local Claude subprocess. Reports run on completed calendar weeks —
-          capsules, aggregates, concurrency, plan utilization → narrative. Once generated, reports save locally so you can revisit without re-running.
+          Pick a calendar week or a 4-week rollup. If a report already exists we'll open it instantly; otherwise
+          Claude runs the pipeline (~1–3 min) and saves the result locally.
         </p>
       </header>
 
-      {/* Primary CTA — view the saved one if it exists, otherwise generate */}
-      <div style={ctaPanelStyle}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={ctaIconWrap}><Calendar size={16} color="var(--af-accent)" /></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-            <div style={ctaEyebrow}>{priorSaved ? "Last week" : "Recommended"}</div>
-            <div style={ctaTitle}>{defaultRange.label}</div>
-            <div style={ctaPeriod}>
-              {defaultRange.period}
-              {priorSaved
-                ? ` · saved ${timeAgo(priorSaved.saved_at)} · ${priorSaved.archetype_label}`
-                : ` · ${defaultRange.note}`}
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", flexShrink: 0 }}>
-            {priorSaved && (
-              <button type="button" onClick={() => onGenerate(defaultRange)} style={ghostBtn} title="Discard saved report and re-run the pipeline">
-                <Zap size={11} /> Regenerate
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => priorSaved ? onOpen(priorSaved.key) : onGenerate(defaultRange)}
-              style={primaryBtn}
-            >
-              {priorSaved ? <>View report <ChevronRight size={13} /></> : <><Zap size={13} /> Generate</>}
+      {/* Tabs */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={tabGroup}>
+          {(["weeks", "months"] as const).map((t) => (
+            <button key={t} type="button" onClick={() => setTab(t)}
+              style={{
+                ...tabBtn,
+                background: tab === t ? "var(--af-accent)" : "transparent",
+                color: tab === t ? "white" : "var(--af-text-secondary)",
+              }}>
+              {t === "weeks" ? "Weeks" : "Months"}
             </button>
-          </div>
+          ))}
         </div>
-      </div>
-
-      {/* Alt ranges */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={miniSectionTitle}>Other windows</div>
-        {ranges.slice(1).map((r) => {
-          const already = r.id === "prior_week" && !!priorSaved;
-          const inProgress = r.id === "week";
-          return (
-            <div key={r.id} style={altRangeRow}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                <div style={{ fontSize: 13, color: "var(--af-text)", fontWeight: 500 }}>
-                  {r.label}
-                  {inProgress && <span style={inProgressTag}>in progress</span>}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                  {r.period}{r.note ? ` · ${r.note}` : ""}
-                </div>
-              </div>
-              <button type="button" onClick={() => onGenerate(r)} style={secondaryBtn}>
-                <Zap size={11} /> {already ? "Regenerate" : "Generate"}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Saved history */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={miniSectionTitle}><FileClock size={12} style={{ verticalAlign: -1, marginRight: 6 }} />Saved reports</div>
-          <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>{saved.length}</div>
-        </div>
-        {saved.length === 0 ? (
-          <div style={emptyHistoryStyle}>
-            No reports yet. Generate one above — we'll save it so you can come back to it without re-running the pipeline.
-          </div>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-            {saved.map((s) => (
-              <li key={s.key}>
-                <button type="button" onClick={() => onOpen(s.key)} style={savedRowStyle}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0, flex: 1 }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em" }}>
-                        {s.period_label}
-                      </div>
-                      <div style={{ fontSize: 11, color: "var(--af-text-secondary)", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                        <span style={{ color: "var(--af-accent)", fontWeight: 500 }}>{s.archetype_label}</span>
-                        <span style={{ color: "var(--af-text-tertiary)" }}>·</span>
-                        <span style={{ color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                          {s.sessions_used} sess · {s.prs} PR · saved {timeAgo(s.saved_at)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <ChevronRight size={14} color="var(--af-text-tertiary)" />
-                </button>
-              </li>
-            ))}
-          </ul>
+        {tab === "weeks" && (
+          <label style={inProgressToggle}>
+            <input type="checkbox" checked={includeInProgress} onChange={(e) => setIncludeInProgress(e.target.checked)} />
+            <span>Include current week</span>
+          </label>
         )}
       </div>
+
+      {/* Weeks list or month rollup */}
+      {tab === "weeks" ? (
+        weeks === null ? (
+          <div style={emptyHistoryStyle}>Loading weeks…</div>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+            {weeks
+              .filter((w) => includeInProgress || !w.in_progress)
+              .map((w) => (
+                <WeekPickerRow
+                  key={w.start}
+                  w={w}
+                  onView={() => w.saved_key && onOpen(w.saved_key)}
+                  onGenerate={() => onGenerate({
+                    id: `week-${w.start}`,
+                    label: `Week of ${w.label}`,
+                    body: { range_type: "custom", since: w.start, until: w.end },
+                  })}
+                />
+              ))}
+          </ul>
+        )
+      ) : (
+        <MonthsView saved={saved} onGenerate={onGenerate} onOpen={onOpen} />
+      )}
       <Spin />
     </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+//                          PICKER ROWS
+// ──────────────────────────────────────────────────────────────────
+
+function WeekPickerRow({
+  w, onView, onGenerate,
+}: {
+  w: WeekRow;
+  onView: () => void;
+  onGenerate: () => void;
+}) {
+  const saved = !!w.saved_key;
+  const empty = w.sessions === 0 && !w.in_progress;
+  return (
+    <li style={pickerRow(saved)}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em" }}>
+            W{String(w.iso_week).padStart(2, "0")} · {w.label}
+          </span>
+          {w.in_progress && <span style={inProgressTag}>in progress</span>}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <span>{w.sessions} sess</span>
+          {saved && w.archetype_label && (
+            <>
+              <span>·</span>
+              <span style={{ color: "var(--af-accent)" }}>{w.archetype_label}</span>
+              <span>·</span>
+              <span>{w.sessions_used} used · {w.prs} PR</span>
+            </>
+          )}
+          {empty && <><span>·</span><span>no data</span></>}
+        </div>
+      </div>
+      {saved ? (
+        <button type="button" onClick={onView} style={primaryBtn}>
+          View report <ChevronRight size={13} />
+        </button>
+      ) : empty ? (
+        <span style={disabledCTA}>no data</span>
+      ) : w.in_progress ? (
+        <button type="button" onClick={onGenerate} style={secondaryBtn} title="Current week is partial and won't be auto-saved">
+          Generate anyway
+        </button>
+      ) : (
+        <button type="button" onClick={onGenerate} style={secondaryBtn}>
+          Generate
+        </button>
+      )}
+    </li>
+  );
+}
+
+function MonthsView({
+  saved, onGenerate, onOpen,
+}: {
+  saved: SavedReportMeta[];
+  onGenerate: (r: RangeChoice) => void;
+  onOpen: (key: string) => void;
+}) {
+  // MVP: one tile for the last-4-completed-weeks rollup. Presence flag if
+  // a matching 4weeks-* key exists in saved.
+  const prior = priorCalendarWeek();
+  const start = new Date(prior.end); start.setDate(prior.end.getDate() - 27);
+  const key = `4weeks-${isoDay(start)}`;
+  const existing = saved.find((s) => s.key === key);
+  const label = `${fmtDate(start)} – ${fmtDate(prior.end)}`;
+  return (
+    <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+      <li style={pickerRow(!!existing)}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)" }}>
+            Last 4 completed weeks
+          </div>
+          <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
+            {label} · 28-day rollup
+            {existing && <> · <span style={{ color: "var(--af-accent)" }}>{existing.archetype_label}</span></>}
+          </div>
+        </div>
+        {existing ? (
+          <button type="button" onClick={() => onOpen(existing.key)} style={primaryBtn}>
+            View report <ChevronRight size={13} />
+          </button>
+        ) : (
+          <button type="button" style={secondaryBtn}
+            onClick={() => onGenerate({
+              id: key,
+              label: `Last 4 completed weeks`,
+              body: { range_type: "4weeks_completed" },
+            })}>
+            Generate
+          </button>
+        )}
+      </li>
+    </ul>
   );
 }
 
@@ -433,43 +501,6 @@ function isSupersedingUpdate(prev: string, next: string): boolean {
   return prefixes.some((p) => prev.startsWith(p) && next.startsWith(p));
 }
 
-function buildRangeChoices(): RangeChoice[] {
-  const prior = priorCalendarWeek();
-  const last4Start = new Date(prior.end); last4Start.setDate(prior.end.getDate() - 27);
-  const cur = calendarWeek();
-  return [
-    { id: "prior_week", label: "Last completed week",
-      period: `${fmtDate(prior.start)} — ${fmtDate(prior.end)}`, note: "Mon–Sun · finished" },
-    { id: "4weeks_completed", label: "Last 4 completed weeks",
-      period: `${fmtDate(last4Start)} — ${fmtDate(prior.end)}`, note: "28-day rollup" },
-    { id: "week", label: "Current week",
-      period: `${fmtDate(cur.start)} — ${fmtDate(cur.end)}`, note: "won't be auto-saved" },
-  ];
-}
-
-function priorWeekStart(): Date {
-  return priorCalendarWeek().start;
-}
-
-/** Map a saved-report key back to the RangeChoice so the Regenerate button
- *  knows which API range_type to request. `week-<prior_start>` maps to
- *  `prior_week`; everything else falls back to null (hides the button). */
-function rangeFromKey(
-  key: string | null,
-  ranges: RangeChoice[],
-  defaultRange: RangeChoice,
-): RangeChoice | null {
-  if (!key) return null;
-  if (key === `week-${isoDay(priorCalendarWeek().start)}`) return defaultRange;
-  const fourWeeks = ranges.find((r) => r.id === "4weeks_completed");
-  if (fourWeeks) {
-    const fwStart = new Date(priorCalendarWeek().end);
-    fwStart.setDate(fwStart.getDate() - 27);
-    if (key === `4weeks-${isoDay(fwStart)}`) return fourWeeks;
-  }
-  return null;
-}
-
 function isoDay(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -479,14 +510,6 @@ function isoDay(d: Date): string {
 
 function fmtDate(d: Date): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function timeAgo(iso: string): string {
-  const s = Math.floor((Date.now() - Date.parse(iso)) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -538,52 +561,38 @@ const secondaryBtn: React.CSSProperties = {
   fontSize: 12, fontWeight: 500, cursor: "pointer",
 };
 
-const ghostBtn: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 10px",
-  border: "1px solid transparent", borderRadius: 7,
-  background: "transparent", color: "var(--af-text-secondary)",
-  fontSize: 11.5, fontWeight: 500, cursor: "pointer",
+const tabGroup: React.CSSProperties = {
+  display: "inline-flex", gap: 3, border: "1px solid var(--af-border)", borderRadius: 8, padding: 2,
+};
+
+const tabBtn: React.CSSProperties = {
+  padding: "5px 14px", fontSize: 12, fontWeight: 600,
+  border: "none", borderRadius: 6, cursor: "pointer",
+};
+
+const inProgressToggle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  fontSize: 11.5, color: "var(--af-text-secondary)",
+  cursor: "pointer", marginLeft: "auto",
+};
+
+function pickerRow(saved: boolean): React.CSSProperties {
+  return {
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14,
+    padding: "12px 16px", borderRadius: 10,
+    border: `1px solid ${saved ? "color-mix(in srgb, var(--af-accent) 24%, var(--af-border))" : "var(--af-border-subtle)"}`,
+    background: saved ? "color-mix(in srgb, var(--af-accent) 6%, var(--af-surface))" : "var(--af-surface)",
+  };
+}
+
+const disabledCTA: React.CSSProperties = {
+  fontSize: 11.5, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)",
+  padding: "7px 12px",
 };
 
 const topNavStyle: React.CSSProperties = {
   maxWidth: 980, margin: "0 auto", padding: "16px 44px 0",
   display: "flex", alignItems: "center", gap: 12,
-};
-
-const ctaPanelStyle: React.CSSProperties = {
-  padding: "20px 24px", borderRadius: 14,
-  background: "linear-gradient(135deg, color-mix(in srgb, var(--af-accent) 10%, var(--af-surface)) 0%, var(--af-surface) 70%)",
-  border: "1px solid color-mix(in srgb, var(--af-accent) 25%, var(--af-border))",
-};
-
-const ctaIconWrap: React.CSSProperties = {
-  width: 38, height: 38, borderRadius: 10,
-  background: "color-mix(in srgb, var(--af-accent) 16%, transparent)",
-  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-};
-
-const ctaEyebrow: React.CSSProperties = {
-  fontSize: 10.5, fontWeight: 700, letterSpacing: "0.08em",
-  textTransform: "uppercase", color: "var(--af-accent)",
-};
-
-const ctaTitle: React.CSSProperties = {
-  fontSize: 16, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em",
-};
-
-const ctaPeriod: React.CSSProperties = {
-  fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)", marginTop: 2,
-};
-
-const miniSectionTitle: React.CSSProperties = {
-  fontSize: 11, fontWeight: 600, letterSpacing: "0.06em",
-  textTransform: "uppercase", color: "var(--af-text-tertiary)",
-};
-
-const altRangeRow: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-  padding: "12px 16px", borderRadius: 10,
-  border: "1px solid var(--af-border-subtle)", background: "var(--af-surface)",
 };
 
 const inProgressTag: React.CSSProperties = {
@@ -596,13 +605,6 @@ const emptyHistoryStyle: React.CSSProperties = {
   padding: "20px 18px", borderRadius: 10,
   border: "1px dashed var(--af-border)", background: "var(--af-surface)",
   fontSize: 12.5, color: "var(--af-text-tertiary)", lineHeight: 1.55,
-};
-
-const savedRowStyle: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between",
-  width: "100%", padding: "11px 14px", borderRadius: 10,
-  border: "1px solid var(--af-border-subtle)", background: "var(--af-surface)",
-  color: "var(--af-text)", cursor: "pointer", textAlign: "left",
 };
 
 const phaseStripStyle: React.CSSProperties = {

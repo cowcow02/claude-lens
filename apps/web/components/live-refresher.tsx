@@ -13,7 +13,7 @@
  * read.
  */
 
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
 import { useLiveEvents, type LiveUpdate } from "@/lib/use-live-events";
 
@@ -21,8 +21,17 @@ import { useLiveEvents, type LiveUpdate } from "@/lib/use-live-events";
  *  the RSC loader. 400ms covers the end of a tool result flush. */
 const REFRESH_DEBOUNCE_MS = 400;
 
+/** Print pages are headless-Chrome render targets — they must never
+ *  open long-lived SSE connections or Chrome waits forever for the
+ *  page to "settle" before printing. */
+function useIsPrintRoute(): boolean {
+  const pathname = usePathname();
+  return pathname?.includes("/insights/print/") ?? false;
+}
+
 export function LiveRefresher() {
   const router = useRouter();
+  const isPrint = useIsPrintRoute();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track latest mtime per source so session updates don't starve
   // usage updates (and vice versa) — different files have different clocks.
@@ -41,7 +50,7 @@ export function LiveRefresher() {
     [router],
   );
 
-  useLiveEvents(onUpdate);
+  useLiveEvents(onUpdate, { enabled: !isPrint });
 
   useEffect(() => {
     return () => {

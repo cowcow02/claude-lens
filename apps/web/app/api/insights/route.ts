@@ -79,10 +79,16 @@ function resolveRange(body: { range_type?: string; since?: string; until?: strin
     }
     case "custom": {
       if (!body.since || !body.until) throw new Error("custom range requires since + until");
+      const start = new Date(body.since);
+      const end = new Date(body.until);
+      // Normalise: if the window is exactly Mon-Sun 7 days, save under the
+      // `week-*` key so it participates in prior_weeks baselines and the
+      // picker treats it as a calendar week, not a custom one-off.
+      const days = Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
+      const isCalendarWeek = days === 7 && start.getDay() === 1;
       return {
-        start: new Date(body.since),
-        end: new Date(body.until),
-        range_type: "custom",
+        start, end,
+        range_type: isCalendarWeek ? "week" : "custom",
         in_progress: false,
       };
     }

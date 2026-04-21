@@ -138,12 +138,12 @@ const FLAG_TONE: Record<string, { label: string; tone: "good" | "warn" | "danger
 //                        Top-level component
 // ──────────────────────────────────────────────────────────────────
 
-export function InsightReport({ data, onRegenerate }: { data: ReportData; onRegenerate?: () => void }) {
+export function InsightReport({ data, savedKey }: { data: ReportData; savedKey?: string | null }) {
   return (
     <>
       <PrintStyles />
       <div className="report-root" style={rootStyle}>
-        <Toolbar data={data} onRegenerate={onRegenerate} />
+        <Toolbar data={data} savedKey={savedKey ?? null} />
 
         {/* Section 1 · ARCHETYPE */}
         <Section index={1} title="Who you were" kicker="Your working style, distilled" anchor="archetype">
@@ -186,16 +186,42 @@ export function InsightReport({ data, onRegenerate }: { data: ReportData; onRege
 //                           Sub-components
 // ──────────────────────────────────────────────────────────────────
 
-function Toolbar({ data, onRegenerate }: { data: ReportData; onRegenerate?: () => void }) {
+function Toolbar({ data, savedKey }: { data: ReportData; savedKey: string | null }) {
   const [copied, setCopied] = useState(false);
-  const onPrint = () => { if (typeof window !== "undefined") window.print(); };
+  const [pdfState, setPdfState] = useState<"idle" | "rendering" | "error">("idle");
+
   const onCopyMd = async () => {
     try {
       await navigator.clipboard.writeText(renderReportAsMarkdown(data));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } catch { /* ignore — clipboard may be unavailable in insecure contexts */ }
+    } catch { /* clipboard may be unavailable in insecure contexts */ }
   };
+
+  const onSavePdf = async () => {
+    // For unsaved (in-progress) reports, fall back to window.print() —
+    // the backend can only render reports that exist on disk.
+    if (!savedKey) { window.print(); return; }
+    setPdfState("rendering");
+    try {
+      const res = await fetch(`/api/insights/pdf/${savedKey}`);
+      if (!res.ok) { setPdfState("error"); window.setTimeout(() => setPdfState("idle"), 2500); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${savedKey}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setPdfState("idle");
+    } catch {
+      setPdfState("error");
+      window.setTimeout(() => setPdfState("idle"), 2500);
+    }
+  };
+
   return (
     <div className="no-print" style={toolbarStyle}>
       <div style={{ display: "flex", flexDirection: "column", gap: 2, marginRight: "auto" }}>
@@ -207,13 +233,13 @@ function Toolbar({ data, onRegenerate }: { data: ReportData; onRegenerate?: () =
         </div>
         <div style={{ fontSize: 12, color: "var(--af-text-secondary)" }}>{data.period_sublabel}</div>
       </div>
-      {onRegenerate && (
-        <button type="button" style={secondaryBtn} onClick={onRegenerate}><Zap size={12} /> Regenerate</button>
-      )}
       <button type="button" style={secondaryBtn} onClick={onCopyMd}>
         {copied ? <Check size={12} /> : <Share2 size={12} />} {copied ? "Copied" : "Copy MD"}
       </button>
-      <button type="button" style={primaryBtn} onClick={onPrint}><Download size={12} /> Save as PDF</button>
+      <button type="button" style={primaryBtn} onClick={onSavePdf} disabled={pdfState === "rendering"}>
+        <Download size={12} />{" "}
+        {pdfState === "rendering" ? "Rendering…" : pdfState === "error" ? "Retry" : "Save as PDF"}
+      </button>
     </div>
   );
 }
@@ -637,11 +663,6 @@ const secondaryBtn: React.CSSProperties = {
   border: "1px solid var(--af-border)", borderRadius: 8,
   background: "var(--af-surface)", color: "var(--af-text)",
   fontSize: 11.5, fontWeight: 500, cursor: "pointer",
-};
-
-const toolbarSelect: React.CSSProperties = {
-  padding: "7px 10px", border: "1px solid var(--af-border)", borderRadius: 8,
-  background: "var(--af-surface)", color: "var(--af-text)", fontSize: 12, cursor: "pointer",
 };
 
 const sectionStyle: React.CSSProperties = {

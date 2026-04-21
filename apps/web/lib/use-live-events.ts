@@ -34,7 +34,11 @@ export type LiveUpdate = LiveSessionUpdate | LiveUsageUpdate;
 
 type LiveEvent = LiveUpdate | { type: "heartbeat"; tsMs: number } | { type: "ready" };
 
-export function useLiveEvents(onUpdate: (update: LiveUpdate) => void): void {
+export function useLiveEvents(
+  onUpdate: (update: LiveUpdate) => void,
+  options: { enabled?: boolean } = {},
+): void {
+  const { enabled = true } = options;
   // Keep the latest handler in a ref so the EventSource effect doesn't
   // re-open every time the parent re-renders with a new closure.
   const handlerRef = useRef(onUpdate);
@@ -43,6 +47,7 @@ export function useLiveEvents(onUpdate: (update: LiveUpdate) => void): void {
   }, [onUpdate]);
 
   useEffect(() => {
+    if (!enabled) return;
     const es = new EventSource("/api/events");
     es.onmessage = (e) => {
       try {
@@ -61,5 +66,5 @@ export function useLiveEvents(onUpdate: (update: LiveUpdate) => void): void {
     return () => {
       es.close();
     };
-  }, []);
+  }, [enabled]);
 }
