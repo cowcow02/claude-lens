@@ -65,7 +65,7 @@ export type PeriodBundle = {
     end: string;
     label: string;
     day_count: number;
-    range_type: "week" | "4weeks" | "custom";
+    range_type: "week" | "4weeks" | "month" | "custom";
   };
   counts: {
     sessions_total: number;
@@ -115,7 +115,7 @@ function prettyProjectName(p: string): string {
 export function buildPeriodBundle(
   caps: SessionCapsule[],
   opts: {
-    period: { start: Date; end: Date; range_type?: "week" | "4weeks" | "custom" };
+    period: { start: Date; end: Date; range_type?: "week" | "4weeks" | "month" | "custom" };
     trivial_dropped: number;
     sessions_total: number;
   },
@@ -252,9 +252,9 @@ export function buildPeriodBundle(
   }
 
   // ---- label ----
-  const startLabel = period.start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const endLabel = period.end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const label = `${startLabel} — ${endLabel}`;
+  const label = period.range_type === "month"
+    ? period.start.toLocaleDateString("en-US", { month: "long", year: "numeric" })
+    : `${period.start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} — ${period.end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 
   return {
     period: {
@@ -305,6 +305,20 @@ export function last4CompletedWeeks(ref: Date = new Date()): { start: Date; end:
   const { end } = priorCalendarWeek(ref);
   const start = new Date(end);
   start.setDate(end.getDate() - 27);
+  return { start, end };
+}
+
+/** Calendar month containing `ref`, clamped to local midnight boundaries. */
+export function calendarMonth(ref: Date = new Date()): { start: Date; end: Date } {
+  const start = new Date(ref.getFullYear(), ref.getMonth(), 1);
+  const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 0); // last day of ref's month
+  return { start, end };
+}
+
+/** Month before the one containing `ref`. */
+export function priorCalendarMonth(ref: Date = new Date()): { start: Date; end: Date } {
+  const start = new Date(ref.getFullYear(), ref.getMonth() - 1, 1);
+  const end = new Date(ref.getFullYear(), ref.getMonth(), 0);
   return { start, end };
 }
 

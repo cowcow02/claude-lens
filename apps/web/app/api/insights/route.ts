@@ -20,6 +20,8 @@ import {
   calendarWeek,
   priorCalendarWeek,
   last4CompletedWeeks,
+  calendarMonth,
+  priorCalendarMonth,
   computeBurstsFromSessions,
   type SessionCapsule,
   type PeriodBundle,
@@ -77,18 +79,33 @@ function resolveRange(body: { range_type?: string; since?: string; until?: strin
       start.setDate(end.getDate() - 27);
       return { start, end, range_type: "4weeks", in_progress: true };
     }
+    case "prior_month": {
+      const r = priorCalendarMonth();
+      return { ...r, range_type: "month", in_progress: false };
+    }
+    case "month": {
+      const r = calendarMonth();
+      return { ...r, range_type: "month", in_progress: true };
+    }
     case "custom": {
       if (!body.since || !body.until) throw new Error("custom range requires since + until");
       const start = new Date(body.since);
       const end = new Date(body.until);
-      // Normalise: if the window is exactly Mon-Sun 7 days, save under the
-      // `week-*` key so it participates in prior_weeks baselines and the
-      // picker treats it as a calendar week, not a custom one-off.
+      // Normalise: pin Mon-Sun 7-day windows to `week`, and full-calendar-month
+      // windows to `month`, so they participate in baselines and pickers with
+      // the right key instead of living off in custom-* land.
       const days = Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
       const isCalendarWeek = days === 7 && start.getDay() === 1;
+      const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+      const isCalendarMonth = start.getDate() === 1
+        && end.getFullYear() === monthEnd.getFullYear()
+        && end.getMonth() === monthEnd.getMonth()
+        && end.getDate() === monthEnd.getDate();
+      const normalised: "week" | "month" | "custom" =
+        isCalendarWeek ? "week" : isCalendarMonth ? "month" : "custom";
       return {
         start, end,
-        range_type: isCalendarWeek ? "week" : "custom",
+        range_type: normalised,
         in_progress: false,
       };
     }
@@ -134,7 +151,9 @@ export async function POST(request: Request) {
           ? (range.in_progress ? "this week (in progress)" : "last week")
           : range.range_type === "4weeks"
             ? (range.in_progress ? "last 4 weeks (incl. current)" : "last 4 completed weeks")
-            : "custom range";
+            : range.range_type === "month"
+              ? (range.in_progress ? "this month (in progress)" : "last month")
+              : "custom range";
         status("data", `Window: ${rangeLabel}`);
 
         // Phase 1 · Data
@@ -419,12 +438,19 @@ function mergeReport(
     });
   }
 
-  const periodPrefix = bundle.period.range_type === "4weeks" ? "Last 4 weeks ·" : "Week of";
   const in_progress_suffix = range.in_progress ? " · in progress" : "";
+  const periodPrefix =
+    bundle.period.range_type === "4weeks" ? "Last 4 weeks ·"
+    : bundle.period.range_type === "month" ? "Month of"
+    : "Week of";
+  const sublabel =
+    bundle.period.range_type === "4weeks" ? "Calendar 4-week rollup"
+    : bundle.period.range_type === "month" ? "Calendar month"
+    : "Calendar week · Mon–Sun";
 
   return {
     period_label: `${periodPrefix} ${bundle.period.label}`,
-    period_sublabel: `Calendar ${bundle.period.range_type === "4weeks" ? "4-week rollup" : "week · Mon–Sun"}${in_progress_suffix}`,
+    period_sublabel: `${sublabel}${in_progress_suffix}`,
     range_type: bundle.period.range_type,
     archetype: {
       label: n.archetype.label,

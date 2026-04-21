@@ -5,6 +5,8 @@ import {
   calendarWeek,
   priorCalendarWeek,
   last4CompletedWeeks,
+  calendarMonth,
+  priorCalendarMonth,
 } from "../src/aggregate.js";
 import type { SessionCapsule } from "../src/capsule.js";
 import type { ParallelismBurst } from "../src/analytics.js";
@@ -73,6 +75,31 @@ describe("calendar range helpers", () => {
     expect(r.end.getDate()).toBe(19); // Sun Apr 19
     const spanDays = Math.round((r.end.getTime() - r.start.getTime()) / 86_400_000) + 1;
     expect(spanDays).toBe(28);
+  });
+
+  it("calendarMonth spans first to last day of ref's month", () => {
+    const ref = new Date(2026, 3, 15); // mid-April
+    const r = calendarMonth(ref);
+    expect(r.start.getMonth()).toBe(3); expect(r.start.getDate()).toBe(1);
+    expect(r.end.getMonth()).toBe(3); expect(r.end.getDate()).toBe(30);
+  });
+
+  it("calendarMonth handles February in leap + non-leap years", () => {
+    expect(calendarMonth(new Date(2024, 1, 15)).end.getDate()).toBe(29); // 2024 leap
+    expect(calendarMonth(new Date(2026, 1, 15)).end.getDate()).toBe(28);
+  });
+
+  it("priorCalendarMonth steps back a full month", () => {
+    const r = priorCalendarMonth(new Date(2026, 3, 1)); // Apr 1 → March
+    expect(r.start.getMonth()).toBe(2); expect(r.start.getDate()).toBe(1);
+    expect(r.end.getMonth()).toBe(2); expect(r.end.getDate()).toBe(31);
+  });
+
+  it("priorCalendarMonth wraps across year boundary", () => {
+    const r = priorCalendarMonth(new Date(2026, 0, 15)); // Jan 2026 → Dec 2025
+    expect(r.start.getFullYear()).toBe(2025);
+    expect(r.start.getMonth()).toBe(11);
+    expect(r.end.getDate()).toBe(31);
   });
 });
 

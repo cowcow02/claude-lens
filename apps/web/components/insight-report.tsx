@@ -36,7 +36,7 @@ export type IconKey = keyof typeof ICON_MAP;
 export type ReportData = {
   period_label: string;              // "Week of Apr 14 — Apr 20"
   period_sublabel: string;           // "Calendar week · in progress"
-  range_type: "week" | "4weeks" | "custom";
+  range_type: "week" | "4weeks" | "month" | "custom";
 
   archetype: {
     label: string;                   // "Orchestration conductor"

@@ -42,8 +42,7 @@ type InsightsEvent =
   | { type: "error"; message: string };
 
 type View =
-  | { kind: "loading_history" }
-  | { kind: "history"; saved: SavedReportMeta[] }
+  | { kind: "history" }
   | { kind: "generating"; rangeId: string; label: string; phases: Phase[]; elapsedMs: number }
   | { kind: "error"; message: string };
 
@@ -55,24 +54,9 @@ const INITIAL_PHASES: Phase[] = [
 
 export function InsightsView() {
   const router = useRouter();
-  const [view, setView] = useState<View>({ kind: "loading_history" });
+  const [view, setView] = useState<View>({ kind: "history" });
   const abortRef = useRef<AbortController | null>(null);
   const startTimerRef = useRef<number | null>(null);
-
-  // Load saved reports on mount
-  useEffect(() => {
-    void refreshHistory();
-  }, []);
-
-  async function refreshHistory() {
-    try {
-      const res = await fetch("/api/insights/saved");
-      const json = await res.json() as { reports: SavedReportMeta[] };
-      setView({ kind: "history", saved: json.reports });
-    } catch (err) {
-      setView({ kind: "error", message: (err as Error).message });
-    }
-  }
 
   const openSaved = useCallback((key: string) => {
     router.push(`/insights/${key}`);
@@ -163,12 +147,13 @@ export function InsightsView() {
         }
       }
       // Successful generation of a completed period lands on the report URL.
-      // In-progress (unsaved) generations land back on the history view with
-      // the fresh report reflected in the list on next mount.
+      // Successful generation of a completed period lands on its saved URL.
+      // In-progress (unsaved) generations flip back to history — the picker
+      // will re-fetch its row counts on mount.
       if (report && savedKey) {
         router.push(`/insights/${savedKey}`);
       } else {
-        void refreshHistory();
+        setView({ kind: "history" });
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
@@ -183,15 +168,11 @@ export function InsightsView() {
   const stop = () => abortRef.current?.abort();
 
   // ── Render ─────────────────────────────────────────────────────
-  if (view.kind === "loading_history") {
-    return <div style={centerStyle}><Loader2 size={14} className="af-spin" /> Loading reports…<Spin /></div>;
-  }
-
   if (view.kind === "error") {
     return (
       <div style={errorStyle}>
         <strong>Error:</strong> {view.message}
-        <button type="button" onClick={() => { void refreshHistory(); }} style={{ ...primaryBtn, marginLeft: 12 }}>Back to reports</button>
+        <button type="button" onClick={() => setView({ kind: "history" })} style={{ ...primaryBtn, marginLeft: 12 }}>Back</button>
       </div>
     );
   }
@@ -200,14 +181,7 @@ export function InsightsView() {
     return <GeneratingView view={view} onStop={stop} />;
   }
 
-  // history
-  return (
-    <HistoryView
-      saved={view.saved}
-      onGenerate={generate}
-      onOpen={openSaved}
-    />
-  );
+  return <HistoryView onGenerate={generate} onOpen={openSaved} />;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -215,9 +189,8 @@ export function InsightsView() {
 // ──────────────────────────────────────────────────────────────────
 
 function HistoryView({
-  saved, onGenerate, onOpen,
+  onGenerate, onOpen,
 }: {
-  saved: SavedReportMeta[];
   onGenerate: (r: RangeChoice) => void;
   onOpen: (key: string) => void;
 }) {
@@ -256,12 +229,10 @@ function HistoryView({
             </button>
           ))}
         </div>
-        {tab === "weeks" && (
-          <label style={inProgressToggle}>
-            <input type="checkbox" checked={includeInProgress} onChange={(e) => setIncludeInProgress(e.target.checked)} />
-            <span>Include current week</span>
-          </label>
-        )}
+        <label style={inProgressToggle}>
+          <input type="checkbox" checked={includeInProgress} onChange={(e) => setIncludeInProgress(e.target.checked)} />
+          <span>Include current {tab === "weeks" ? "week" : "month"}</span>
+        </label>
       </div>
 
       {/* Weeks list or month rollup */}
@@ -287,7 +258,7 @@ function HistoryView({
           </ul>
         )
       ) : (
-        <MonthsView saved={saved} onGenerate={onGenerate} onOpen={onOpen} />
+        <MonthsView onGenerate={onGenerate} onOpen={onOpen} includeInProgress={includeInProgress} />
       )}
       <Spin />
     </div>
@@ -348,48 +319,101 @@ function WeekPickerRow({
   );
 }
 
+type MonthRow = {
+  year: number;
+  month: number;
+  start: string;
+  end: string;
+  label: string;
+  sessions: number;
+  in_progress: boolean;
+  saved_key: string | null;
+  archetype_label?: string;
+  sessions_used?: number;
+  prs?: number;
+};
+
 function MonthsView({
-  saved, onGenerate, onOpen,
+  onGenerate, onOpen, includeInProgress,
 }: {
-  saved: SavedReportMeta[];
   onGenerate: (r: RangeChoice) => void;
   onOpen: (key: string) => void;
+  includeInProgress: boolean;
 }) {
-  // MVP: one tile for the last-4-completed-weeks rollup. Presence flag if
-  // a matching 4weeks-* key exists in saved.
-  const prior = priorCalendarWeek();
-  const start = new Date(prior.end); start.setDate(prior.end.getDate() - 27);
-  const key = `4weeks-${isoDay(start)}`;
-  const existing = saved.find((s) => s.key === key);
-  const label = `${fmtDate(start)} – ${fmtDate(prior.end)}`;
+  const [months, setMonths] = useState<MonthRow[] | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/insights/months-index?count=6")
+      .then((r) => r.json())
+      .then((j: { months: MonthRow[] }) => setMonths(j.months))
+      .catch(() => setMonths([]));
+  }, []);
+
+  if (months === null) return <div style={emptyHistoryStyle}>Loading months…</div>;
+
   return (
     <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-      <li style={pickerRow(!!existing)}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)" }}>
-            Last 4 completed weeks
-          </div>
-          <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-            {label} · 28-day rollup
-            {existing && <> · <span style={{ color: "var(--af-accent)" }}>{existing.archetype_label}</span></>}
-          </div>
-        </div>
-        {existing ? (
-          <button type="button" onClick={() => onOpen(existing.key)} style={primaryBtn}>
-            View report <ChevronRight size={13} />
-          </button>
-        ) : (
-          <button type="button" style={secondaryBtn}
-            onClick={() => onGenerate({
-              id: key,
-              label: `Last 4 completed weeks`,
-              body: { range_type: "4weeks_completed" },
-            })}>
-            Generate
-          </button>
-        )}
-      </li>
+      {months
+        .filter((m) => includeInProgress || !m.in_progress)
+        .map((m) => <MonthPickerRow key={m.start} m={m}
+          onView={() => m.saved_key && onOpen(m.saved_key)}
+          onGenerate={() => onGenerate({
+            id: `month-${m.start}`,
+            label: m.label,
+            body: { range_type: "custom", since: m.start, until: m.end },
+          })}
+        />)}
     </ul>
+  );
+}
+
+function MonthPickerRow({
+  m, onView, onGenerate,
+}: {
+  m: MonthRow;
+  onView: () => void;
+  onGenerate: () => void;
+}) {
+  const saved = !!m.saved_key;
+  const empty = m.sessions === 0 && !m.in_progress;
+  return (
+    <li style={pickerRow(saved)}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em" }}>
+            {m.label}
+          </span>
+          {m.in_progress && <span style={inProgressTag}>in progress</span>}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <span>{m.sessions} sess</span>
+          {saved && m.archetype_label && (
+            <>
+              <span>·</span>
+              <span style={{ color: "var(--af-accent)" }}>{m.archetype_label}</span>
+              <span>·</span>
+              <span>{m.sessions_used} used · {m.prs} PR</span>
+            </>
+          )}
+          {empty && <><span>·</span><span>no data</span></>}
+        </div>
+      </div>
+      {saved ? (
+        <button type="button" onClick={onView} style={primaryBtn}>
+          View report <ChevronRight size={13} />
+        </button>
+      ) : empty ? (
+        <span style={disabledCTA}>no data</span>
+      ) : m.in_progress ? (
+        <button type="button" onClick={onGenerate} style={secondaryBtn} title="Current month is partial and won't be auto-saved">
+          Generate anyway
+        </button>
+      ) : (
+        <button type="button" onClick={onGenerate} style={secondaryBtn}>
+          Generate
+        </button>
+      )}
+    </li>
   );
 }
 
