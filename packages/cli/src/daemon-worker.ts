@@ -19,6 +19,7 @@ import { fetchUsage, UsageApiError } from "./usage/api.js";
 import { appendSnapshot } from "./usage/storage.js";
 import { isUsable, readOAuthCredentials } from "./usage/token.js";
 import { BASE_INTERVAL_MS, nextIntervalMs, type PollOutcome } from "./usage/backoff.js";
+import { runTeamSync } from "./team/sync.js";
 
 const STATE_DIR = join(homedir(), ".cclens");
 const USAGE_LOG = join(STATE_DIR, "usage.jsonl");
@@ -60,6 +61,7 @@ async function tick(): Promise<PollOutcome> {
     return "auth";
   }
 }
+
 
 function scheduleAfter(now: number, outcome: PollOutcome): void {
   const prev = currentIntervalMs;
@@ -113,6 +115,10 @@ async function runLoop(): Promise<void> {
         const outcome = await tick();
         scheduleAfter(Date.now(), outcome);
       }
+
+      // Team push is independent of Claude OAuth state — it uses its own bearer
+      // and a different server. Runs whether or not the usage poll fired.
+      await runTeamSync(log);
     }
     await sleep(WATCHDOG_INTERVAL_MS);
   }

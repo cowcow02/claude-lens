@@ -30,7 +30,7 @@ export async function stats(args: string[]): Promise<void> {
     const untilArg = parseDateArg(flag(args, "--until"));
     const daysArg = flag(args, "--days");
     let start = sinceArg;
-    let end = untilArg ?? new Date();
+    const end = untilArg ?? new Date();
     if (!start && daysArg) {
       const d = parseInt(daysArg, 10);
       if (Number.isFinite(d) && d > 0) {

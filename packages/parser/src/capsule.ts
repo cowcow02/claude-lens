@@ -10,13 +10,13 @@
  *   compact: session-level only. ~1 KB each. Fits 60 sessions in < 60 KB.
  *   full   : adds top-N turns with per-turn detail. ~15 KB. Session deep-dive.
  */
-import type { SessionDetail, SessionEvent } from "./types.js";
+import type { SessionDetail } from "./types.js";
 
 const IDLE_GAP_MS = 3 * 60 * 1000;
 const MAX_TURNS_IN_CAPSULE = 25;
 const TURN_FLOOR_MS = 15 * 1000;
 const INTERRUPT_RE = /\[request interrupted|interrupted by user/i;
-const SENTENCE_SPLIT_RE = /(?<=[.!?])\s+(?=[A-Z\[`])/;
+const SENTENCE_SPLIT_RE = /(?<=[.!?])\s+(?=[A-Z[`])/;
 const IMAGE_BLOCK_RE = /\[Image:\s*source:\s*[^\]]+\]/g;
 const PR_TITLE_RE = /--title\s+["']([^"']+)["']/;
 const BASH_CHAIN_SPLIT_RE = /\|\||&&|;|\|/;

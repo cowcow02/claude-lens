@@ -1,0 +1,45 @@
+services:
+  fleetlens:
+    build:
+      context: ../..
+      dockerfile: packages/team-server/Dockerfile
+    ports:
+      - "3322:3322"
+    environment:
+      - DATABASE_URL=postgres://fleetlens:${POSTGRES_PASSWORD}@postgres:5432/fleetlens
+      - BASE_URL=${BASE_URL:-http://localhost:3322}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      - POSTGRES_DB=fleetlens
+      - POSTGRES_USER=fleetlens
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleetlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      - fleetlens
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:

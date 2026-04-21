@@ -8,6 +8,12 @@ Nothing leaves your machine.
 
 > Published to npm as `fleetlens`. The binary is `fleetlens` — short enough for tab-completion, descriptive enough to explain itself.
 
+## Team Edition (self-hosted)
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/sGuijx)
+
+One click spins up the Fleetlens team server + Postgres on Railway. Postgres, private-network DB connection, public domain, and a freshly-generated encryption key are all pre-wired — no fields to fill in. Hit Deploy and you'll have a signup page live at your `*.up.railway.app` URL in ~90 seconds. The first account to sign up becomes the admin of team #1. Full setup notes in [`deploy/railway/`](./deploy/railway/README.md). Docker Compose and AWS Terraform alternatives live under [`deploy/`](./deploy).
+
 ## What makes it different
 
 There are [several](https://github.com/ryoppippi/ccusage) [excellent](https://github.com/chiphuyen/sniffly) [Claude Code](https://github.com/FlorianBruniaux/ccboard) [dashboards](https://github.com/d-kimuson/claude-code-viewer) already. `fleetlens` focuses on four things they don't cover well:

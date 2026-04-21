@@ -1,0 +1,139 @@
+"use client";
+
+import { useState } from "react";
+
+type TeamRow = { id: string; name: string; slug: string; created_at: string };
+type MemberRow = {
+  id: string;
+  email: string | null;
+  display_name: string | null;
+  role: string;
+  revoked_at: string | null;
+};
+
+export function SettingsPanel({ team, members, teamSlug }: { team: TeamRow; members: MemberRow[]; teamSlug: string }) {
+  const [teamName, setTeamName] = useState(team.name);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  async function saveProfile() {
+    setSaving(true);
+    setMessage(null);
+    const res = await fetch(`/api/team/settings?team=${teamSlug}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: teamName }),
+    });
+    setSaving(false);
+    setMessage(res.ok ? "Saved." : "Failed to save.");
+  }
+
+  async function createInvite(role: "admin" | "member") {
+    setInviteError(null);
+    setInviteUrl(null);
+    const res = await fetch(`/api/team/invites?team=${teamSlug}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, expiresInDays: 7 }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setInviteError(d.error || "Failed to create invite");
+      return;
+    }
+    const data = await res.json();
+    setInviteUrl(data.joinUrl);
+  }
+
+  async function revokeMember(memberId: string) {
+    if (!confirm("Revoke this member? They will lose access immediately.")) return;
+    await fetch(`/api/team/members/${memberId}`, { method: "DELETE" });
+    window.location.reload();
+  }
+
+  return (
+    <div>
+      <section className="settings-section">
+        <div className="subsection-head">
+          <h2>Team profile</h2>
+          <span className="kicker">Slug · {team.slug}</span>
+        </div>
+        <div className="settings-row" style={{ maxWidth: 520 }}>
+          <input
+            value={teamName}
+            onChange={(e) => setTeamName(e.target.value)}
+            style={{ flex: 1, padding: "9px 12px", border: "1px solid var(--rule)", background: "var(--bg)", fontSize: 14, fontFamily: "JetBrains Mono, monospace" }}
+          />
+          <button onClick={saveProfile} disabled={saving} className="btn">
+            {saving ? "Saving" : "Save"}
+          </button>
+        </div>
+        {message && (
+          <div className="mono" style={{ fontSize: 11, color: "var(--mute)", marginTop: 10, letterSpacing: "0.1em" }}>
+            {message.toUpperCase()}
+          </div>
+        )}
+      </section>
+
+      <section className="settings-section">
+        <div className="subsection-head">
+          <h2>Invite a member</h2>
+          <span className="kicker">Share-link · 7-day expiry</span>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => createInvite("member")} className="btn">+ Member invite</button>
+          <button onClick={() => createInvite("admin")} className="btn secondary">+ Admin invite</button>
+        </div>
+        {inviteError && <div className="form-error" style={{ marginTop: 12 }}>{inviteError}</div>}
+        {inviteUrl && (
+          <div className="help-box" style={{ marginTop: 16 }}>
+            <p>Invite link created. Copy it and share out-of-band:</p>
+            <code className="help-example">{inviteUrl}</code>
+            <p className="help-note">Expires in 7 days. The invitee creates their password on first click.</p>
+          </div>
+        )}
+      </section>
+
+      <section className="settings-section">
+        <div className="subsection-head">
+          <h2>Members</h2>
+          <span className="kicker">{members.filter((m) => !m.revoked_at).length} active</span>
+        </div>
+        <table className="member-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {members.map((m) => (
+              <tr key={m.id}>
+                <td>{m.display_name || <span style={{ color: "var(--mute)" }}>—</span>}</td>
+                <td className="mono" style={{ fontSize: 12, color: "var(--mute)" }}>{m.email || "—"}</td>
+                <td className="mono" style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: m.role === "admin" ? "var(--accent)" : "var(--mute)" }}>
+                  {m.role}
+                </td>
+                <td>
+                  <span className={`status-badge ${m.revoked_at ? "revoked" : "active"}`}>
+                    {m.revoked_at ? "Revoked" : "Active"}
+                  </span>
+                </td>
+                <td style={{ textAlign: "right" }}>
+                  {!m.revoked_at && m.role !== "admin" && (
+                    <button onClick={() => revokeMember(m.id)} className="btn danger-ghost">Revoke</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
