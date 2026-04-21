@@ -25,7 +25,7 @@ import {
   type PeriodBundle,
 } from "@claude-lens/parser";
 import { INSIGHTS_SYSTEM_PROMPT } from "@/lib/ai/insights-prompt";
-import { saveReport, keyForRange } from "@/lib/ai/saved-reports";
+import { saveReport, keyForRange, listSavedReports, getSavedReport } from "@/lib/ai/saved-reports";
 import { spawn } from "node:child_process";
 import type { ReportData, IconKey } from "@/components/insight-report";
 
@@ -174,8 +174,16 @@ export async function POST(request: Request) {
         try { bundle.usage = await loadUsageByDay(range.start, range.end); }
         catch { /* optional */ }
 
+        status("data", "Loading prior reports for baseline comparison");
+        const priorBaseline = await loadPriorWeeks(4);
+
         // Phase 2 · Analyst — stringify the payload once; reuse for status, prompt, and context_kb.
-        const payloadJson = JSON.stringify({ period: bundle.period, aggregates: bundle, capsules: caps });
+        const payloadJson = JSON.stringify({
+          period: bundle.period,
+          aggregates: bundle,
+          capsules: caps,
+          prior: priorBaseline,
+        });
         const payloadKb = Math.round(payloadJson.length / 1024);
         status("analyst", `Sending ${payloadKb} KB to Claude (sonnet)`);
 
@@ -188,7 +196,7 @@ export async function POST(request: Request) {
 
         // Phase 3 · Compose
         status("compose", "Merging aggregates + narrative");
-        const report = mergeReport(bundle, narrative, range, payloadKb);
+        const report = mergeReport(bundle, narrative, range, payloadKb, priorBaseline);
         report.meta.pipeline_ms = Date.now() - t0;
 
         send({ type: "report", report });
@@ -303,11 +311,40 @@ function extractJsonBlock(s: string): string | null {
 //                     Merge → ReportData
 // ──────────────────────────────────────────────────────────────────
 
+type PriorWeek = {
+  period_label: string;
+  archetype: string;
+  sessions: number;
+  prs: number;
+  subagents: number;
+  agent_minutes: number;
+};
+
+async function loadPriorWeeks(limit: number): Promise<PriorWeek[]> {
+  const all = await listSavedReports();
+  const weeks = all.filter((r) => r.key.startsWith("week-")).slice(0, limit);
+  const out: PriorWeek[] = [];
+  for (const meta of weeks) {
+    const r = await getSavedReport(meta.key);
+    if (!r) continue;
+    out.push({
+      period_label: r.period_label,
+      archetype: r.archetype.label,
+      sessions: r.meta.sessions_used,
+      prs: r.shipped.length,
+      subagents: r.concurrency.peak, // rough proxy for ambition
+      agent_minutes: r.days.reduce((a, d) => a + d.agent_minutes, 0),
+    });
+  }
+  return out;
+}
+
 function mergeReport(
   bundle: PeriodBundle,
   n: Narrative,
   range: { in_progress: boolean },
   contextKb: number,
+  priorWeeks: PriorWeek[],
 ): ReportData {
   const skillEntries = Object.entries(bundle.skills_total).sort((a, b) => b[1] - a[1]);
   const top_skills = skillEntries.slice(0, 6).map(([name, count]) => ({ name, count }));
@@ -411,7 +448,7 @@ function mergeReport(
     outliers,
     suggestion_headline: n.suggestion_headline,
     suggestion_body: n.suggestion_body,
-    prior_weeks: [],
+    prior_weeks: priorWeeks,
     saved_reports: [],
     meta: {
       generated_at: new Date().toISOString().replace("T", " ").slice(0, 16),

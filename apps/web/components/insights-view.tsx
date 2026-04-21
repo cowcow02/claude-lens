@@ -188,6 +188,7 @@ export function InsightsView() {
   }
 
   if (view.kind === "report") {
+    const rangeForKey = rangeFromKey(view.key, ranges, defaultRange);
     return (
       <div style={{ position: "relative" }}>
         <div style={topNavStyle} className="no-print">
@@ -200,7 +201,10 @@ export function InsightsView() {
             </span>
           )}
         </div>
-        <InsightReport data={view.report} />
+        <InsightReport
+          data={view.report}
+          onRegenerate={rangeForKey ? () => generate(rangeForKey) : undefined}
+        />
       </div>
     );
   }
@@ -445,6 +449,25 @@ function buildRangeChoices(): RangeChoice[] {
 
 function priorWeekStart(): Date {
   return priorCalendarWeek().start;
+}
+
+/** Map a saved-report key back to the RangeChoice so the Regenerate button
+ *  knows which API range_type to request. `week-<prior_start>` maps to
+ *  `prior_week`; everything else falls back to null (hides the button). */
+function rangeFromKey(
+  key: string | null,
+  ranges: RangeChoice[],
+  defaultRange: RangeChoice,
+): RangeChoice | null {
+  if (!key) return null;
+  if (key === `week-${isoDay(priorCalendarWeek().start)}`) return defaultRange;
+  const fourWeeks = ranges.find((r) => r.id === "4weeks_completed");
+  if (fourWeeks) {
+    const fwStart = new Date(priorCalendarWeek().end);
+    fwStart.setDate(fwStart.getDate() - 27);
+    if (key === `4weeks-${isoDay(fwStart)}`) return fourWeeks;
+  }
+  return null;
 }
 
 function isoDay(d: Date): string {

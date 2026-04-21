@@ -5,7 +5,8 @@
  *   - period:      { start, end, label, range_type }
  *   - aggregates:  PeriodBundle from @claude-lens/parser (all deterministic numbers)
  *   - capsules:    SessionCapsule[] — intent material + behavioural flags
- *   - prior:       optional — last 4 reports' archetypes / stats for vs_usual
+ *   - prior:       PriorWeek[] — last 4 reports (archetype + stats). Empty if this
+ *                  is the first run. When non-empty, populate archetype.vs_usual.
  *
  * Output MUST be a single JSON object inside a ```json fence, matching
  * the schema below. No prose outside the fence. No markdown outside.
@@ -24,7 +25,7 @@ Return EXACTLY ONE JSON object inside a \`\`\`json fenced code block. No prose b
     "icon":  "Network" | "BrainCircuit" | "Zap" | "Compass" | "Layers3" | "Sparkles",
     "tagline": "… short phrase, ≤ 70 chars, describing working style …",
     "why":     "… 1-2 sentences grounded in aggregate numbers (e.g. 'You ran X subagent dispatches across Y turns…') …",
-    "vs_usual": "… optional; only if prior archetypes were provided. Omit otherwise."
+    "vs_usual": "… OPTIONAL: only populate if \`prior\` is non-empty. 1 sentence contrasting this week's archetype + behaviour with the baseline (e.g. 'More orchestrated than the last 4 weeks (usual: Solo Builder)'). Omit the key entirely otherwise."
   },
   "theme_headline": "3-7 words capturing the period's dominant theme",
   "shipped_summaries": {

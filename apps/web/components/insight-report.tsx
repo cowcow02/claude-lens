@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import {
   ArrowRight,
   BrainCircuit,
+  Check,
   ClipboardList,
   Compass,
   Download,
@@ -136,12 +138,12 @@ const FLAG_TONE: Record<string, { label: string; tone: "good" | "warn" | "danger
 //                        Top-level component
 // ──────────────────────────────────────────────────────────────────
 
-export function InsightReport({ data }: { data: ReportData }) {
+export function InsightReport({ data, onRegenerate }: { data: ReportData; onRegenerate?: () => void }) {
   return (
     <>
       <PrintStyles />
       <div className="report-root" style={rootStyle}>
-        <Toolbar data={data} />
+        <Toolbar data={data} onRegenerate={onRegenerate} />
 
         {/* Section 1 · ARCHETYPE */}
         <Section index={1} title="Who you were" kicker="Your working style, distilled" anchor="archetype">
@@ -184,8 +186,16 @@ export function InsightReport({ data }: { data: ReportData }) {
 //                           Sub-components
 // ──────────────────────────────────────────────────────────────────
 
-function Toolbar({ data }: { data: ReportData }) {
+function Toolbar({ data, onRegenerate }: { data: ReportData; onRegenerate?: () => void }) {
+  const [copied, setCopied] = useState(false);
   const onPrint = () => { if (typeof window !== "undefined") window.print(); };
+  const onCopyMd = async () => {
+    try {
+      await navigator.clipboard.writeText(renderReportAsMarkdown(data));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch { /* ignore — clipboard may be unavailable in insecure contexts */ }
+  };
   return (
     <div className="no-print" style={toolbarStyle}>
       <div style={{ display: "flex", flexDirection: "column", gap: 2, marginRight: "auto" }}>
@@ -197,18 +207,77 @@ function Toolbar({ data }: { data: ReportData }) {
         </div>
         <div style={{ fontSize: 12, color: "var(--af-text-secondary)" }}>{data.period_sublabel}</div>
       </div>
-      <select style={toolbarSelect} defaultValue={data.saved_reports.find((r) => r.current)?.id}>
-        {data.saved_reports.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.period_label}{r.current ? "  (current)" : r.note ? `  — ${r.note}` : ""}
-          </option>
-        ))}
-      </select>
-      <button type="button" style={secondaryBtn}><Zap size={12} /> Regenerate</button>
-      <button type="button" style={secondaryBtn}><Share2 size={12} /> Copy MD</button>
+      {onRegenerate && (
+        <button type="button" style={secondaryBtn} onClick={onRegenerate}><Zap size={12} /> Regenerate</button>
+      )}
+      <button type="button" style={secondaryBtn} onClick={onCopyMd}>
+        {copied ? <Check size={12} /> : <Share2 size={12} />} {copied ? "Copied" : "Copy MD"}
+      </button>
       <button type="button" style={primaryBtn} onClick={onPrint}><Download size={12} /> Save as PDF</button>
     </div>
   );
+}
+
+function renderReportAsMarkdown(d: ReportData): string {
+  const lines: string[] = [];
+  lines.push(`# Insight report — ${d.period_label}`);
+  lines.push(`*${d.period_sublabel}*`);
+  lines.push("");
+  lines.push(`## ${d.archetype.label}`);
+  lines.push(`*${d.archetype.tagline}*`);
+  lines.push("");
+  lines.push(d.archetype.why);
+  if (d.archetype.vs_usual) lines.push(`\n*vs your usual:* ${d.archetype.vs_usual}`);
+  lines.push("");
+  if (d.top_skills.length) {
+    lines.push("**Skills leaned on:** " + d.top_skills.map((s) => `${s.name} (${s.count}×)`).join(", "));
+    lines.push("");
+  }
+  lines.push(`## The week at a glance`);
+  lines.push(`*${d.theme_headline}*`);
+  lines.push("");
+  for (const day of d.days) {
+    const conc = day.concurrency_peak > 1 ? ` · ×${day.concurrency_peak}${day.has_cross_project ? " cross-project" : ""}` : "";
+    const util = day.plan_util_pct > 0 ? ` · ${day.plan_util_pct}% plan` : "";
+    lines.push(`- **${day.day_name} ${day.date_label}** — ${day.agent_minutes}m${conc}${util}`);
+  }
+  lines.push("");
+  lines.push(`## Projects`);
+  for (const p of d.projects) lines.push(`- ${p.display_name} — ${p.share_pct}% (${p.prs} PR, ${p.commits} commits)`);
+  lines.push("");
+  if (d.shipped.length) {
+    lines.push(`## Shipped (${d.shipped.length})`);
+    for (const s of d.shipped) {
+      lines.push(`### ${s.title}`);
+      lines.push(`${s.project} · ${s.duration_label} · ${s.commits} commits${s.subagents ? ` · ${s.subagents} subagents` : ""}`);
+      if (s.flags.length) lines.push(`Flags: ${s.flags.join(", ")}`);
+      lines.push("");
+      if (s.summary) { lines.push(s.summary); lines.push(""); }
+    }
+  }
+  if (d.patterns.length) {
+    lines.push(`## Patterns`);
+    for (const p of d.patterns) lines.push(`- **${p.title}** (${p.stat}) — ${p.note}`);
+    lines.push("");
+  }
+  lines.push(`## Concurrency`);
+  lines.push(`Peak ×${d.concurrency.peak} on ${d.concurrency.peak_day} · ${d.concurrency.multi_agent_days} multi-agent days · ${d.concurrency.cross_project_days} cross-project days`);
+  if (d.concurrency.insight) { lines.push(""); lines.push(d.concurrency.insight); }
+  if (d.concurrency.suggestion) { lines.push(""); lines.push(`→ ${d.concurrency.suggestion}`); }
+  lines.push("");
+  if (d.outliers.length) {
+    lines.push(`## Outliers`);
+    for (const o of d.outliers) lines.push(`- **${o.label}** — ${o.detail} · ${o.note}`);
+    lines.push("");
+  }
+  lines.push(`## What to try next`);
+  lines.push(`**${d.suggestion_headline}**`);
+  lines.push("");
+  lines.push(d.suggestion_body);
+  lines.push("");
+  lines.push(`---`);
+  lines.push(`*${d.meta.sessions_used} substantive sessions · ${d.meta.model} · generated ${d.meta.generated_at}*`);
+  return lines.join("\n");
 }
 
 function Section({
