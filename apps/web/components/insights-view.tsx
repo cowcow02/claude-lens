@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, CheckCircle2, ChevronRight,
+  CheckCircle2, ChevronRight,
   Circle, Loader2, Square,
 } from "lucide-react";
 import { priorCalendarWeek } from "@claude-lens/parser";
-import { InsightReport, type ReportData } from "@/components/insight-report";
+import { type ReportData } from "@/components/insight-report";
 import type { SavedReportMeta } from "@/lib/ai/saved-reports";
 
 type RangeChoice = {
@@ -44,7 +45,6 @@ type View =
   | { kind: "loading_history" }
   | { kind: "history"; saved: SavedReportMeta[] }
   | { kind: "generating"; rangeId: string; label: string; phases: Phase[]; elapsedMs: number }
-  | { kind: "report"; report: ReportData; key: string | null }
   | { kind: "error"; message: string };
 
 const INITIAL_PHASES: Phase[] = [
@@ -54,6 +54,7 @@ const INITIAL_PHASES: Phase[] = [
 ];
 
 export function InsightsView() {
+  const router = useRouter();
   const [view, setView] = useState<View>({ kind: "loading_history" });
   const abortRef = useRef<AbortController | null>(null);
   const startTimerRef = useRef<number | null>(null);
@@ -73,17 +74,9 @@ export function InsightsView() {
     }
   }
 
-  async function openSaved(key: string) {
-    setView({ kind: "loading_history" });
-    try {
-      const res = await fetch(`/api/insights/saved/${key}`);
-      if (!res.ok) { setView({ kind: "error", message: "Report not found" }); return; }
-      const json = await res.json() as { report: ReportData };
-      setView({ kind: "report", report: json.report, key });
-    } catch (err) {
-      setView({ kind: "error", message: (err as Error).message });
-    }
-  }
+  const openSaved = useCallback((key: string) => {
+    router.push(`/insights/${key}`);
+  }, [router]);
 
   const generate = useCallback(async (range: RangeChoice) => {
     const phases: Phase[] = INITIAL_PHASES.map((p) => ({ ...p, steps: [] }));
@@ -169,8 +162,13 @@ export function InsightsView() {
           }
         }
       }
-      if (report) {
-        setView({ kind: "report", report, key: savedKey });
+      // Successful generation of a completed period lands on the report URL.
+      // In-progress (unsaved) generations land back on the history view with
+      // the fresh report reflected in the list on next mount.
+      if (report && savedKey) {
+        router.push(`/insights/${savedKey}`);
+      } else {
+        void refreshHistory();
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
@@ -179,11 +177,8 @@ export function InsightsView() {
     } finally {
       if (startTimerRef.current) { window.clearInterval(startTimerRef.current); startTimerRef.current = null; }
       abortRef.current = null;
-      // If generation succeeded, refresh history in the background so the next
-      // return-to-history has this new report.
-      setTimeout(() => { void refreshHistory().catch(() => {}); }, 1000);
     }
-  }, []);
+  }, [router]);
 
   const stop = () => abortRef.current?.abort();
 
@@ -197,24 +192,6 @@ export function InsightsView() {
       <div style={errorStyle}>
         <strong>Error:</strong> {view.message}
         <button type="button" onClick={() => { void refreshHistory(); }} style={{ ...primaryBtn, marginLeft: 12 }}>Back to reports</button>
-      </div>
-    );
-  }
-
-  if (view.kind === "report") {
-    return (
-      <div style={{ position: "relative" }}>
-        <div style={topNavStyle} className="no-print">
-          <button type="button" onClick={refreshHistory} style={secondaryBtn}>
-            <ArrowLeft size={12} /> Reports
-          </button>
-          {view.key && (
-            <span style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-              saved · key: {view.key}
-            </span>
-          )}
-        </div>
-        <InsightReport data={view.report} savedKey={view.key} />
       </div>
     );
   }
