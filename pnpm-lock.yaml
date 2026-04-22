@@ -121,6 +121,22 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@20.19.39)(lightningcss@1.32.0)
 
+  packages/entries:
+    dependencies:
+      '@claude-lens/parser':
+        specifier: workspace:*
+        version: link:../parser
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.0
+        version: 20.19.39
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@20.19.39)(lightningcss@1.32.0)
+
   packages/parser:
     devDependencies:
       '@types/node':
