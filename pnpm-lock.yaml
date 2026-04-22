@@ -41,6 +41,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@claude-lens/entries':
+        specifier: workspace:^
+        version: link:../../packages/entries
       '@claude-lens/parser':
         specifier: workspace:*
         version: link:../../packages/parser
