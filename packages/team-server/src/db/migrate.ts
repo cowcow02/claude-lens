@@ -3,7 +3,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Client } from "pg";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyPreDrizzleBaselineIfNeeded } from "./baseline.js";
+import { applyPreDrizzleBaselineIfNeeded } from "./baseline";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
