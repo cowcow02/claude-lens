@@ -407,7 +407,7 @@ The running server checks for the required env vars at boot. If missing, the `/a
 
 | Credential | Scope | Blast radius if leaked |
 |---|---|---|
-| GCP `fleetlens-team-server-sa` | `run.developer` on one Cloud Run service only | Attacker can change the image of that one service to anything on any registry. Cannot create other services, cannot access other projects, cannot read Cloud SQL directly. |
+| GCP default Compute SA with the added resource-scoped `roles/run.developer` | That role grants `run.services.update` on this one Cloud Run service only | Attacker with the SA's token can change the image of that one service to anything on any registry. Cannot create other services, cannot access other projects, cannot read Cloud SQL directly beyond what this SA already could pre-self-update. |
 | Railway `RAILWAY_TOKEN` | Project-scoped | Attacker can redeploy any service in the project. Team-server deployments should live in a dedicated Railway project (already the case with the one-click template). |
 
 **Threat model**: the primary threat is a compromised admin account triggering a malicious update. Mitigations:
