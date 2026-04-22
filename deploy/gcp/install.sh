@@ -40,12 +40,33 @@ command -v gcloud  >/dev/null || die "gcloud CLI not found. Use Cloud Shell or i
 command -v openssl >/dev/null || die "openssl required for secret generation."
 command -v docker  >/dev/null || die "docker required to copy image from GHCR to Artifact Registry. Cloud Shell has it preinstalled."
 
-#—— Preflight inspection (READ ONLY) ————————————————————————————————
-hdr "Preflight — inspecting environment (no changes yet)"
-
 ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
 [ -n "$ACCOUNT" ] || die "No active gcloud account. Run: gcloud auth login"
+
+#—— Interactive edit (skipped in non-TTY or ASSUME_YES=1) ——————————
+# Defaults come from env vars or gcloud config. Three most-edited fields
+# get a type-with-default prompt; everything else is env-var-only.
+prompt_default() {
+  local label="$1" current="$2" hint="${3:-}" input=""
+  local line="$label [$current]"
+  [ -n "$hint" ] && line="$line $d($hint)$x"
+  line="$line: "
+  printf "%s" "$line" >/dev/tty
+  IFS= read -r input </dev/tty || input=""
+  printf '%s' "${input:-$current}"
+}
+
+if [ "$ASSUME_YES" != "1" ] && [ -t 0 ] && [ -r /dev/tty ]; then
+  hdr "Pick your install targets (press Enter to keep the default)"
+  PROJECT="$(prompt_default "Project"        "$PROJECT"       "any GCP project ID with billing linked")"
+  REGION="$(prompt_default  "Region"         "$REGION"        "us-central1 · europe-west1 · asia-southeast1 · asia-east1")"
+  DB_TIER="$(prompt_default "Cloud SQL tier" "$DB_TIER"       "db-f1-micro · db-g1-small · db-custom-1-3840")"
+fi
+
 [ -n "$PROJECT" ] || die "No project set. Run: gcloud config set project <id> (or pass PROJECT=<id>)."
+
+#—— Preflight inspection (READ ONLY) ————————————————————————————————
+hdr "Preflight — inspecting environment (no changes yet)"
 
 # Verify the project exists and we can describe it (implicitly checks auth)
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"

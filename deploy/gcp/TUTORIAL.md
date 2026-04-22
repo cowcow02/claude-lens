@@ -21,12 +21,13 @@ gcloud config set run/region asia-southeast1   # or us-central1, europe-west1…
 ./install.sh
 ```
 
-The installer runs in **two phases**:
+The installer runs in **three phases**:
 
-1. **Preflight (no changes)** — prints a summary of your environment and every resource / API / IAM change it would make, with cost and time estimate. No mutations happen yet.
-2. **Execution (only after you confirm)** — enables APIs, creates Cloud SQL, generates secrets, deploys Cloud Run, sets up Cloud Scheduler. Each action is labeled `create` or `reuse` based on current state.
+1. **Pick targets** — prompts you for Project / Region / Cloud SQL tier with your `gcloud config` values pre-filled. Press Enter to accept any default; type to override.
+2. **Preflight (no changes)** — prints a summary of your environment and every resource / API / IAM change it would make, with cost and time estimate. No mutations happen yet.
+3. **Execution (only after you confirm)** — enables APIs, creates Cloud SQL, generates secrets, deploys Cloud Run, sets up Cloud Scheduler. Each action is labeled `create` or `reuse` based on current state.
 
-Skip the confirmation prompt with `./install.sh --yes` or `ASSUME_YES=1 ./install.sh` — useful for scripted deploys.
+Skip both prompts (for scripted deploys) with `./install.sh --yes` or `ASSUME_YES=1 ./install.sh`. Defaults come from env vars and `gcloud config`; see the config table below.
 
 ### Prefer manual commands?
 
