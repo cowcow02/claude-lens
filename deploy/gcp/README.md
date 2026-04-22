@@ -1,0 +1,32 @@
+# Deploy Fleetlens Team Edition to Google Cloud
+
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/cowcow02/fleetlens&cloudshell_workspace=deploy/gcp&cloudshell_tutorial=TUTORIAL.md)
+
+Click the button. Cloud Shell opens with the repo cloned and a guided walkthrough. The whole deploy takes ~5 minutes and costs ~$10–25/mo.
+
+Full flow + configuration knobs → [`TUTORIAL.md`](./TUTORIAL.md).
+
+## Stack
+
+- **Cloud Run** — stateless container, autoscales 0→N, public HTTPS
+- **Cloud SQL Postgres 17** — `db-f1-micro` by default, connected over Unix socket (no VPC required)
+- **Secret Manager** — DB password, encryption key, scheduler shared-secret
+- **Cloud Scheduler** — hourly prune of `ingest_log` (Cloud Run request-based CPU makes `setInterval` unreliable)
+- **Container image** — `ghcr.io/cowcow02/fleetlens-team-server:latest`, published on every master push by the `publish-team-server-image` workflow
+
+## Why this architecture
+
+Railway's runtime + Postgres template maps almost 1:1 onto Cloud Run + Cloud SQL. Two things needed code changes, both committed in this branch:
+
+1. Scheduler extracted into a shared `pruneIngestLog()` + exposed as `POST /api/admin/prune` so Cloud Scheduler can trigger it on a cron. The in-container `setInterval` still runs on Railway and Docker Compose but is a no-op when `FLEETLENS_EXTERNAL_SCHEDULER=1` (set by the installer).
+2. Image is pre-built and pushed to GHCR so Cloud Run deploys in ~30 seconds without a Cloud Build round-trip.
+
+## Comparing to the Railway button
+
+| | Railway | GCP |
+|---|---|---|
+| Click to live URL | ~90s | ~5 min (Cloud SQL provisioning dominates) |
+| Manual input | 0 fields | 0 fields (project + region taken from `gcloud config`) |
+| Cost idle | ~$15/mo | ~$10/mo (Cloud Run scales to zero) |
+| Cost active | ~$25/mo | ~$25/mo |
+| Prerequisites | Railway account | GCP project with billing linked |
