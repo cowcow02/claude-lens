@@ -11,6 +11,27 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+
+    # Mirror CI's Postgres service so team-server integration tests pass
+    # under `pnpm test` the same way they do on PR checks.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fleetlens_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/fleetlens_dev
+
     steps:
       - uses: actions/checkout@v4
 
