@@ -307,7 +307,7 @@ pnpm --filter @claude-lens/team-server add drizzle-orm@0.40.0
 pnpm --filter @claude-lens/team-server add -D drizzle-kit@0.30.0
 ```
 
-**Version pinning matters.** The baseline insert in Chunk 3 depends on Drizzle's migration-hash algorithm; pin exact versions (not `^`) so a future upgrade is a deliberate cross-cut not an accidental break. Edit `packages/team-server/package.json` after the `pnpm add` to remove any `^` prefix:
+**Version pinning matters.** The baseline runner in Chunk 3 relies on the exact shape of Drizzle's `__drizzle_migrations` table and its `created_at >= folderMillis` skip logic. Both are stable in the `0.40.x` / `0.30.x` line but could change across major versions; pin exact versions (not `^`) so a future upgrade is a deliberate cross-cut not an accidental break. Edit `packages/team-server/package.json` after the `pnpm add` to remove any `^` prefix:
 
 ```json
 "dependencies": {
@@ -923,21 +923,38 @@ describe("schema parity with SCHEMA_SQL", () => {
 
   it("CHECK constraints on role columns enforce admin/member", async () => {
     const pool = getPool();
-    // memberships row with a bad role should be rejected:
-    await expect(
-      pool.query(
-        `INSERT INTO memberships (user_account_id, team_id, role)
-         VALUES (gen_random_uuid(), gen_random_uuid(), 'bogus')`,
-      ),
-    ).rejects.toThrow();
+    // Set up real parent rows so the FK constraints are satisfied and we know
+    // the INSERT rejection is from the CHECK constraint, not an FK failure.
+    const user = await pool.query<{ id: string }>(
+      `INSERT INTO user_accounts (email, password_hash) VALUES ('check-test@example.com', 'x') RETURNING id`,
+    );
+    const team = await pool.query<{ id: string }>(
+      `INSERT INTO teams (slug, name) VALUES ('check-test', 'Check Test') RETURNING id`,
+    );
 
-    // invites row with a bad role should be rejected:
-    await expect(
-      pool.query(
-        `INSERT INTO invites (team_id, created_by, token_hash, role, expires_at)
-         VALUES (gen_random_uuid(), gen_random_uuid(), 'hash', 'bogus', now() + interval '1 day')`,
-      ),
-    ).rejects.toThrow();
+    try {
+      // memberships with a bad role should be rejected by the CHECK constraint.
+      // Assert on the error shape so we know it's the CHECK, not something else:
+      await expect(
+        pool.query(
+          `INSERT INTO memberships (user_account_id, team_id, role)
+           VALUES ($1, $2, 'bogus')`,
+          [user.rows[0].id, team.rows[0].id],
+        ),
+      ).rejects.toThrow(/check constraint|memberships_role_check/i);
+
+      // invites with a bad role should be rejected similarly:
+      await expect(
+        pool.query(
+          `INSERT INTO invites (team_id, created_by, token_hash, role, expires_at)
+           VALUES ($1, $2, 'hash-' || gen_random_uuid()::text, 'bogus', now() + interval '1 day')`,
+          [team.rows[0].id, user.rows[0].id],
+        ),
+      ).rejects.toThrow(/check constraint|invites_role_check/i);
+    } finally {
+      await pool.query(`DELETE FROM teams WHERE id = $1`, [team.rows[0].id]);
+      await pool.query(`DELETE FROM user_accounts WHERE id = $1`, [user.rows[0].id]);
+    }
   });
 });
 ```
