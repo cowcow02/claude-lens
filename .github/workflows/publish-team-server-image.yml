@@ -2,14 +2,14 @@ name: Publish team-server image
 
 on:
   push:
+    branches: [master]
     paths:
       - "packages/team-server/**"
       - "packages/parser/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/publish-team-server-image.yml"
-  release:
-    types: [published]
+    tags: ["server-v*"]
   workflow_dispatch:
 
 jobs:
@@ -31,6 +31,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Read team-server version
+        id: tsver
+        run: echo "version=$(jq -r .version packages/team-server/package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Assert tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        run: |
+          expected="${GITHUB_REF_NAME#server-v}"
+          actual="${{ steps.tsver.outputs.version }}"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $actual"
+            exit 1
+          fi
+
       - name: Compute tags
         id: tags
         run: |
@@ -39,9 +53,9 @@ jobs:
           if [ "${{ github.ref }}" = "refs/heads/master" ]; then
             TAGS="$TAGS,$IMAGE:latest"
           fi
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            TAGS="$TAGS,$IMAGE:${VERSION#v},$IMAGE:latest"
+          if [[ "${{ github.ref }}" == refs/tags/server-v* ]]; then
+            VERSION="${{ steps.tsver.outputs.version }}"
+            TAGS="$TAGS,$IMAGE:${VERSION},$IMAGE:latest"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
@@ -52,6 +66,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            APP_VERSION=${{ steps.tsver.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Fleetlens Team Edition server (Next.js + Postgres)
