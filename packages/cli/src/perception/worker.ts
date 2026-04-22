@@ -4,6 +4,7 @@ import { parseTranscript } from "@claude-lens/parser";
 import type { SessionDetail } from "@claude-lens/parser";
 import { buildEntries } from "@claude-lens/entries";
 import { writeEntry } from "@claude-lens/entries/fs";
+import { readSettings, runEnrichmentQueue } from "@claude-lens/entries/node";
 import {
   readState, updateCheckpoint, markSweepStart, markSweepEnd, isSweepStale,
 } from "./state.js";
@@ -98,6 +99,19 @@ export async function runPerceptionSweep(opts: SweepOptions = {}): Promise<Sweep
         errors++;
         log(`skipped ${f}: ${(err as Error).message}`);
       }
+    }
+    // Phase 1b enrichment — guarded by settings. Failure here is logged
+    // but not fatal to the deterministic sweep result.
+    try {
+      const settings = readSettings();
+      const r = await runEnrichmentQueue(settings.ai_features);
+      if ("skipped" in r && typeof r.skipped === "string") {
+        log(`enrichment: skipped (${r.skipped})`);
+      } else if ("enriched" in r) {
+        log(`enrichment: enriched=${r.enriched} errors=${r.errors} skipped=${r.skipped}`);
+      }
+    } catch (err) {
+      log(`enrichment failed: ${(err as Error).message}`);
     }
   } finally {
     markSweepEnd();

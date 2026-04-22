@@ -4,3 +4,4 @@ export * from "./enrich.js";
 export * from "./budget.js";
 export * from "./prompts/enrich.js";
 export * from "./queue.js";
+export * from "./settings.js";
