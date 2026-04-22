@@ -352,9 +352,60 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
   }
   let coldResumeCount = 0;
   let cacheRebuildTokens = 0;
+
+  // Compact boundaries always force a cache rebuild regardless of idle
+  // gap, so we handle them first and let them take precedence over the
+  // idle rule. They're written as `type: "system", subtype: "compact_boundary"`
+  // and carry `compactMetadata.{trigger, preTokens}`.
+  const compactBoundaries: { ms: number; trigger: "manual" | "auto"; preTokens: number }[] = [];
+  for (const e of events) {
+    if (e.rawType !== "system" || !e.timestamp) continue;
+    const r = e.raw as Record<string, unknown> | null;
+    if (!r || r.subtype !== "compact_boundary") continue;
+    const ms = Date.parse(e.timestamp);
+    if (Number.isNaN(ms)) continue;
+    const meta = (r.compactMetadata ?? {}) as Record<string, unknown>;
+    const trigger = meta.trigger === "manual" ? "manual" : "auto";
+    const preTokens = typeof meta.preTokens === "number" ? meta.preTokens : 0;
+    compactBoundaries.push({ ms, trigger, preTokens });
+  }
+  compactBoundaries.sort((a, b) => a.ms - b.ms);
+
+  const flaggedMessageIds = new Set<string>();
+  for (const b of compactBoundaries) {
+    // First unique-messageId assistant event after the boundary with a
+    // real cacheWrite — that's the turn that paid the rebuild tax.
+    const after = assistantChrono.find(
+      (a) => a.ms > b.ms && (a.e.usage?.cacheWrite ?? 0) >= COLD_MIN_WRITE,
+    );
+    if (!after) continue;
+    const u = after.e.usage!;
+    const denom = u.cacheWrite + u.cacheRead;
+    const writeRatio = denom > 0 ? u.cacheWrite / denom : 0;
+    // Locate the previous assistant event for gapMs so the UI can still
+    // show "gap since last API call" if useful. For compact this is
+    // typically small.
+    const prev = [...assistantChrono].reverse().find((a) => a.ms <= b.ms);
+    const gapMs = prev ? after.ms - prev.ms : 0;
+    const flag = {
+      trigger: "compact" as const,
+      gapMs,
+      writeTokens: u.cacheWrite,
+      writeRatio,
+      compact: { trigger: b.trigger, preTokens: b.preTokens },
+    };
+    const siblings = eventsByMsgId.get(after.e.messageId!) ?? [after.e];
+    for (const sib of siblings) sib.coldResume = flag;
+    flaggedMessageIds.add(after.e.messageId!);
+    coldResumeCount++;
+    cacheRebuildTokens += u.cacheWrite;
+  }
+
   for (let i = 1; i < assistantChrono.length; i++) {
     const prev = assistantChrono[i - 1]!;
     const cur = assistantChrono[i]!;
+    // Compact already claimed this turn — don't double-count.
+    if (flaggedMessageIds.has(cur.e.messageId!)) continue;
     const u = cur.e.usage!;
     const denom = u.cacheWrite + u.cacheRead;
     const writeRatio = denom > 0 ? u.cacheWrite / denom : 0;
@@ -364,7 +415,12 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       u.cacheWrite >= COLD_MIN_WRITE &&
       writeRatio >= COLD_MIN_RATIO
     ) {
-      const flag = { gapMs, writeTokens: u.cacheWrite, writeRatio };
+      const flag = {
+        trigger: "idle" as const,
+        gapMs,
+        writeTokens: u.cacheWrite,
+        writeRatio,
+      };
       const siblings = eventsByMsgId.get(cur.e.messageId!) ?? [cur.e];
       for (const sib of siblings) sib.coldResume = flag;
       coldResumeCount++;

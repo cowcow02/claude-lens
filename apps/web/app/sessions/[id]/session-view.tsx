@@ -2103,10 +2103,23 @@ function MinimapHoverCard({
   }
 
   if (cold) {
+    const { trigger, gapMs, writeTokens, compact } = cold.info;
+    const isCompact = trigger === "compact";
     const estUsd = estimateCost(
-      { input: 0, output: 0, cacheRead: 0, cacheWrite: cold.info.writeTokens },
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: writeTokens },
       model,
     );
+    const label = isCompact
+      ? compact?.trigger === "auto"
+        ? "⚡ AUTO-COMPACT"
+        : "⚡ /COMPACT"
+      : "⚡ CACHE REBUILD";
+    const detailLine = isCompact
+      ? `${formatTokens(writeTokens)} rewritten · pre-compact ${formatTokens(compact?.preTokens ?? 0)}`
+      : `${formatTokens(writeTokens)} rewritten · idle ${formatGap(gapMs)}`;
+    const hint = isCompact
+      ? "Conversation was summarized; prefix had to be rewritten into a fresh cache."
+      : "Prompt cache expired during idle; resuming within 5 min keeps it warm.";
     return (
       <div
         style={{
@@ -2136,15 +2149,14 @@ function MinimapHoverCard({
               color: "#fff",
             }}
           >
-            ⚡ CACHE REBUILD
+            {label}
           </span>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.7 }}>
             at {formatOffset(cold.tOffsetMs)}
           </span>
         </div>
         <div style={{ fontWeight: 500, fontFamily: "var(--font-mono)" }}>
-          {formatTokens(cold.info.writeTokens)} tokens rewritten · idle{" "}
-          {formatGap(cold.info.gapMs)}
+          {detailLine}
           {estUsd >= 0.005 && ` · est. ${formatCost(estUsd)}`}
         </div>
         <div
@@ -2156,7 +2168,7 @@ function MinimapHoverCard({
             whiteSpace: "normal",
           }}
         >
-          Prompt cache expired during idle; resuming within 5 min keeps it warm.
+          {hint}
         </div>
       </div>
     );
@@ -2627,13 +2639,21 @@ function ColdResumeNotice({
   info: NonNullable<SessionEvent["coldResume"]>;
   model?: string;
 }) {
-  const { gapMs, writeTokens, writeRatio } = info;
+  const { trigger, gapMs, writeTokens, writeRatio, compact } = info;
   const estUsd = estimateCost(
     { input: 0, output: 0, cacheRead: 0, cacheWrite: writeTokens },
     model,
   );
-  // ratio ≥ 0.9 → fully cold (past 1h extended tier); lower → partial.
+  const isCompact = trigger === "compact";
+  const title = isCompact
+    ? compact?.trigger === "auto"
+      ? "Auto-compact rebuilt the cache"
+      : "Conversation compacted · cache rebuilt"
+    : `Session resumed cold · idle ${formatGap(gapMs)}`;
   const fullyCold = writeRatio >= 0.9;
+  const hint = isCompact
+    ? "Compaction summarizes the conversation, so the prefix must be rewritten into a fresh cache. Any /compact or auto-compact will cost this rewrite."
+    : "Prompt cache expired during idle. Resuming within 5 min keeps the cache warm and avoids the rewrite tax.";
   return (
     <div
       style={{
@@ -2658,7 +2678,7 @@ function ColdResumeNotice({
         }}
       >
         <span style={{ fontSize: 13 }}>⚡</span>
-        Session resumed cold · idle {formatGap(gapMs)}
+        {title}
       </div>
       <div style={{ marginTop: 4, fontFamily: "var(--font-mono)", fontSize: 11 }}>
         Rewrote <b>{formatTokens(writeTokens)}</b> tokens into prompt cache
@@ -2668,8 +2688,18 @@ function ColdResumeNotice({
             · est. <b>{formatCost(estUsd)}</b>
           </>
         )}
-        {" "}
-        · {fullyCold ? "fully cold" : "partial"} ({Math.round(writeRatio * 100)}% write)
+        {isCompact && compact && (
+          <>
+            {" "}
+            · pre-compact <b>{formatTokens(compact.preTokens)}</b>
+          </>
+        )}
+        {!isCompact && (
+          <>
+            {" "}
+            · {fullyCold ? "fully cold" : "partial"} ({Math.round(writeRatio * 100)}% write)
+          </>
+        )}
       </div>
       <div
         style={{
@@ -2679,8 +2709,7 @@ function ColdResumeNotice({
           fontStyle: "italic",
         }}
       >
-        Prompt cache expired during idle. Resuming within 5 min keeps the cache warm
-        and avoids the rewrite tax.
+        {hint}
       </div>
     </div>
   );
@@ -2722,10 +2751,10 @@ function ColdResumeSessionStat({
       onMouseLeave={() => setHover(false)}
     >
       <span style={{ fontSize: 12 }}>⚡</span>
-      {count} cold resume{count === 1 ? "" : "s"} · {formatTokens(writeTokens)} rewritten
+      {count} cache rebuild{count === 1 ? "" : "s"} · {formatTokens(writeTokens)} rewritten
       {hover && (
         <Tooltip style={{ bottom: "calc(100% + 6px)", left: 0, minWidth: 260 }}>
-          <TooltipRow label="Cold resumes" value={count.toLocaleString()} />
+          <TooltipRow label="Cache rebuilds" value={count.toLocaleString()} />
           <TooltipRow label="Tokens rewritten" value={writeTokens.toLocaleString()} />
           {estUsd >= 0.005 && (
             <TooltipRow label="Est. rebuild cost" value={formatCost(estUsd)} />
@@ -2741,9 +2770,10 @@ function ColdResumeSessionStat({
               lineHeight: 1.4,
             }}
           >
-            Turns where the prompt cache had expired during idle, so the whole
-            prefix had to be rewritten at 1.25× base input price. Resuming
-            within 5 min avoids it.
+            Turns where the whole prompt-cache prefix had to be rewritten.
+            Either the cache expired during a long idle gap, or a /compact
+            (manual or auto) summarized the conversation. Both cost tokens
+            at 1.25× base input price.
           </div>
         </Tooltip>
       )}

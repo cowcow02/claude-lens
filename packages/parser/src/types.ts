@@ -61,19 +61,33 @@ export type SessionEvent = {
   toolResult?: unknown;
   /** raw attachment type when role=system */
   attachmentType?: string;
-  /** Set on the first assistant event after a gap > 5 min (prompt cache
-   *  TTL) when the turn's cacheWrite dominates input — meaning Claude had
-   *  to rewrite the cached conversation prefix because the cache expired.
-   *  Surfaced in the UI as "Session resumed cold" so the user can see
-   *  which resumes cost them budget. */
+  /** Set on the first assistant event after the prompt cache was
+   *  effectively invalidated, forcing Claude to rewrite the prefix.
+   *
+   *  Two triggers, both surfaced in the UI under the same amber styling:
+   *  - `"idle"`: previous API call was > 5 min ago so the cache TTL
+   *    expired during the gap
+   *  - `"compact"`: a `compact_boundary` system event (auto or manual
+   *    `/compact`) rewrote the conversation with a summary; the summary
+   *    has to be written to a fresh cache regardless of idle gap */
   coldResume?: {
-    /** Gap (ms) since previous assistant event in the same session */
+    /** What caused the cache to be rewritten */
+    trigger: "idle" | "compact";
+    /** Gap (ms) since previous assistant event. For compact this is
+     *  usually small; the boundary event is the real evidence. */
     gapMs: number;
     /** cache_creation_input_tokens on this turn */
     writeTokens: number;
-    /** cacheWrite / (cacheWrite + cacheRead). >0.3 is "cold-ish",
-     *  ~1.0 is fully cold (past the 1-hour tier). */
+    /** cacheWrite / (cacheWrite + cacheRead). ~1.0 is fully cold; compact
+     *  rebuilds sit 0.5–0.75 since some post-summary context warms fast. */
     writeRatio: number;
+    /** Only present when trigger==="compact" */
+    compact?: {
+      /** Manual `/compact` vs auto-compact at context limit */
+      trigger: "manual" | "auto";
+      /** Tokens BEFORE compaction — the prefix that got summarized away */
+      preTokens: number;
+    };
   };
   /** full raw JSONL line — for debug panel */
   raw: unknown;
