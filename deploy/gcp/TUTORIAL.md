@@ -62,7 +62,7 @@ All optional env overrides for `install.sh`:
 |---|---|---|
 | `PROJECT` | `gcloud config get-value project` | Target GCP project |
 | `REGION` | `gcloud config get-value run/region` | Cloud Run + Cloud SQL region |
-| `IMAGE` | `ghcr.io/cowcow02/fleetlens-team-server:latest` | Container image to deploy |
+| `SOURCE_IMAGE` | `ghcr.io/cowcow02/fleetlens-team-server:latest` | GHCR image copied into your project's Artifact Registry on first install |
 | `DB_TIER` | `db-f1-micro` | Cloud SQL machine size — bump to `db-custom-1-3840` for production |
 | `DB_INSTANCE` | `fleetlens-db` | Cloud SQL instance name |
 | `SERVICE` | `fleetlens-team-server` | Cloud Run service name |
@@ -75,10 +75,13 @@ All optional env overrides for `install.sh`:
 
 ## Tearing it down
 
+Cloud Shell's `gcloud` is always current; locally make sure you're on **`gcloud >= 500`** or the Cloud SQL delete will fail with a `finalBackup` config error. Update with `gcloud components update`.
+
 ```bash
 gcloud run services delete fleetlens-team-server --region $REGION --quiet
 gcloud sql instances delete fleetlens-db --quiet
 gcloud scheduler jobs delete fleetlens-prune --location $REGION --quiet
+gcloud artifacts repositories delete fleetlens --location $REGION --quiet
 for s in fleetlens-database-url fleetlens-encryption-key fleetlens-scheduler-secret fleetlens-db-password; do
   gcloud secrets delete $s --quiet
 done

@@ -10,9 +10,14 @@ Nothing leaves your machine.
 
 ## Team Edition (self-hosted)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/sGuijx)
+Two one-click options:
 
-One click spins up the Fleetlens team server + Postgres on Railway. Postgres, private-network DB connection, public domain, and a freshly-generated encryption key are all pre-wired — no fields to fill in. Hit Deploy and you'll have a signup page live at your `*.up.railway.app` URL in ~90 seconds. The first account to sign up becomes the admin of team #1. Full setup notes in [`deploy/railway/`](./deploy/railway/README.md). Docker Compose and AWS Terraform alternatives live under [`deploy/`](./deploy).
+| Platform | Button | Time | Cost |
+|---|---|---|---|
+| Railway | [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/sGuijx) | ~90s | ~$15/mo idle |
+| Google Cloud | [![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/cowcow02/fleetlens&cloudshell_workspace=deploy/gcp&cloudshell_tutorial=TUTORIAL.md) | ~5–6 min | ~$10/mo idle |
+
+Both provision the Fleetlens team server + Postgres with every env var pre-wired, including a freshly-generated encryption key. The first account to sign up becomes admin of team #1. Full setup notes: [Railway](./deploy/railway/README.md) · [Google Cloud](./deploy/gcp/README.md). Docker Compose and AWS Terraform alternatives live under [`deploy/`](./deploy).
 
 ## What makes it different
 
