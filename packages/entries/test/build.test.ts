@@ -25,6 +25,14 @@ function load(name: string): SessionDetail {
 // ── 4a: skeleton + orchestrator ────────────────────────────────────────────
 
 describe("buildEntries (deterministic)", () => {
+  it("initialises enrichment.retry_count to 0 on new Entries", () => {
+    const sd = load("one-day-session.jsonl");
+    const entries = buildEntries(sd);
+    for (const e of entries) {
+      expect(e.enrichment.retry_count).toBe(0);
+    }
+  });
+
   it("produces one Entry for a single-day session", () => {
     const sd = load("one-day-session.jsonl");
     const entries = buildEntries(sd);

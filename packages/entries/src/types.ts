@@ -22,7 +22,13 @@ export type EntryEnrichment = {
   user_instructions: string[];
   outcome: "shipped" | "partial" | "exploratory" | "blocked" | "trivial" | null;
   claude_helpfulness: "essential" | "helpful" | "neutral" | "unhelpful" | null;
+  /** VALUES ARE MINUTES spent on the goal within this (session × day) slice.
+   *  Sum across goals MUST be ≤ numbers.active_min. Unclassified time stays implicit. */
   goal_categories: Partial<Record<GoalCategory, number>>;
+  /** Bounded retry counter — prevents a permanently-failing Entry from looping
+   *  forever across daemon restarts. Frozen at status="error" + retry_count>=3;
+   *  only `fleetlens entries regenerate --force` resets it. Starts at 0. */
+  retry_count: number;
 };
 
 export type EntrySubagent = {
@@ -104,6 +110,7 @@ export function pendingEnrichment(): EntryEnrichment {
     outcome: null,
     claude_helpfulness: null,
     goal_categories: {},
+    retry_count: 0,
   };
 }
 
@@ -122,6 +129,7 @@ export function skippedTrivialEnrichment(generatedAt: string): EntryEnrichment {
     outcome: "trivial",
     claude_helpfulness: null,
     goal_categories: {},
+    retry_count: 0,
   };
 }
 
