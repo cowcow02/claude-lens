@@ -36,10 +36,7 @@ jobs:
         run: |
           IMAGE="ghcr.io/${{ github.repository_owner }}/fleetlens-team-server"
           TAGS="$IMAGE:${GITHUB_SHA::7}"
-          # :latest tracks master. Also temporarily on deploy/gcp so the
-          # installer defaults work before the PR merges — remove this
-          # condition once PR #10 is merged.
-          if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/deploy/gcp" ]; then
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
             TAGS="$TAGS,$IMAGE:latest"
           fi
           if [ "${{ github.event_name }}" = "release" ]; then
