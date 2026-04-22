@@ -32,7 +32,12 @@ export type SweepResult = {
   errors: number;
 };
 
-export async function runPerceptionSweep(): Promise<SweepResult> {
+export type SweepOptions = {
+  /** Override ~/.claude/projects for testing. */
+  projectsRoot?: string;
+};
+
+export async function runPerceptionSweep(opts: SweepOptions = {}): Promise<SweepResult> {
   const state = readState();
   if (state.sweep_in_progress && !isSweepStale()) {
     return { sessionsProcessed: 0, entriesWritten: 0, errors: 0 };
@@ -44,7 +49,7 @@ export async function runPerceptionSweep(): Promise<SweepResult> {
   let errors = 0;
 
   try {
-    const files = await listAllSessionJsonls();
+    const files = await listAllSessionJsonls(opts.projectsRoot);
     for (const f of files) {
       try {
         const stat = statSync(f);
