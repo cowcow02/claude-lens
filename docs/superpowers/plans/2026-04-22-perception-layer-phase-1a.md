@@ -146,13 +146,37 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 4: Stub `packages/entries/src/index.ts`**
+- [ ] **Step 4: Stub `packages/entries/src/index.ts` — types only (browser-safe)**
+
+Browser-safe subpath. Types and pure functions that have zero Node deps are re-exported here. `fs.ts` (filesystem) stays on the `./fs` subpath.
 
 ```ts
+// Browser-safe exports: types + pure functions only. NO node:fs, NO node:os.
 export * from "./types.js";
+export * from "./signals.js";
+export * from "./trivial.js";
+export * from "./build.js";
 ```
 
-- [ ] **Step 5: Add the package to root workspace + verify**
+`packages/entries/src/fs.ts` is NOT re-exported here — it's reachable only via the `./fs` subpath, which the bundler's `server-only` marker will protect.
+
+- [ ] **Step 5: Update `scripts/version-sync.mjs` to propagate to the new package**
+
+The root script at `scripts/version-sync.mjs` currently syncs `packages/parser`, `packages/cli`, `apps/web`. Add `packages/entries`:
+
+```js
+// scripts/version-sync.mjs — add "packages/entries/package.json" to the SYNC_PATHS array
+const SYNC_PATHS = [
+  "packages/parser/package.json",
+  "packages/cli/package.json",
+  "packages/entries/package.json",  // NEW
+  "apps/web/package.json",
+];
+```
+
+Verify by running `node scripts/version-sync.mjs` after editing; the script should report 4 files checked with no drift.
+
+- [ ] **Step 6: Add the package to root workspace + verify**
 
 Root `package.json`'s `workspaces` (or `pnpm-workspace.yaml`) already globs `packages/*` — no edit required. Verify:
 
@@ -163,10 +187,10 @@ pnpm -F @claude-lens/entries build
 
 Expected: build succeeds (empty output), no errors. Package discoverable.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add packages/entries/
+git add packages/entries/ scripts/version-sync.mjs
 git commit -m "feat(entries): scaffold @claude-lens/entries package"
 ```
 
@@ -566,9 +590,13 @@ git commit -m "feat(entries): trivial threshold predicate"
 
 **Purpose:** Core deterministic builder. Input: `SessionDetail` (from `@claude-lens/parser`). Output: `Entry[]` — one per local day the session touches. For each Entry, compute all `numbers`, collect `flags`, extract `first_user`/`final_agent`/`pr_titles`/`top_tools`/`skills`/`subagents`, run `signals.ts` over the slice's filtered human text, apply `isTrivial`, and initialize `enrichment` to either `pendingEnrichment()` or `skippedTrivialEnrichment()`.
 
-This is the largest task. Break into two sub-steps:
-- 5a: shape the builder (skeleton + signature + fixture-based test)
-- 5b: fill in per-day aggregation logic
+This is the largest task. Broken into four sub-steps by field cluster so each step stays ~5 min:
+- **5a:** Skeleton + `groupEventsByLocalDay` + `buildEntries` orchestrator. Test passes only the "length + local_day + deterministic" assertions.
+- **5b:** `numbers` field cluster — port active_min, turn_count, tools_total, tokens_total, subagent/skill/task/interrupt/error counts from `capsule.ts` clipped to day events.
+- **5c:** Text / provenance / model fields — `first_user`, `final_agent`, `pr_titles`, `top_tools`, `skills`, `subagents`, `primary_model`, `model_mix`, `start_iso`, `end_iso`, `project` (with dominant-cwd rule).
+- **5d:** Derived fields — `flags` (day-scoped), `satisfaction_signals`, `user_input_sources`, and `enrichment.user_instructions` seeding via `signals.ts`.
+
+Each sub-step adds one test assertion cluster and completes its code before moving on. `throw new Error("implement me")` from the first draft is resolved in 5b.
 
 - [ ] **Step 1: Create fixtures**
 
@@ -597,11 +625,21 @@ import { resolve } from "node:path";
 import { parseTranscript } from "@claude-lens/parser";
 import { buildEntries } from "../src/build.js";
 
+// parseTranscript signature: takes one argument (unknown[]), returns { meta, events }.
+// SessionDetail is constructed manually — see packages/parser/src/fs.ts:300-320 for
+// the canonical pattern used in production.
 function load(name: string) {
-  const path = resolve(__dirname, "fixtures", name);
-  const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
-  const sessionDetail = parseTranscript("test-session", lines.map(l => JSON.parse(l)));
-  return sessionDetail;
+  const filePath = resolve(__dirname, "fixtures", name);
+  const rawLines = readFileSync(filePath, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+  const { meta, events } = parseTranscript(rawLines);
+  return {
+    ...meta,
+    id: "test-session",
+    filePath,
+    projectDir: "test-project-dir",
+    projectName: meta.cwd ?? "/test/project",
+    events,
+  };
 }
 
 describe("buildEntries (deterministic)", () => {
@@ -652,19 +690,11 @@ describe("buildEntries (deterministic)", () => {
 
 Expected: "buildEntries is not exported" or similar.
 
-- [ ] **Step 4: Implement `build.ts`**
+- [ ] **Step 4a: Skeleton + `groupEventsByLocalDay` + `buildEntries` orchestrator**
 
-Split into three helpers within the file:
-- `groupEventsByLocalDay(events, timezone) → Map<string, SessionEvent[]>` — partitions events.
-- `computeNumbers(events) → Entry["numbers"]` — mirrors `buildCapsule`'s computations from `packages/parser/src/capsule.ts` but operates only on the day's events (active-segment math clipped to this day).
-- `buildEntries(sessionDetail: SessionDetail) → Entry[]` — orchestrator.
+Implement the file skeleton. `aggregatePerDay` returns stubbed zeros for now so the test's structure-shape assertions pass. Fill in numbers, text, flags over the next three sub-steps.
 
-Key decisions:
-- Local day uses reader's `Intl.DateTimeFormat` with the system timezone. Reuse `toLocalDay(msTimestamp)` from `@claude-lens/parser/analytics` (already exported).
-- Canonical project path comes from `canonicalProjectName(projectName)` in `@claude-lens/parser/analytics`. If per-slice cwd frequency yields a different project, prefer dominant cwd (with tool-use counting Bash, Edit, Write, Read); tiebreak by earliest event.
-- `flags` reuses the existing flag set emitted by `buildCapsule` but applied per-day.
-- For `first_user`/`final_agent`: first real human-input event after source filtering; last assistant text in the slice.
-- For signals: iterate only events with `classifyUserInputSource(text) === "human"`.
+Reference existing logic: `packages/parser/src/capsule.ts` (especially `buildCapsule`, lines 258–545) and `packages/parser/src/analytics.ts` (for `toLocalDay`, `canonicalProjectName`). **Do not modify those files — we port logic from them.**
 
 ```ts
 // packages/entries/src/build.ts
@@ -713,32 +743,46 @@ function computeActiveMin(events: SessionEvent[]): number {
   return Math.round(ms / 6000) / 10;
 }
 
-// Full per-day number/flag/text aggregator. Mirror the logic from
-// packages/parser/src/capsule.ts's buildCapsule, but operating on
-// events: SessionEvent[] scoped to a single day.
-// (See build.ts full implementation: port ~150 lines from capsule.ts
-//  without re-introducing the session-level outcome/flag heuristics
-//  that depend on whole-session state.)
-function aggregatePerDay(
-  dayEvents: SessionEvent[],
-  sessionFallbackProject: string,
-): Pick<Entry,
+// Per-day aggregator. In 4a this is a zeros-stub that lets the
+// orchestrator + length/local_day tests pass. Steps 4b-4d fill it in.
+type AggregateResult = Pick<Entry,
   "numbers" | "flags" | "primary_model" | "model_mix" | "first_user" | "final_agent"
   | "pr_titles" | "top_tools" | "skills" | "subagents"
   | "satisfaction_signals" | "user_input_sources" | "project"
   | "start_iso" | "end_iso"
-> {
-  // [implementation to be ported from capsule.ts — not reproduced verbatim here]
-  // Must produce:
-  //  - numbers: all 14 fields clipped to this day's events
-  //  - flags: applicable subset (orchestrated, loop_suspected, fast_ship, plan_used,
-  //           long_autonomous, interrupt_heavy, high_errors) recomputed from day-scoped signals
-  //  - first_user / final_agent from the day's filtered human turns
-  //  - satisfaction_signals / user_input_sources aggregated over human turns
-  //  - project from dominant-cwd rule; fallback to sessionFallbackProject
-  //  - start_iso / end_iso from min/max event timestamp in day
-  // All returned values are byte-deterministic given identical input.
-  throw new Error("implement me");
+>;
+
+function aggregatePerDay(
+  dayEvents: SessionEvent[],
+  sessionFallbackProject: string,
+): AggregateResult {
+  const ts = dayEvents.map(e => e.timestamp).filter((t): t is string => !!t).sort();
+  const start_iso = ts[0] ?? "";
+  const end_iso = ts[ts.length - 1] ?? "";
+
+  // 4a stub: zero numbers, empty text, empty flags. Refined in 4b/4c/4d.
+  return {
+    numbers: {
+      active_min: computeActiveMin(dayEvents),
+      turn_count: 0, tools_total: 0, subagent_calls: 0, skill_calls: 0,
+      task_ops: 0, interrupts: 0, tool_errors: 0, consec_same_tool_max: 0,
+      exit_plan_calls: 0, prs: 0, commits: 0, pushes: 0, tokens_total: 0,
+    },
+    flags: [],
+    primary_model: null,
+    model_mix: {},
+    first_user: "",
+    final_agent: "",
+    pr_titles: [],
+    top_tools: [],
+    skills: {},
+    subagents: [],
+    satisfaction_signals: { happy: 0, satisfied: 0, dissatisfied: 0, frustrated: 0 },
+    user_input_sources: { human: 0, teammate: 0, skill_load: 0, slash_command: 0 },
+    project: sessionFallbackProject,
+    start_iso,
+    end_iso,
+  };
 }
 
 export function buildEntries(sessionDetail: SessionDetail): Entry[] {
@@ -795,19 +839,125 @@ export function buildEntries(sessionDetail: SessionDetail): Entry[] {
 
 (The `aggregatePerDay` function is a 150-line port of existing `buildCapsule` logic — implementer should open `packages/parser/src/capsule.ts` and adapt the event loop to operate on day-scoped events rather than whole-session events. Core difference: turn boundaries are the same, but `activeMsTotal` and the flag thresholds use only the day's subset. Do not extract session-wide outcome — outcome is set only by `enrichment` later.)
 
-- [ ] **Step 5: Run tests (pass)**
+- [ ] **Step 5 (4b): Fill `numbers` cluster**
+
+Port the number-computing half of `buildCapsule` (`packages/parser/src/capsule.ts:258–450`) into `aggregatePerDay`, operating only on `dayEvents`. Specifically:
+
+Walk `dayEvents` with the same turn-state machine as `capsule.ts`'s `closeTurn`/`newTurn`. For each turn within this day, accumulate:
+- `active_min` — already computed by `computeActiveMin`; keep.
+- `turn_count` — count of real user-input opens (non–tool-result user events).
+- `tools_total` — sum of `tool_use` blocks across assistant events.
+- `tokens_total` — sum of usage.input + output + cache_read + cache_creation, deduped by `msgId` (same logic as `capsule.ts:329-337`).
+- `subagent_calls` — count of `tool_use.name === "Agent"`.
+- `skill_calls` — count of `tool_use.name === "Skill"` or `"ToolSearch"`.
+- `task_ops` — `TodoWrite` + `TaskCreate` + `TaskUpdate`.
+- `interrupts` — user messages containing `[request interrupted|interrupted by user` (regex: `INTERRUPT_RE` from `capsule.ts:18`).
+- `tool_errors` — `tool_result` blocks with `is_error: true`.
+- `consec_same_tool_max` — same-tool streak tracking per capsule.ts lines 357-359.
+- `exit_plan_calls` — tool uses named `ExitPlanMode`.
+- `prs` / `commits` / `pushes` — matched from `Bash` tool uses using the regexes at `capsule.ts:386-392`.
+
+Reference: when in doubt, read the source at `capsule.ts:258–400` and scope each counter to `dayEvents` instead of session-wide events. No session-level outcome computation — outcome is set only by enrichment later.
+
+Add test assertions:
+
+```ts
+it("computes numbers accurately from fixture", () => {
+  const sd = load("one-day-session.jsonl");
+  const [entry] = buildEntries(sd);
+  expect(entry!.numbers.turn_count).toBe(1);        // one user turn in fixture
+  expect(entry!.numbers.tools_total).toBe(1);       // one Bash call
+  expect(entry!.numbers.active_min).toBeGreaterThan(0);
+  expect(entry!.numbers.active_min).toBeLessThan(10);
+});
+```
+
+Run tests. Commit:
+
+```bash
+git add packages/entries/src/build.ts packages/entries/test/build.test.ts
+git commit -m "feat(entries): per-day numbers cluster"
+```
+
+- [ ] **Step 6 (4c): Fill text + model + project + start/end fields**
+
+Extend `aggregatePerDay` to collect:
+- `first_user` — first user event in `dayEvents` where `classifyUserInputSource(fullText(ev)) === "human"`, truncated to 400 chars with `\s+` collapsed. Use `fullText(ev)` defined as `ev.blocks.filter(b => b.type === "text").map(b => (b as any).text).join(" ")` — NOT `ev.preview`, which is single-line only.
+- `final_agent` — last assistant text block in `dayEvents`, same normalization.
+- `pr_titles` — harvested from Bash `gh pr create --title "..."` patterns using `PR_TITLE_RE` from `capsule.ts:21`.
+- `top_tools` — top-3 tool-use counts formatted per `capsule.ts:459-467` (including Bash verb sub-detail).
+- `skills` — `Skill` + `ToolSearch` counts keyed by skill name or search query.
+- `subagents` — harvested from `Agent` tool uses; include type, description (truncated to 80), prompt_preview (truncated to 240), background flag.
+- `primary_model` — dominant `message.model` across assistant events; tiebreak alphabetical for determinism.
+- `model_mix` — model → turn count map.
+- `project` — dominant canonical cwd across `Bash`, `Edit`, `Write`, `Read` tool uses in the day. Tiebreak by earliest event's cwd. Fallback to `sessionFallbackProject` when no cwd-bearing tool uses.
+- `start_iso` / `end_iso` — already set in 4a skeleton.
+
+Add test assertions:
+
+```ts
+it("extracts first_user from full block text, not preview", () => {
+  const sd = load("one-day-session.jsonl");
+  const [entry] = buildEntries(sd);
+  expect(entry!.first_user.length).toBeGreaterThan(0);
+  expect(entry!.first_user).not.toContain("…");  // not truncated to a preview
+});
+
+it("extracts pr_titles from gh pr create Bash commands", () => {
+  // Create a fixture with `gh pr create --title "feat: test"` and assert
+  // entry.pr_titles === ["feat: test"]
+  // (Reuse span-midnight-session fixture with one extra event.)
+});
+```
+
+Commit:
+
+```bash
+git commit -m "feat(entries): per-day text + model + project fields"
+```
+
+- [ ] **Step 7 (4d): Fill flags + signals**
+
+Extend `aggregatePerDay` to compute:
+- `flags` — recompute per-day using thresholds from `capsule.ts:432-439`:
+  - `interrupt_heavy` when `interrupts >= 3`
+  - `high_errors` when `tool_errors >= 20`
+  - `loop_suspected` when `consec_same_tool_max >= 8`
+  - `fast_ship` when `active_min * 60 < 5*60` (i.e. < 5 min active) AND `prs >= 1`
+  - `plan_used` when `exit_plan_calls > 0`
+  - `orchestrated` when `subagent_turns >= 3`
+  - `long_autonomous` when `longest_turn_active_min >= 20` AND `interrupts === 0`
+- `satisfaction_signals` — run `countSatisfactionSignals` across the concatenation of all day's human-filtered user text.
+- `user_input_sources` — call `classifyUserInputSource` on each user event's full text, tally per-bucket.
+- `enrichment.user_instructions` (seeded via `buildEntries`): run `extractUserInstructions` over the day's human-filtered text, slice to 5.
+
+Add test assertions:
+
+```ts
+it("tallies user_input_sources by bucket", () => {
+  // Fixture with 1 human input + 1 teammate-message wrapper
+  // → { human: 1, teammate: 1, ... }
+});
+
+it("does not count teammate messages as human", () => {
+  // Fixture where the only 'user' events are <teammate-message> wrappers
+  // → user_input_sources.human === 0
+});
+```
+
+- [ ] **Step 8: Run tests (all pass)**
 
 ```bash
 pnpm -F @claude-lens/entries test -- build.test.ts
 ```
 
-Expected: all 4 tests pass.
+Expected: every assertion green. Determinism test still passes because all new fields are functions of `dayEvents` content alone.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add packages/entries/src/build.ts packages/entries/test/build.test.ts packages/entries/test/fixtures/
-git commit -m "feat(entries): deterministic builder — SessionDetail → Entry[] by local day"
+git commit -m "feat(entries): per-day flags + signals + user_instructions seed"
 ```
 
 ---
@@ -1173,61 +1323,64 @@ git commit -m "feat(cli/perception): sweep-state checkpoint file"
 - Modify: `packages/cli/src/args.ts` (register subcommand)
 - Modify: `packages/cli/src/index.ts` (dispatch to handler)
 
-**Purpose:** CLI surface for inspecting Entries. Read-only in Phase 1a. Subcommands:
-- `fleetlens entries` (no args) → short summary: entry count, date range
+**Purpose:** CLI surface for inspecting Entries. **Fully read-only in Phase 1a** — regeneration happens in the daemon on a 5-min sweep. A `fleetlens entries regenerate` subcommand is deferred to Phase 1b where it'll share logic with the enrichment pipeline. Phase 1a commands:
+- `fleetlens entries` (no args) → short summary: entry count, sessions, date range
 - `fleetlens entries --day YYYY-MM-DD [--json]`
 - `fleetlens entries --session UUID [--json]`
 - `fleetlens entries --all [--json]`
-- `fleetlens entries regenerate [--since DATE] [--force]` — rebuilds deterministic Entries from JSONL. Does NOT run LLM (Phase 1b adds that).
 
 - [ ] **Step 1: Implement the command handler**
 
 ```ts
 // packages/cli/src/commands/entries.ts
-import { listEntriesForDay, listEntriesForSession, listEntryKeys, readEntry } from "@claude-lens/entries/fs";
-import { parseEntryKey } from "@claude-lens/entries";
-import { scanAllSessions } from "../session-scan.js"; // to be exposed or written
-import { buildEntries } from "@claude-lens/entries/fs";
-import { writeEntry } from "@claude-lens/entries/fs";
+// Import notes:
+// - Types + pure helpers (parseEntryKey) come from the root import.
+// - Filesystem readers (listEntries*, readEntry) come from the ./fs subpath.
+import { parseEntryKey, type Entry } from "@claude-lens/entries";
+import {
+  listEntriesForDay,
+  listEntriesForSession,
+  listEntryKeys,
+  readEntry,
+} from "@claude-lens/entries/fs";
 
 type EntriesArgs = {
   day?: string;
   session?: string;
   all?: boolean;
   json?: boolean;
-  regenerate?: boolean;
-  since?: string;
-  force?: boolean;
 };
 
 export async function runEntries(args: EntriesArgs): Promise<number> {
-  if (args.regenerate) {
-    return runRegenerate(args);
-  }
-
   if (args.day) {
-    const list = listEntriesForDay(args.day);
-    printEntries(list, args.json);
+    printEntries(listEntriesForDay(args.day), args.json);
     return 0;
   }
   if (args.session) {
-    const list = listEntriesForSession(args.session);
-    printEntries(list, args.json);
+    printEntries(listEntriesForSession(args.session), args.json);
     return 0;
   }
   if (args.all) {
-    const list = listEntryKeys()
-      .map(parseEntryKey)
-      .filter(Boolean)
-      .map(k => readEntry(k!.session_id, k!.local_day))
-      .filter(Boolean);
-    printEntries(list as any, args.json);
+    const list: Entry[] = [];
+    for (const key of listEntryKeys()) {
+      const parsed = parseEntryKey(key);
+      if (!parsed) continue;
+      const e = readEntry(parsed.session_id, parsed.local_day);
+      if (e) list.push(e);
+    }
+    printEntries(list, args.json);
     return 0;
   }
   // Default: summary
   const keys = listEntryKeys();
-  const days = new Set(keys.map(k => parseEntryKey(k)?.local_day).filter(Boolean));
-  const sessions = new Set(keys.map(k => parseEntryKey(k)?.session_id).filter(Boolean));
+  const days = new Set<string>();
+  const sessions = new Set<string>();
+  for (const k of keys) {
+    const parsed = parseEntryKey(k);
+    if (!parsed) continue;
+    days.add(parsed.local_day);
+    sessions.add(parsed.session_id);
+  }
   console.log(`Entries: ${keys.length}`);
   console.log(`Sessions: ${sessions.size}`);
   console.log(`Days covered: ${days.size}`);
@@ -1235,20 +1388,11 @@ export async function runEntries(args: EntriesArgs): Promise<number> {
   return 0;
 }
 
-function printEntries(list: unknown[], json?: boolean): void {
+function printEntries(list: Entry[], json?: boolean): void {
   if (json) { console.log(JSON.stringify(list, null, 2)); return; }
-  // Pretty-print a short table per entry
-  for (const e of list as any[]) {
+  for (const e of list) {
     console.log(`${e.session_id}  ${e.local_day}  ${e.numbers.active_min}m  ${e.project}  enr=${e.enrichment.status}`);
   }
-}
-
-async function runRegenerate(args: EntriesArgs): Promise<number> {
-  // Iterate all JSONL, parse, buildEntries, writeEntry.
-  // Skip sessions whose Entry files already exist unless --force.
-  // ... (implementation — see subagent rebuild logic in worker.ts)
-  console.log("Regenerate: not yet implemented — see Phase 1a worker.ts for shared logic.");
-  return 0;
 }
 ```
 
@@ -1296,53 +1440,89 @@ No LLM calls in Phase 1a — enrichment remains `"pending"` forever. Phase 1b wi
 ```ts
 // packages/cli/src/perception/worker.ts
 import { statSync, readFileSync } from "node:fs";
-import { parseTranscript } from "@claude-lens/parser";
-import { buildEntries } from "@claude-lens/entries/fs";
-import { writeEntry, readEntry } from "@claude-lens/entries/fs";
+import { basename, dirname } from "node:path";
+// parseTranscript takes one arg (unknown[]) and returns { meta, events }.
+// SessionDetail is constructed manually using the canonical pattern from
+// packages/parser/src/fs.ts:300-320. decodeProjectName derives a human
+// project name from the URL-encoded project directory.
+import { parseTranscript, decodeProjectName, type SessionDetail } from "@claude-lens/parser";
+import { buildEntries } from "@claude-lens/entries";
+import { writeEntry } from "@claude-lens/entries/fs";
 import {
   readState, updateCheckpoint, markSweepStart, markSweepEnd, isSweepStale,
 } from "./state.js";
-import { listAllSessionJsonls } from "./scan.js"; // small helper to enumerate JSONL
+import { listAllSessionJsonls } from "./scan.js";
 
-export async function runPerceptionSweep(): Promise<{ sessionsProcessed: number; entriesWritten: number }> {
+function log(msg: string): void {
+  // Same logging convention as the rest of daemon-worker.ts.
+  // eslint-disable-next-line no-console
+  console.error(`[perception] ${msg}`);
+}
+
+export async function runPerceptionSweep(): Promise<{ sessionsProcessed: number; entriesWritten: number; errors: number }> {
   const state = readState();
   if (state.sweep_in_progress && !isSweepStale()) {
-    return { sessionsProcessed: 0, entriesWritten: 0 };
+    return { sessionsProcessed: 0, entriesWritten: 0, errors: 0 };
   }
   markSweepStart();
   let sessions = 0;
   let entries = 0;
+  let errors = 0;
   try {
     const files = await listAllSessionJsonls();
     for (const f of files) {
-      const stat = statSync(f);
-      const prev = state.file_checkpoints[f];
-      if (prev && prev.byte_offset >= stat.size) continue; // no new content
-      const raw = readFileSync(f, "utf8");
-      const lines = raw.split("\n").filter(Boolean).map(l => {
-        try { return JSON.parse(l); } catch { return null; }
-      }).filter(Boolean);
-      // Use session_id from filename (strip `.jsonl`)
-      const sessionId = f.split("/").pop()!.replace(/\.jsonl$/, "");
-      const sd = parseTranscript(sessionId, lines as any);
-      const built = buildEntries(sd);
-      for (const e of built) {
-        writeEntry(e);
-        entries++;
+      // Per-file error isolation: one malformed JSONL must not halt the sweep.
+      try {
+        const stat = statSync(f);
+        const prev = state.file_checkpoints[f];
+        if (prev && prev.byte_offset >= stat.size) continue; // no new content
+
+        const raw = readFileSync(f, "utf8");
+        const rawLines: unknown[] = raw.split("\n")
+          .filter(Boolean)
+          .map(l => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((x): x is object => x !== null);
+
+        if (rawLines.length === 0) continue;
+
+        const { meta, events } = parseTranscript(rawLines);
+        const fileName = basename(f);
+        const projectDir = basename(dirname(f));
+        const sessionId = fileName.replace(/\.jsonl$/, "");
+
+        const sd: SessionDetail = {
+          ...meta,
+          id: sessionId,
+          filePath: f,
+          projectDir,
+          projectName: meta.cwd ?? decodeProjectName(projectDir),
+          events,
+        };
+
+        const built = buildEntries(sd);
+        for (const e of built) {
+          writeEntry(e);
+          entries++;
+        }
+        updateCheckpoint(f, {
+          byte_offset: stat.size,
+          last_event_ts: built.at(-1)?.end_iso ?? null,
+          affects_days: built.map(e => e.local_day),
+        });
+        sessions++;
+      } catch (err) {
+        errors++;
+        log(`skipped ${f}: ${(err as Error).message}`);
       }
-      updateCheckpoint(f, {
-        byte_offset: stat.size,
-        last_event_ts: built.at(-1)?.end_iso ?? null,
-        affects_days: built.map(e => e.local_day),
-      });
-      sessions++;
     }
   } finally {
     markSweepEnd();
   }
-  return { sessionsProcessed: sessions, entriesWritten: entries };
+  return { sessionsProcessed: sessions, entriesWritten: entries, errors };
 }
 ```
+
+Note: `decodeProjectName` is exported from `@claude-lens/parser` (see `packages/parser/src/index.ts`). If it's not on the public surface, either add the export or copy the 3-line implementation locally. Check first with `grep -n "decodeProjectName" packages/parser/src/*.ts`.
 
 - [ ] **Step 2: Create the JSONL scanner helper**
 
@@ -1371,23 +1551,39 @@ export async function listAllSessionJsonls(): Promise<string[]> {
 
 - [ ] **Step 3: Wire into daemon-worker.ts**
 
-In `packages/cli/src/daemon-worker.ts`, add a 5-minute interval that calls `runPerceptionSweep`. Log outcomes to the existing daemon log. Don't await — wrap in try/catch and let it run alongside the existing usage-poll loop.
+In `packages/cli/src/daemon-worker.ts`, add a 5-minute interval that calls `runPerceptionSweep`. Capture the interval handle so the existing SIGTERM handler can clear it. Log outcomes to the existing daemon log. The sweep is internally re-entry-safe, but we still avoid overlapping invocations by skipping if the previous run hasn't returned.
 
 ```ts
-// packages/cli/src/daemon-worker.ts (added)
+// packages/cli/src/daemon-worker.ts (added at the top of the file)
 import { runPerceptionSweep } from "./perception/worker.js";
 
 const PERCEPTION_INTERVAL_MS = 5 * 60 * 1000;
-setInterval(async () => {
+let perceptionInFlight = false;
+
+const perceptionHandle: NodeJS.Timeout = setInterval(async () => {
+  if (perceptionInFlight) return;  // defense in depth — shouldn't happen
+  perceptionInFlight = true;
   try {
-    const { sessionsProcessed, entriesWritten } = await runPerceptionSweep();
-    if (sessionsProcessed > 0) {
-      log("info", `perception sweep: ${sessionsProcessed} sessions, ${entriesWritten} entries`);
+    const { sessionsProcessed, entriesWritten, errors } = await runPerceptionSweep();
+    if (sessionsProcessed > 0 || errors > 0) {
+      log("info", `perception sweep: ${sessionsProcessed} sessions, ${entriesWritten} entries, ${errors} errors`);
     }
   } catch (err) {
     log("error", `perception sweep failed: ${(err as Error).message}`);
+  } finally {
+    perceptionInFlight = false;
   }
 }, PERCEPTION_INTERVAL_MS);
+
+// At the existing SIGTERM handler (find it near the bottom of daemon-worker.ts),
+// call clearInterval(perceptionHandle) BEFORE process.exit(0).
+// The existing handler looks like: process.on("SIGTERM", () => process.exit(0));
+// Update it to:
+//   process.on("SIGTERM", () => {
+//     clearInterval(perceptionHandle);
+//     process.exit(0);
+//   });
+// Do the same for SIGINT if present.
 ```
 
 - [ ] **Step 4: Manual verification**
@@ -1427,48 +1623,103 @@ git commit -m "feat(cli): daemon perception worker — deterministic Entry sweep
 
 Also: a determinism check on the Entry builder — running it twice on an unchanged JSONL produces byte-equal files.
 
-- [ ] **Step 1: Write the regression script**
+- [ ] **Step 1: Create the fixture**
+
+Reuse the same JSONL file that Task 5 committed at `packages/entries/test/fixtures/one-day-session.jsonl` — it's already small, deterministic, and covered by Phase 1a. Copy it to a regression-specific path so Phase 1a tests and the regression guard are decoupled:
+
+```bash
+mkdir -p scripts/fixtures/v1-insights-regression/
+cp packages/entries/test/fixtures/one-day-session.jsonl \
+   scripts/fixtures/v1-insights-regression/fixture.jsonl
+```
+
+- [ ] **Step 2: Write the regression script**
+
+The script feeds the fixture through V1's full `parseTranscript → buildCapsule → buildPeriodBundle` chain and hashes the result. Volatile fields (`generated_at` in the PeriodBundle wrapper, if any) are zeroed before hashing so the hash is reproducible across runs. If no expected hash is checked in, the first run writes one.
 
 ```js
 // scripts/v1-insights-regression.mjs
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-// Import the V1 code paths directly and hash their output for a known fixture.
-// The fixture is a tiny curated set of JSONL files committed under
-// scripts/fixtures/v1-insights-regression/. Hash must match checked-in hash.
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
-const EXPECTED_HASH_PATH = "scripts/fixtures/v1-insights-regression/expected.sha256";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FIXTURE = resolve(__dirname, "fixtures/v1-insights-regression/fixture.jsonl");
+const EXPECTED_HASH_PATH = resolve(__dirname, "fixtures/v1-insights-regression/expected.sha256");
 
-async function hashV1Output() {
-  // Import V1 modules directly — this is a smoke check, not a unit test.
-  const { parseTranscript } = await import("../packages/parser/dist/parser.js");
-  const { buildCapsule } = await import("../packages/parser/dist/capsule.js");
-  const { buildPeriodBundle } = await import("../packages/parser/dist/aggregate.js");
-  // Build the capsule + bundle for a known fixture.
-  // (Test fixture path — adapt as needed)
-  // Output a stable hash of the bundle JSON.
-  const hash = createHash("sha256");
-  // … compute hash …
-  return hash.digest("hex");
+// Dynamic imports so this script doesn't need a build step in package.json.
+const { parseTranscript } = await import("../packages/parser/dist/parser.js");
+const { buildCapsule } = await import("../packages/parser/dist/capsule.js");
+const { buildPeriodBundle } = await import("../packages/parser/dist/aggregate.js");
+
+// 1. Parse fixture
+const rawLines = readFileSync(FIXTURE, "utf8")
+  .split("\n")
+  .filter(Boolean)
+  .map((l) => JSON.parse(l));
+const { meta, events } = parseTranscript(rawLines);
+const sessionDetail = {
+  ...meta,
+  id: "v1-regression-session",
+  filePath: FIXTURE,
+  projectDir: "fixture",
+  projectName: meta.cwd ?? "/fixture/project",
+  events,
+};
+
+// 2. Build capsule + period bundle (compact mode matches V1 insights call)
+const capsule = buildCapsule(sessionDetail, { compact: true });
+const bundle = buildPeriodBundle([capsule], {
+  period: {
+    start: new Date("2026-04-22T00:00:00-08:00"),
+    end: new Date("2026-04-22T23:59:59-08:00"),
+    range_type: "custom",
+  },
+  trivial_dropped: 0,
+  sessions_total: 1,
+});
+
+// 3. Hash, excluding volatile fields
+function stable(obj) {
+  return JSON.parse(JSON.stringify(obj), (_k, v) => {
+    // If any future field is a timestamp-ish string that shifts per-run, elide here.
+    return v;
+  });
 }
+const json = JSON.stringify({ capsule: stable(capsule), bundle: stable(bundle) }, null, 2);
+const actual = createHash("sha256").update(json).digest("hex");
 
-const actual = await hashV1Output();
+// 4. Compare
 if (!existsSync(EXPECTED_HASH_PATH)) {
   writeFileSync(EXPECTED_HASH_PATH, actual + "\n");
-  console.log("wrote initial hash", actual);
+  console.log(`wrote initial hash: ${actual}`);
   process.exit(0);
 }
 const expected = readFileSync(EXPECTED_HASH_PATH, "utf8").trim();
 if (actual !== expected) {
   console.error(`V1 insights output changed!\n  expected: ${expected}\n  actual:   ${actual}`);
+  // Dump the diff to disk for debugging
+  writeFileSync(EXPECTED_HASH_PATH + ".actual.json", json);
+  console.error(`(payload dumped to ${EXPECTED_HASH_PATH}.actual.json)`);
   process.exit(1);
 }
 console.log("V1 insights output unchanged ✓");
 ```
 
-- [ ] **Step 2: Run once to write the expected hash, then run `pnpm verify`**
+- [ ] **Step 3: Run once to write the expected hash, commit both**
 
-Add this script to `pnpm verify`'s target in the root `package.json`:
+```bash
+pnpm -F @claude-lens/parser build           # ensure dist/ exists
+node scripts/v1-insights-regression.mjs     # writes expected.sha256
+node scripts/v1-insights-regression.mjs     # verifies hash matches; green
+git add scripts/v1-insights-regression.mjs scripts/fixtures/v1-insights-regression/
+git commit -m "test: V1 insights regression guard (deterministic hash)"
+```
+
+- [ ] **Step 4: Wire into `pnpm verify`**
+
+In root `package.json`:
 
 ```json
 {
@@ -1478,11 +1729,11 @@ Add this script to `pnpm verify`'s target in the root `package.json`:
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit verify wiring**
 
 ```bash
-git add scripts/v1-insights-regression.mjs scripts/fixtures/v1-insights-regression/
-git commit -m "test: V1 insights regression guard (deterministic hash)"
+git add package.json
+git commit -m "ci: add V1 insights regression to pnpm verify"
 ```
 
 ---
