@@ -11,10 +11,11 @@ set -euo pipefail
 #—— Configurable via flags / env vars ——————————————————————————————
 REGION="${REGION:-$(gcloud config get-value run/region 2>/dev/null || echo us-central1)}"
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}"
-IMAGE="${IMAGE:-ghcr.io/cowcow02/fleetlens-team-server:latest}"
+SOURCE_IMAGE="${SOURCE_IMAGE:-ghcr.io/cowcow02/fleetlens-team-server:latest}"
 DB_TIER="${DB_TIER:-db-f1-micro}"
 DB_INSTANCE="${DB_INSTANCE:-fleetlens-db}"
 SERVICE="${SERVICE:-fleetlens-team-server}"
+AR_REPO="${AR_REPO:-fleetlens}"
 
 #—— tiny logger ———————————————————————————————————————————————————
 b=$'\033[1m'; g=$'\033[32m'; y=$'\033[33m'; r=$'\033[31m'; x=$'\033[0m'
@@ -30,7 +31,7 @@ command -v openssl >/dev/null || die "openssl required for secret generation."
 [ -n "$PROJECT" ] || die "No project set. Run: gcloud config set project <id> (or pass PROJECT=<id>)."
 
 step "Fleetlens Team Edition — deploying to project ${b}${PROJECT}${x} in ${b}${REGION}${x}"
-echo "   Cloud SQL tier: $DB_TIER    Image: $IMAGE"
+echo "   Cloud SQL tier: $DB_TIER    Source image: $SOURCE_IMAGE"
 
 if ! gcloud beta billing projects describe "$PROJECT" --format="value(billingEnabled)" 2>/dev/null | grep -q True; then
   # `beta` may not be installed; fall back to a permission-based probe.
@@ -45,12 +46,46 @@ step "Enabling required APIs (idempotent)"
 gcloud services enable \
   run.googleapis.com \
   sqladmin.googleapis.com \
+  sql-component.googleapis.com \
   secretmanager.googleapis.com \
   cloudscheduler.googleapis.com \
+  artifactregistry.googleapis.com \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
   --project "$PROJECT" --quiet
 ok "APIs enabled"
+
+#—— 1b. Artifact Registry repo + image copy ————————————————————————
+# Cloud Run cannot pull directly from ghcr.io (only gcr.io, docker.pkg.dev,
+# docker.io). We server-side-copy the public GHCR image into a regional
+# Artifact Registry repo owned by this project on first install.
+step "Artifact Registry ($AR_REPO in $REGION)"
+if gcloud artifacts repositories describe "$AR_REPO" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
+  ok "Repository exists — reusing"
+else
+  gcloud artifacts repositories create "$AR_REPO" \
+    --repository-format=docker \
+    --location "$REGION" \
+    --description="Fleetlens Team Edition container images" \
+    --project "$PROJECT" --quiet
+  ok "Repository created"
+fi
+
+# Derive the destination tag from the source tag
+IMAGE_TAG="${SOURCE_IMAGE##*:}"
+IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REPO/team-server:$IMAGE_TAG"
+
+step "Copying image $SOURCE_IMAGE → $IMAGE"
+if gcloud artifacts docker images describe "$IMAGE" --project "$PROJECT" >/dev/null 2>&1; then
+  ok "Image already present in Artifact Registry — reusing"
+else
+  command -v docker >/dev/null || die "docker required to copy image. Cloud Shell has it preinstalled."
+  gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet >/dev/null
+  docker pull --platform linux/amd64 "$SOURCE_IMAGE" --quiet
+  docker tag "$SOURCE_IMAGE" "$IMAGE"
+  docker push --quiet "$IMAGE"
+  ok "Image copied"
+fi
 
 #—— 2. Cloud SQL instance + DB ——————————————————————————————————————
 step "Cloud SQL Postgres ($DB_INSTANCE, tier=$DB_TIER, region=$REGION)"
@@ -59,7 +94,7 @@ if gcloud sql instances describe "$DB_INSTANCE" --project "$PROJECT" >/dev/null 
 else
   warn "Creating new instance — this is the slow step (~4 min)"
   gcloud sql instances create "$DB_INSTANCE" \
-    --database-version=POSTGRES_17 \
+    --database-version=POSTGRES_15 \
     --tier="$DB_TIER" \
     --region="$REGION" \
     --storage-type=SSD \
@@ -95,7 +130,7 @@ ensure_secret "fleetlens-scheduler-secret"  "$SCHED_SECRET"
 DB_PASSWORD="$(gcloud secrets versions access latest --secret=fleetlens-db-password --project "$PROJECT")"
 SCHED_SECRET="$(gcloud secrets versions access latest --secret=fleetlens-scheduler-secret --project "$PROJECT")"
 
-DATABASE_URL="postgresql://fleetlens:$DB_PASSWORD@/fleetlens?host=/cloudsql/$CONN_NAME"
+DATABASE_URL="postgresql://fleetlens:$DB_PASSWORD@localhost/fleetlens?host=/cloudsql/$CONN_NAME"
 ensure_secret "fleetlens-database-url" "$DATABASE_URL"
 
 #—— 4. DB user + database ——————————————————————————————————————————
