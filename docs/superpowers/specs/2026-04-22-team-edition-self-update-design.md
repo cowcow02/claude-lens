@@ -37,8 +37,8 @@ Every schema change after Plan 1 becomes a support burden without it. Plans 2, 3
 
 ```
 ┌─────────────────────┐                ┌────────────────────────────┐
-│ Admin's browser     │                │ Fleetlens team server       │
-│                     │                │  (running on Cloud Run /    │
+│ Staff user's browser│                │ Fleetlens team server       │
+│ (is_staff = true)   │                │  (running on Cloud Run /    │
 │  /admin/updates     │◀─HTML/SSE──────│   Railway — version X.Y.Z)  │
 │  /admin/updates/v   │                │                             │
 │                     │                │  /api/admin/updates         │
@@ -297,7 +297,7 @@ Server-side service module (`packages/team-server/src/lib/self-update/service.ts
 - `getReview(targetVersion)` → returns `{ changelog: string (markdown), migrations: MigrationInfo[] }`. Changelog from GitHub Releases API. Migrations manifest: see "Release-artifact manifest" below.
 - `applyUpdate(targetVersion, actorId)` → audits the action in the `events` table, calls `platformAdapter.redeploy(tag)`, returns `{ accepted: true, revisionId }`.
 
-**HTTP routes** (all under `/api/admin/updates`, all require `role='admin'`):
+**HTTP routes** (all under `/api/admin/updates`, all gated by `requireStaff` — `user_accounts.is_staff = true`):
 
 | Method + path | Handler | Body / params |
 |---|---|---|
@@ -305,6 +305,14 @@ Server-side service module (`packages/team-server/src/lib/self-update/service.ts
 | `POST /api/admin/updates/check` | `checkNow()` | — |
 | `GET /api/admin/updates/review?version=X.Y.Z` | `getReview()` | query `version` |
 | `POST /api/admin/updates/apply` | `applyUpdate()` | body `{ version: "X.Y.Z" }` |
+
+Staff-management routes (also staff-gated) are:
+
+| Method + path | Handler | Body / params |
+|---|---|---|
+| `GET /api/admin/staff` | List all user accounts with `is_staff` status | — |
+| `POST /api/admin/staff/grant` | Promote a user to staff | body `{ userId }` |
+| `POST /api/admin/staff/revoke` | Revoke staff (refuses on last staff) | body `{ userId }` |
 
 **Event audit strings** (written to the existing `events` table by `applyUpdate` and the scheduler):
 
@@ -362,9 +370,58 @@ New pages under the existing admin section:
 - **Safety summary** — static prose: "If the update fails, the previous version keeps serving traffic. You won't lose data."
 - **[Apply update]** button — primary action. Confirmation modal required ("Apply v0.5.0 now? The server will restart within ~60 seconds.").
 
-**RBAC**: All `/admin/updates*` routes and `/api/admin/updates*` endpoints require `role = 'admin'` on the caller's membership. Existing auth middleware handles this — add the admin-check guard.
+**RBAC**: All `/admin/updates*` routes and `/api/admin/updates*` endpoints require **platform staff** (`user_accounts.is_staff = true`), not per-team admin role. Self-update is a server-wide action that affects every team hosted on the deployment, so gating by per-team membership is the wrong scope. See Section 5a for the staff model and the `requireStaff` helper.
 
-**Global banner**: When `updateAvailable === true`, render a thin banner at the top of *every* admin page ("v0.5.0 available — [Review]"). Only visible to admins. Dismissable for the current browser session via localStorage; reappears after next login.
+**Global banner**: When `updateAvailable === true`, render a thin banner at the top of *every* admin page ("v0.5.0 available — [Review]"). Only visible to `is_staff` users (never to team admins without staff). Dismissable for the current browser session via localStorage; reappears after next login.
+
+### 5a. Staff management (platform-level administration)
+
+Self-update is a server-wide capability, not a per-team one, so it requires a distinct privilege tier above team-level admin:
+
+| Role | Scope | Can trigger self-update? |
+|---|---|---|
+| `memberships.role = 'member'` | One team's data | No |
+| `memberships.role = 'admin'` | One team's management (invites, roster, team settings) | No |
+| `user_accounts.is_staff = true` | Platform-level (the server deployment itself) | **Yes** |
+
+The `is_staff` column already exists in the Plan 1 schema. What this section adds is the UX and safeguards around setting it.
+
+**First-signup auto-promotion.** On a fresh install, when the first user completes signup, if `SELECT count(*) FROM user_accounts WHERE is_staff = true` is zero, their account is automatically promoted to `is_staff = true`. This bootstraps the system — the person who installs Team Edition becomes platform staff without any out-of-band configuration. Implement as a check at the end of the signup handler inside the same DB transaction that creates the `user_accounts` row, so the promotion is atomic with account creation.
+
+**Promote existing users** (`/admin/staff` page):
+
+- Accessible only to `is_staff = true` users.
+- Lists every user account on the server with columns: email, display name, current staff status, last login.
+- Toggle button on each row: "Grant staff" / "Revoke staff". One-click, with a confirmation modal for revocations.
+- Audited to `events` table (`action = "staff.granted"` / `"staff.revoked"`, payload: `{ targetUserId, targetEmail }`).
+- Rate-limited: 10 grant/revoke actions per hour per actor via the existing `rate-limit.ts`. Prevents compromised-staff script abuse.
+
+**Prevent last-staff lockout.** `toggleStaff(targetUserId, is_staff: false)` refuses with HTTP 400 `"Cannot revoke staff from the last remaining staff user"` if the target is currently the only `is_staff = true` account. This prevents the server from becoming un-updatable. A corresponding UI warning surfaces at the top of `/admin/staff` when only one staff user exists: *"Only one staff user — consider promoting a second person so this server isn't lockable if you lose account access."*
+
+**Staff-granting invites** (deferred to v1.1). The existing `invites` table gains a `grants_staff boolean DEFAULT false` column in a later release. A staff-generated invite with `grants_staff = true` promotes the recipient to `is_staff` on acceptance. Not in v0.5.0 scope — the promote-existing-users flow above covers the "sign up normally, then get promoted" path for onboarding a CTO/CEO as staff.
+
+**Recovery path if all staff are lost.** If the only staff account is locked out (person leaves company, forgotten password with no email recovery, etc.), the deployment becomes un-upgradable via the UI. The fallback is `./install.sh --grant-staff <email>` — a new installer flag that runs a single SQL statement (`UPDATE user_accounts SET is_staff = true WHERE email = $1`) against the database. Requires shell access to the install environment (GCP project / Railway project), which is exactly the scenario where re-running the installer is already the accepted answer. Document this in the release notes, not in the web UI.
+
+**`requireStaff` helper** (`packages/team-server/src/lib/route-helpers.ts`, add alongside existing `requireAdmin`):
+
+```ts
+export async function requireStaff(
+  req: NextRequest,
+): Promise<(SessionContext & { pool: pg.Pool }) | NextResponse> {
+  const base = await requireSession(req);
+  if (base instanceof NextResponse) return base;
+  if (!base.user.is_staff) return NextResponse.json({ error: "Staff only" }, { status: 403 });
+  return base;
+}
+```
+
+The existing `SessionContext` already carries user fields (see `packages/team-server/src/lib/auth.ts`) — surface `is_staff` on it if not already exposed.
+
+**Tests** (add to Section 8):
+
+- `test/api/staff.integration.test.ts` — promote/revoke happy paths + RBAC (non-staff gets 403) + last-staff refusal.
+- `test/lib/auth.test.ts` — extend existing coverage: `requireStaff` returns 401 for no session, 403 for non-staff, success for staff.
+- `test/api/signup.integration.test.ts` — extend with: first signup on fresh DB auto-promotes; second signup does not.
 
 ### 6. Install-time provisioning changes
 
@@ -410,12 +467,14 @@ The running server checks for the required env vars at boot. If missing, the `/a
 | GCP default Compute SA with the added resource-scoped `roles/run.developer` | That role grants `run.services.update` on this one Cloud Run service only | Attacker with the SA's token can change the image of that one service to anything on any registry. Cannot create other services, cannot access other projects, cannot read Cloud SQL directly beyond what this SA already could pre-self-update. |
 | Railway `RAILWAY_TOKEN` | Project-scoped | Attacker can redeploy any service in the project. Team-server deployments should live in a dedicated Railway project (already the case with the one-click template). |
 
-**Threat model**: the primary threat is a compromised admin account triggering a malicious update. Mitigations:
+**Threat model**: the primary threat is a compromised staff account triggering a malicious update. Mitigations:
 
-- Only `admin` role can trigger updates.
-- All update actions are audited to the `events` table with actor, target version, timestamp.
-- The target image must match the repo-owned GHCR path (`ghcr.io/cowcow02/fleetlens-team-server`). Image ref is constructed server-side from `ghcr.io/cowcow02/fleetlens-team-server:${targetVersion}`; the admin does not supply an arbitrary image.
+- Only `is_staff = true` users can trigger updates (strictly narrower than per-team admin — see Section 5a).
+- Only existing staff can promote other users to staff. A compromised team-admin account cannot escalate to staff on its own.
+- All update actions AND all staff grants/revocations are audited to the `events` table with actor, target, timestamp.
+- The target image must match the repo-owned GHCR path (`ghcr.io/cowcow02/fleetlens-team-server`). Image ref is constructed server-side from `ghcr.io/cowcow02/fleetlens-team-server:${targetVersion}`; the staff user does not supply an arbitrary image.
 - The target version must be a tag present in GHCR (validated via tags/list query before redeploy).
+- Rate limits: 1 update apply per 5 min (global); 10 staff grants/revocations per hour per actor. Bounds the blast radius of a compromised staff account's script.
 
 ### 8. Testing strategy
 
@@ -428,7 +487,7 @@ The running server checks for the required env vars at boot. If missing, the `/a
 
 **Integration tests** (extend existing `test/api/` suite):
 
-- `test/api/admin-updates.integration.test.ts` — full HTTP flow: admin GETs `/api/admin/updates`, non-admin gets 403, admin POSTs apply with invalid version gets 400, admin POSTs apply with valid version calls mocked adapter's `redeploy`.
+- `test/api/admin-updates.integration.test.ts` — full HTTP flow: staff GETs `/api/admin/updates` succeeds, non-staff (team-admin but `is_staff=false`) gets 403, staff POSTs apply with invalid version gets 400, staff POSTs apply with valid version calls mocked adapter's `redeploy`.
 - `test/db/migrate.drizzle.test.ts` — migrations run against a fresh Postgres produce the expected schema; migrations run against an existing "pre-Drizzle" schema trigger the baseline insert and skip `0000_initial`.
 
 **Manual smoke tests** (release checklist):
@@ -444,6 +503,8 @@ The self-update feature ships as v0.5.0 of team-server. Existing v0.4.x deployme
 **v0.5.0 release notes will say:**
 
 > **One-time action required:** Re-run your installer (`./install.sh` for GCP, or re-import the Railway template) to pick up new permissions. This is the last time you'll need to do this — future updates happen entirely through the web UI.
+>
+> **Check your staff list:** The person who first signed up on your server is now your platform staff and can trigger updates. Visit **Settings → Staff** to grant that role to any additional decision-makers (CTO, CEO, etc.) before they need to upgrade the server themselves. Having at least two staff users is strongly recommended — if you lose access to the sole staff account, you'll need shell access to the database to recover via `./install.sh --grant-staff <email>`.
 
 ## Open questions / future work
 
@@ -496,17 +557,18 @@ Self-update ships as v0.5.0 of team-server. Core pieces:
 1. **Drizzle** replaces the `CREATE TABLE IF NOT EXISTS` schema string. Migrations live in `packages/team-server/src/db/migrations/`, generated via `drizzle-kit`, run on boot under a Postgres advisory lock held on a dedicated `pg.Client` (not the app pool). Existing v0.4.x DBs are baselined via a pre-run hash-matched insert into `drizzle.__drizzle_migrations`. Expand/contract discipline enforced by reviewer convention + `MIGRATIONS.md` allow-list.
 2. **Versioned GHCR tags** — each release publishes `:latest` + `:X.Y.Z`. `APP_VERSION` baked into the image via Dockerfile `ARG`, wired through the publish workflow's `build-args:` block. GHCR's public tags-list API powers discovery.
 3. **Platform adapters** — thin `PlatformAdapter` interface with `GcpCloudRunAdapter` (uses `@google-cloud/run` SDK + ADC; read-modify-write on the Service spec) and `RailwayAdapter` (uses GraphQL + project token; mutation names to be verified against current schema at implementation time).
-4. **Admin UI** — `/admin/updates` list + `/admin/updates/[version]` review, gated to admin role, with a global banner across admin pages. Changelog from GitHub Releases; migration preview from a per-release `migrations-manifest.json` asset.
-5. **One-time install bump** — `deploy/gcp/install.sh` adds `roles/run.developer` scoped to the one Cloud Run service on the existing default Compute SA. Railway template adds a `RAILWAY_TOKEN` env var. Existing deploys re-run the installer / re-import the template once; every future update is button-click only.
-6. **Rollback** — automatic via Cloud Run / Railway health-check-gated revision promotion. No manual rollback UI in v1.
+4. **Admin UI** — `/admin/updates` list + `/admin/updates/[version]` review, gated to `is_staff = true` (platform staff, not per-team admin), with a global banner across admin pages. Changelog from GitHub Releases; migration preview from a per-release `migrations-manifest.json` asset.
+5. **Staff management** — new `/admin/staff` page for promote/revoke; first-signup auto-promotion; refusal to revoke the last staff; `--grant-staff <email>` installer flag as the lockout recovery path. Keeps the feature usable for multi-person orgs (CEO/CTO can be granted staff by the IT installer) without risking an un-upgradable server.
+6. **One-time install bump** — `deploy/gcp/install.sh` adds `roles/run.developer` scoped to the one Cloud Run service on the existing default Compute SA, plus the new `--grant-staff` flag. Railway template adds a `RAILWAY_TOKEN` env var. Existing deploys re-run the installer / re-import the template once; every future update is button-click only.
+7. **Rollback** — automatic via Cloud Run / Railway health-check-gated revision promotion. No manual rollback UI in v1.
 
-Total new LoC estimate: ~600 for team-server code + ~150 for deploy-script changes + ~200 for tests. Most of the complexity is in the Drizzle baseline, platform adapters, and the migrations-manifest plumbing in the release workflow.
+Total new LoC estimate: ~700 for team-server code (including staff management) + ~150 for deploy-script changes + ~250 for tests. Most of the complexity is in the Drizzle baseline, platform adapters, and the migrations-manifest plumbing in the release workflow.
 
 ### Suggested plan split (implementer's discretion)
 
 The spec is right at the edge of single-plan scope. If phase discipline looks risky, split along this line:
 
 - **Plan 1a — Migration framework foundation.** Drizzle conversion, baseline insert, `migrations-manifest.json` workflow asset, advisory-lock runner. Ships as v0.4.2 (patch; no user-visible change). Unlocks safe schema evolution for Plans 2/3/4 even if self-update UI isn't ready.
-- **Plan 1b — Self-update mechanism.** Platform adapters, admin UI pages, installer IAM + token updates, end-to-end smoke tests against real Cloud Run + Railway projects. Ships as v0.5.0.
+- **Plan 1b — Self-update mechanism + staff management.** Platform adapters, admin UI pages (updates + staff), `requireStaff` helper, first-signup auto-promotion, installer IAM + `--grant-staff` flag + token updates, end-to-end smoke tests against real Cloud Run + Railway projects. Ships as v0.5.0.
 
 The split is low-cost — 1a's migration framework is the foundation 1b builds on, and 1a is independently valuable even if 1b slips. A single-plan implementation is still feasible for an author with tight scope discipline.
