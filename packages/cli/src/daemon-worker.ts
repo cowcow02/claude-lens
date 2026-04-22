@@ -20,6 +20,7 @@ import { appendSnapshot } from "./usage/storage.js";
 import { isUsable, readOAuthCredentials } from "./usage/token.js";
 import { BASE_INTERVAL_MS, nextIntervalMs, type PollOutcome } from "./usage/backoff.js";
 import { runTeamSync } from "./team/sync.js";
+import { runPerceptionSweep } from "./perception/worker.js";
 
 const STATE_DIR = join(homedir(), ".cclens");
 const USAGE_LOG = join(STATE_DIR, "usage.jsonl");
@@ -42,6 +43,24 @@ function log(level: "info" | "warn" | "error", message: string): void {
 let nextPollAtMs = 0;
 let currentIntervalMs = BASE_INTERVAL_MS;
 let waitingForRefresh = false;
+
+const PERCEPTION_INTERVAL_MS = 5 * 60 * 1000;
+let perceptionInFlight = false;
+
+const perceptionHandle: NodeJS.Timeout = setInterval(async () => {
+  if (perceptionInFlight) return;
+  perceptionInFlight = true;
+  try {
+    const { sessionsProcessed, entriesWritten, errors } = await runPerceptionSweep();
+    if (sessionsProcessed > 0 || errors > 0) {
+      log("info", `perception sweep: ${sessionsProcessed} sessions, ${entriesWritten} entries, ${errors} errors`);
+    }
+  } catch (err) {
+    log("error", `perception sweep failed: ${(err as Error).message}`);
+  } finally {
+    perceptionInFlight = false;
+  }
+}, PERCEPTION_INTERVAL_MS);
 
 async function tick(): Promise<PollOutcome> {
   try {
@@ -133,6 +152,7 @@ log(
 void runLoop();
 
 process.on("SIGTERM", () => {
+  clearInterval(perceptionHandle);
   log("info", `daemon stopping (pid=${process.pid})`);
   process.exit(0);
 });
