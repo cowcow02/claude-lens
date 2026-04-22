@@ -4,6 +4,7 @@ import { parseTranscript } from "@claude-lens/parser";
 import type { SessionDetail } from "@claude-lens/parser";
 import { buildEntries } from "@claude-lens/entries";
 import { writeEntry } from "@claude-lens/entries/fs";
+import { readSettings, runEnrichmentQueue } from "@claude-lens/entries/node";
 import {
   readState, updateCheckpoint, markSweepStart, markSweepEnd, isSweepStale,
 } from "./state.js";
@@ -32,7 +33,12 @@ export type SweepResult = {
   errors: number;
 };
 
-export async function runPerceptionSweep(): Promise<SweepResult> {
+export type SweepOptions = {
+  /** Override ~/.claude/projects for testing. */
+  projectsRoot?: string;
+};
+
+export async function runPerceptionSweep(opts: SweepOptions = {}): Promise<SweepResult> {
   const state = readState();
   if (state.sweep_in_progress && !isSweepStale()) {
     return { sessionsProcessed: 0, entriesWritten: 0, errors: 0 };
@@ -44,7 +50,7 @@ export async function runPerceptionSweep(): Promise<SweepResult> {
   let errors = 0;
 
   try {
-    const files = await listAllSessionJsonls();
+    const files = await listAllSessionJsonls(opts.projectsRoot);
     for (const f of files) {
       try {
         const stat = statSync(f);
@@ -93,6 +99,19 @@ export async function runPerceptionSweep(): Promise<SweepResult> {
         errors++;
         log(`skipped ${f}: ${(err as Error).message}`);
       }
+    }
+    // Phase 1b enrichment — guarded by settings. Failure here is logged
+    // but not fatal to the deterministic sweep result.
+    try {
+      const settings = readSettings();
+      const r = await runEnrichmentQueue(settings.ai_features);
+      if ("skipped" in r && typeof r.skipped === "string") {
+        log(`enrichment: skipped (${r.skipped})`);
+      } else if ("enriched" in r) {
+        log(`enrichment: enriched=${r.enriched} errors=${r.errors} skipped=${r.skipped}`);
+      }
+    } catch (err) {
+      log(`enrichment failed: ${(err as Error).message}`);
     }
   } finally {
     markSweepEnd();

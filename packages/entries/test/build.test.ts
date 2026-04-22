@@ -25,6 +25,14 @@ function load(name: string): SessionDetail {
 // ── 4a: skeleton + orchestrator ────────────────────────────────────────────
 
 describe("buildEntries (deterministic)", () => {
+  it("initialises enrichment.retry_count to 0 on new Entries", () => {
+    const sd = load("one-day-session.jsonl");
+    const entries = buildEntries(sd);
+    for (const e of entries) {
+      expect(e.enrichment.retry_count).toBe(0);
+    }
+  });
+
   it("produces one Entry for a single-day session", () => {
     const sd = load("one-day-session.jsonl");
     const entries = buildEntries(sd);
@@ -66,6 +74,15 @@ describe("buildEntries (deterministic)", () => {
     const entries = buildEntries(sd);
     expect(entries).toHaveLength(2);
     expect(entries[0]!.local_day < entries[1]!.local_day).toBe(true);
+  });
+
+  it("does NOT set orchestrated when 5 agents dispatched from a single turn", () => {
+    const sd = load("five-agents-one-turn.jsonl");
+    const entries = buildEntries(sd);
+    expect(entries).toHaveLength(1);
+    const e = entries[0]!;
+    expect(e.numbers.subagent_calls).toBe(5);
+    expect(e.flags).not.toContain("orchestrated");
   });
 });
 

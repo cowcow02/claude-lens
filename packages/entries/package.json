@@ -14,6 +14,10 @@
     "./fs": {
       "types": "./dist/fs.d.ts",
       "import": "./dist/fs.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
     }
   },
   "files": [
@@ -31,7 +35,9 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@claude-lens/parser": "workspace:*"
+    "@claude-lens/parser": "workspace:*",
+    "server-only": "^0.0.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

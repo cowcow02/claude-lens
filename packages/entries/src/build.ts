@@ -469,7 +469,8 @@ export function buildEntries(sessionDetail: SessionDetail): Entry[] {
     if (consecMax >= 8) flags.push("loop_suspected");
     if (agg.activeMs < 5 * 60_000 && prs >= 1) flags.push("fast_ship");
     if (exitPlanCalls > 0) flags.push("plan_used");
-    if (subagentCalls >= 3) flags.push("orchestrated");
+    const subagentTurns = closed.filter(t => t.subagents.length >= 1).length;
+    if (subagentTurns >= 3) flags.push("orchestrated");
     if (longestTurnActiveMs >= 20 * 60_000 && interrupts === 0) flags.push("long_autonomous");
 
     // model

@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   // Locally, leave it unset so `next start` / `pnpm dev` work normally.
   ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" } : {}),
   reactStrictMode: true,
-  transpilePackages: ["@claude-lens/parser"],
+  transpilePackages: ["@claude-lens/parser", "@claude-lens/entries"],
   // Tell Next.js the monorepo root so it doesn't infer the wrong one
   // from a stray lockfile higher up the directory tree.
   outputFileTracingRoot: path.join(import.meta.dirname, "../.."),
