@@ -23,7 +23,32 @@ DB_INSTANCE="${DB_INSTANCE:-fleetlens-db}"
 SERVICE="${SERVICE:-fleetlens-team-server}"
 AR_REPO="${AR_REPO:-fleetlens}"
 ASSUME_YES="${ASSUME_YES:-0}"
-[[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && ASSUME_YES=1
+INSPECT_ONLY="${INSPECT_ONLY:-0}"
+PROBE_TIMEOUT="${PROBE_TIMEOUT:-10}"
+for arg in "$@"; do
+  case "$arg" in
+    --yes|-y)       ASSUME_YES=1 ;;
+    --inspect-only) INSPECT_ONLY=1; ASSUME_YES=1 ;;
+  esac
+done
+
+# Detect a timeout command — GNU coreutils `timeout` on Linux/Cloud Shell,
+# `gtimeout` on macOS with `brew install coreutils`. Without one, hangs block
+# indefinitely; we warn and continue.
+if command -v timeout  >/dev/null; then TIMEOUT_CMD=timeout
+elif command -v gtimeout >/dev/null; then TIMEOUT_CMD=gtimeout
+else TIMEOUT_CMD=""; fi
+
+# Wrap a single gcloud call with a bounded timeout. Uses stdin redirected
+# from /dev/null so interactive prompts (e.g. 'install beta component?')
+# fail fast instead of blocking.
+g() {
+  if [ -n "$TIMEOUT_CMD" ]; then
+    "$TIMEOUT_CMD" "$PROBE_TIMEOUT" gcloud "$@" </dev/null
+  else
+    gcloud "$@" </dev/null
+  fi
+}
 
 #—— tiny logger ———————————————————————————————————————————————————
 b=$'\033[1m'; d=$'\033[2m'; g=$'\033[32m'; y=$'\033[33m'; r=$'\033[31m'; c=$'\033[36m'; x=$'\033[0m'
@@ -70,27 +95,18 @@ fi
 # completion. Without this the user stares at a silent header for 20–30s.
 probe_start() { printf "  %s…%s %-46s" "$d" "$x" "$1"; }
 probe_end()   { printf "\r  %s✓%s %-46s %s\n" "$g" "$x" "$1" "$2"; }
+probe_fail()  { printf "\r  %s✗%s %-46s %s\n" "$r" "$x" "$1" "$2"; }
 
 hdr "Preflight — inspecting environment (no changes yet)"
+[ -z "$TIMEOUT_CMD" ] && warn "No 'timeout' command found — gcloud calls have no bounded wait. Install GNU coreutils if a probe hangs."
 
 probe_start "Resolving project number"
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
-[ -n "$PROJECT_NUMBER" ] || { printf "\n"; die "Cannot access project '$PROJECT' as $ACCOUNT. Check gcloud auth list / gcloud config set project."; }
-probe_end "Resolving project number" "$PROJECT_NUMBER"
-
-probe_start "Checking billing status"
-BILLING_OK="unknown"
-if gcloud beta billing projects describe "$PROJECT" --format="value(billingEnabled)" 2>/dev/null | grep -q True; then
-  BILLING_OK="yes"
-elif gcloud services list --enabled --project "$PROJECT" --filter="name:run.googleapis.com OR name:cloudbuild.googleapis.com" --format="value(name)" 2>/dev/null | grep -q .; then
-  BILLING_OK="yes (inferred from enabled APIs)"
+PROJECT_NUMBER="$(g projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
+if [ -z "$PROJECT_NUMBER" ]; then
+  probe_fail "Resolving project number" "failed or timed out"
+  die "Cannot access project '$PROJECT' as $ACCOUNT. Check: gcloud auth list / gcloud config set project <id>"
 fi
-probe_end "Checking billing status" "$BILLING_OK"
-
-# Derive final image path
-IMAGE_TAG="${SOURCE_IMAGE##*:}"
-IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REPO/team-server:$IMAGE_TAG"
-RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+probe_end "Resolving project number" "$PROJECT_NUMBER"
 
 REQUIRED_APIS=(
   run.googleapis.com
@@ -103,8 +119,12 @@ REQUIRED_APIS=(
   iamcredentials.googleapis.com
 )
 
+# The enabled-APIs probe does double duty: it tells us which APIs need
+# enabling AND gives a reliable billing signal (any paid API being enabled
+# means billing is linked). Replaces the old `gcloud beta billing` call,
+# which could hang prompting to install the `beta` component.
 probe_start "Listing enabled APIs (of 8 required)"
-ENABLED_APIS="$(gcloud services list --enabled --project "$PROJECT" --format='value(config.name)' 2>/dev/null || true)"
+ENABLED_APIS="$(g services list --enabled --project "$PROJECT" --format='value(config.name)' 2>/dev/null || true)"
 APIS_TO_ENABLE=()
 for api in "${REQUIRED_APIS[@]}"; do
   grep -qx "$api" <<<"$ENABLED_APIS" || APIS_TO_ENABLE+=("$api")
@@ -112,8 +132,21 @@ done
 ENABLED_COUNT=$((${#REQUIRED_APIS[@]} - ${#APIS_TO_ENABLE[@]}))
 probe_end "Listing enabled APIs (of 8 required)" "$ENABLED_COUNT already on, ${#APIS_TO_ENABLE[@]} to enable"
 
+probe_start "Checking billing status"
+if grep -qE "^(run|sqladmin|cloudbuild)\.googleapis\.com$" <<<"$ENABLED_APIS"; then
+  BILLING_OK="yes (inferred: paid API is enabled)"
+else
+  BILLING_OK="unknown — link billing at console.cloud.google.com/billing/linkedaccount?project=$PROJECT"
+fi
+probe_end "Checking billing status" "$BILLING_OK"
+
+# Derive final image path
+IMAGE_TAG="${SOURCE_IMAGE##*:}"
+IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REPO/team-server:$IMAGE_TAG"
+RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
 action_for() {
-  gcloud "$@" >/dev/null 2>&1 && echo "reuse" || echo "create"
+  g "$@" >/dev/null 2>&1 && echo "reuse" || echo "create"
 }
 
 probe_start "Probing Artifact Registry '$AR_REPO'"
@@ -181,6 +214,14 @@ info "~\$25/mo under moderate usage"
 info "~5–6 min wall time for a fresh install; ~1 min on re-run"
 
 printf "\n%sTo undo everything later:%s see deploy/gcp/TUTORIAL.md 'Tearing it down'.\n" "$b" "$x"
+
+# Hidden INSPECT_ONLY (also --inspect-only): run preflight + summary, stop
+# here. Used when debugging preflight behavior from a non-TTY harness
+# without risking any mutations.
+if [ "$INSPECT_ONLY" = "1" ]; then
+  printf "\n%sINSPECT_ONLY=1 — stopping here.%s No resources were created or modified.\n" "$y" "$x"
+  exit 0
+fi
 
 #—— Confirmation ——————————————————————————————————————————————————
 if [ "$ASSUME_YES" = "1" ]; then
