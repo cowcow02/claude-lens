@@ -61,6 +61,20 @@ export type SessionEvent = {
   toolResult?: unknown;
   /** raw attachment type when role=system */
   attachmentType?: string;
+  /** Set on the first assistant event after a gap > 5 min (prompt cache
+   *  TTL) when the turn's cacheWrite dominates input — meaning Claude had
+   *  to rewrite the cached conversation prefix because the cache expired.
+   *  Surfaced in the UI as "Session resumed cold" so the user can see
+   *  which resumes cost them budget. */
+  coldResume?: {
+    /** Gap (ms) since previous assistant event in the same session */
+    gapMs: number;
+    /** cache_creation_input_tokens on this turn */
+    writeTokens: number;
+    /** cacheWrite / (cacheWrite + cacheRead). >0.3 is "cold-ish",
+     *  ~1.0 is fully cold (past the 1-hour tier). */
+    writeRatio: number;
+  };
   /** full raw JSONL line — for debug panel */
   raw: unknown;
   /** Set when this user event is a cross-session team message delivery.
@@ -116,6 +130,14 @@ export type SessionMeta = {
   linesRemoved?: number;
   /** derived: number of unique files touched (Edit + Write) */
   filesEdited?: number;
+  /** derived: count of cold-resume turns in this session — assistant
+   *  turns where the prompt cache had expired during idle, so Claude
+   *  had to rewrite the cached prefix. */
+  coldResumeCount?: number;
+  /** derived: total cache_creation_input_tokens across cold-resume
+   *  turns only. This is the "cache rebuild tax" that eats into the
+   *  5h budget on every session resume past the cache TTL. */
+  cacheRebuildTokens?: number;
   /** derived: sum of event-to-event gaps under the idle threshold
    *  (default 3 minutes) — a close approximation of "how long was
    *  the agent actively working" without counting user-away time,

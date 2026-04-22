@@ -310,6 +310,68 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
     activeSegments.push({ startMs: segStart, endMs: segEnd });
   }
 
+  // Cold-resume detection: the first assistant turn after a gap > 5 min
+  // (prompt cache TTL) where cacheWrite dominates input. That means the
+  // cache expired during idle and Claude had to rewrite the cached prefix
+  // — a tax that counts against the 5h budget at 1.25× base input price.
+  //
+  // We walk ONLY assistant events in chronological order, since the gap
+  // that matters is "time since the previous API request on this session",
+  // not "time since the last user input".
+  const COLD_GAP_MS = 5 * 60 * 1000;
+  const COLD_MIN_WRITE = 1000;
+  const COLD_MIN_RATIO = 0.3;
+  // Walk ALL assistant-rawType events, not just role==="agent". A single
+  // API response gets split into multiple JSONL lines — thinking blocks
+  // arrive as role=agent-thinking, tool_use blocks as role=tool-call, and
+  // the text block as role=agent. They share a messageId and identical
+  // usage. Keep only the first-timestamp line per messageId as the
+  // "representative" for that request.
+  const perMsg = new Map<
+    string,
+    { e: (typeof events)[number]; ms: number }
+  >();
+  for (const e of events) {
+    if (e.rawType !== "assistant" || !e.timestamp || !e.usage || !e.messageId) continue;
+    const ms = Date.parse(e.timestamp);
+    if (Number.isNaN(ms)) continue;
+    const existing = perMsg.get(e.messageId);
+    if (!existing || ms < existing.ms) perMsg.set(e.messageId, { e, ms });
+  }
+  const assistantChrono = [...perMsg.values()].sort((a, b) => a.ms - b.ms);
+  // Index all assistant events by messageId so we can set coldResume on
+  // every sibling line (thinking + tool_use + text share one messageId but
+  // become different rows in presentation — the flag must reach all of
+  // them so the UI can light up whichever row surfaces).
+  const eventsByMsgId = new Map<string, (typeof events)[number][]>();
+  for (const e of events) {
+    if (e.rawType !== "assistant" || !e.messageId) continue;
+    const list = eventsByMsgId.get(e.messageId) ?? [];
+    list.push(e);
+    eventsByMsgId.set(e.messageId, list);
+  }
+  let coldResumeCount = 0;
+  let cacheRebuildTokens = 0;
+  for (let i = 1; i < assistantChrono.length; i++) {
+    const prev = assistantChrono[i - 1]!;
+    const cur = assistantChrono[i]!;
+    const u = cur.e.usage!;
+    const denom = u.cacheWrite + u.cacheRead;
+    const writeRatio = denom > 0 ? u.cacheWrite / denom : 0;
+    const gapMs = cur.ms - prev.ms;
+    if (
+      gapMs > COLD_GAP_MS &&
+      u.cacheWrite >= COLD_MIN_WRITE &&
+      writeRatio >= COLD_MIN_RATIO
+    ) {
+      const flag = { gapMs, writeTokens: u.cacheWrite, writeRatio };
+      const siblings = eventsByMsgId.get(cur.e.messageId!) ?? [cur.e];
+      for (const sib of siblings) sib.coldResume = flag;
+      coldResumeCount++;
+      cacheRebuildTokens += u.cacheWrite;
+    }
+  }
+
   // Aggregate usage + derive session-level metadata.
   // Usage dedup: Claude Code splits one API response into multiple JSONL
   // lines, each carrying the same `usage`. Sum only once per message.id.
@@ -461,6 +523,8 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       linesAdded,
       linesRemoved,
       filesEdited: filesEdited.size,
+      coldResumeCount,
+      cacheRebuildTokens,
       teamName,
       agentName,
       isTeamLead:

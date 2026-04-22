@@ -35,7 +35,7 @@ import {
   type TurnMegaRow,
   type TurnSummary,
 } from "@claude-lens/parser";
-import { formatGap, formatOffset, formatRelative, formatTokens, shortId } from "@/lib/format";
+import { estimateCost, formatCost, formatGap, formatOffset, formatRelative, formatTokens, shortId } from "@/lib/format";
 import { LiveBadge } from "@/components/live-badge";
 import { AskClaudeButton, AskClaudeDrawer } from "@/components/ask-claude";
 import { TailMode } from "@/components/tail-mode";
@@ -285,6 +285,24 @@ export function SessionView({
 
   /** Detect PR creations in this session. */
   const prMarkers = useMemo(() => detectPrMarkers(session), [session]);
+
+  // Cold-resume markers — dedup by messageId (the flag is copied onto every
+  // sibling event in the same response) and carry the tOffsetMs so the
+  // minimap can drop an amber marker at each cache-rebuild point.
+  const coldResumeMarkers = useMemo(() => {
+    const seen = new Set<string>();
+    const out: {
+      tOffsetMs: number;
+      info: NonNullable<SessionEvent["coldResume"]>;
+    }[] = [];
+    for (const e of events) {
+      if (!e.coldResume || !e.messageId || e.tOffsetMs === undefined) continue;
+      if (seen.has(e.messageId)) continue;
+      seen.add(e.messageId);
+      out.push({ tOffsetMs: e.tOffsetMs, info: e.coldResume });
+    }
+    return out;
+  }, [events]);
 
   /** Build the full presentation stream once. */
   const allRows = useMemo(() => buildPresentation(visibleEvents), [visibleEvents]);
@@ -541,6 +559,18 @@ export function SessionView({
           )}
           <InlineStatDivider />
           <InlineTokenStat usage={totalUsage} />
+          {session.coldResumeCount !== undefined &&
+            session.coldResumeCount > 0 &&
+            session.cacheRebuildTokens !== undefined && (
+              <>
+                <InlineStatDivider />
+                <ColdResumeSessionStat
+                  count={session.coldResumeCount}
+                  writeTokens={session.cacheRebuildTokens}
+                  model={model}
+                />
+              </>
+            )}
           <InlineStatDivider />
           <InlineStat value={`${eventCount} events`} />
           {prMarkers.length > 0 && (
@@ -675,6 +705,8 @@ export function SessionView({
             subagents={session.subagents}
             collapsed={collapsed}
             prMarkers={prMarkers}
+            coldResumeMarkers={coldResumeMarkers}
+            model={model}
             selectedSubagentId={selectedSubagentId}
             onSelectSubagent={(id) => {
               setSelectedSubagentId(id);
@@ -749,6 +781,7 @@ export function SessionView({
               stickyOffset={headerH + 16}
               isSessionLive={isSessionLive}
               team={team}
+              model={model}
             />
           </>
         ) : (
@@ -1208,6 +1241,8 @@ function Minimap({
   selectedSubagentId,
   onSelectSubagent,
   prMarkers,
+  coldResumeMarkers,
+  model,
 }: {
   displayRows: DisplayRow[];
   durationMs: number;
@@ -1219,6 +1254,11 @@ function Minimap({
   selectedSubagentId?: string | null;
   onSelectSubagent?: (id: string | null) => void;
   prMarkers?: PrMarker[];
+  coldResumeMarkers?: {
+    tOffsetMs: number;
+    info: NonNullable<SessionEvent["coldResume"]>;
+  }[];
+  model?: string;
 }) {
   const WIDTH = 1400;
   /** Main timeline height. Sub-agent lanes stack below this. */
@@ -1247,6 +1287,10 @@ function Minimap({
     idleMs?: number;
     subagent?: SubagentRun;
     pr?: PrMarker;
+    cold?: {
+      tOffsetMs: number;
+      info: NonNullable<SessionEvent["coldResume"]>;
+    };
   } | null>(null);
   const [playheadMs, setPlayheadMs] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1777,6 +1821,44 @@ function Minimap({
           );
         })}
 
+        {/* Cold-resume markers — amber diamond + dashed line at each cache
+            rebuild. Same presentation language as PRs so the timeline reads
+            consistently: "events worth noticing" live on this row. */}
+        {coldResumeMarkers?.map((cr, i) => {
+          const x = msToX(cr.tOffsetMs);
+          return (
+            <g
+              key={`cold-${i}`}
+              style={{ cursor: "pointer" }}
+              onMouseEnter={(e) => setHover({ clientX: e.clientX, cold: cr })}
+            >
+              <line
+                x1={x}
+                x2={x}
+                y1={0}
+                y2={TOTAL_H}
+                stroke="#D97706"
+                strokeWidth="1.5"
+                strokeDasharray="4 3"
+                opacity="0.75"
+              />
+              <rect
+                x={x - 8}
+                y={0}
+                width={16}
+                height={TOTAL_H}
+                fill="transparent"
+              />
+              <polygon
+                points={`${x},${MAIN_H / 2 - 5} ${x + 5},${MAIN_H / 2} ${x},${MAIN_H / 2 + 5} ${x - 5},${MAIN_H / 2}`}
+                fill="#D97706"
+                stroke="var(--af-surface)"
+                strokeWidth="1.5"
+              />
+            </g>
+          );
+        })}
+
         {/* Playhead — positioned against the relaxed layout, not raw time.
             Spans the full SVG height (main + subagent lanes) so you can see
             which subagents were running at the current scroll position. */}
@@ -1804,6 +1886,8 @@ function Minimap({
           idleMs={hover.idleMs}
           subagent={hover.subagent}
           pr={hover.pr}
+          cold={hover.cold}
+          model={model}
         />
       )}
 
@@ -1891,6 +1975,8 @@ function MinimapHoverCard({
   idleMs,
   subagent,
   pr,
+  cold,
+  model,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>;
   clientX: number;
@@ -1899,6 +1985,8 @@ function MinimapHoverCard({
   idleMs?: number;
   subagent?: SubagentRun;
   pr?: PrMarker;
+  cold?: { tOffsetMs: number; info: NonNullable<SessionEvent["coldResume"]> };
+  model?: string;
 }) {
   const rect = containerRef.current?.getBoundingClientRect();
   const localX = rect ? clientX - rect.left : 0;
@@ -2010,6 +2098,66 @@ function MinimapHoverCard({
             → {subagent.finalPreview}
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (cold) {
+    const estUsd = estimateCost(
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: cold.info.writeTokens },
+      model,
+    );
+    return (
+      <div
+        style={{
+          position: "absolute",
+          ...posStyle,
+          zIndex: 100,
+          background: "#0F172A",
+          color: "#F1F5F9",
+          borderRadius: 10,
+          padding: "10px 14px",
+          fontSize: 11,
+          pointerEvents: "none",
+          boxShadow: "0 6px 24px rgba(15,23,42,0.22)",
+          maxWidth: 340,
+          minWidth: 220,
+          lineHeight: 1.45,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 4,
+              background: "#D97706",
+              color: "#fff",
+            }}
+          >
+            ⚡ CACHE REBUILD
+          </span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.7 }}>
+            at {formatOffset(cold.tOffsetMs)}
+          </span>
+        </div>
+        <div style={{ fontWeight: 500, fontFamily: "var(--font-mono)" }}>
+          {formatTokens(cold.info.writeTokens)} tokens rewritten · idle{" "}
+          {formatGap(cold.info.gapMs)}
+          {estUsd >= 0.005 && ` · est. ${formatCost(estUsd)}`}
+        </div>
+        <div
+          style={{
+            marginTop: 4,
+            fontSize: 10,
+            opacity: 0.65,
+            fontStyle: "italic",
+            whiteSpace: "normal",
+          }}
+        >
+          Prompt cache expired during idle; resuming within 5 min keeps it warm.
+        </div>
       </div>
     );
   }
@@ -2314,6 +2462,7 @@ function TranscriptList({
   stickyOffset,
   isSessionLive,
   team,
+  model,
 }: {
   displayRows: DisplayRow[];
   rowRefs: React.MutableRefObject<Record<number, HTMLDivElement | null>>;
@@ -2323,6 +2472,7 @@ function TranscriptList({
   stickyOffset: number;
   isSessionLive?: boolean;
   team?: (TimelineData & { teamName: string }) | null;
+  model?: string;
 }) {
   // Find the last collapsed turn index so we can mark it as in-progress
   // when the session is live.
@@ -2343,6 +2493,7 @@ function TranscriptList({
     // Collapsed turn summary row
     if (d.kind === "turn-collapsed") {
       const idx = d.turn.firstPrimaryIndex;
+      const turnCold = findColdResumeInDisplayRow(d);
       out.push(
         <CollapsedTurnRow
           key={`turn-${idx}`}
@@ -2351,6 +2502,8 @@ function TranscriptList({
           onClick={() => onToggleTurn(idx)}
           inProgress={i === lastCollapsedTurnIdx}
           team={team}
+          coldResume={turnCold ?? undefined}
+          model={model}
           refCb={(el) => {
             rowRefs.current[idx] = el;
           }}
@@ -2361,11 +2514,14 @@ function TranscriptList({
 
     // Expanded turn header
     if (d.kind === "turn-expanded-header") {
+      const turnCold = findColdResumeInDisplayRow(d);
       out.push(
         <ExpandedTurnHeader
           key={`turnhead-${d.turn.firstPrimaryIndex}`}
           turn={d.turn}
           onClick={() => onToggleTurn(d.turn.firstPrimaryIndex)}
+          coldResume={turnCold ?? undefined}
+          model={model}
         />,
       );
       continue;
@@ -2430,6 +2586,208 @@ function IdleDivider({ gapMs }: { gapMs: number }) {
   );
 }
 
+/** Scan a DisplayRow for a cold-resume event. Returns the first one found,
+ *  or null. Cold resumes are set on assistant events by the parser when the
+ *  first turn after > 5 min of idle had to rewrite the prompt cache. */
+function findColdResumeInDisplayRow(
+  d: DisplayRow,
+): SessionEvent["coldResume"] | null {
+  if (d.kind === "presentation") return findColdResumeInRow(d.row);
+  if (d.kind === "turn-collapsed" || d.kind === "turn-expanded-header") {
+    for (const r of d.turn.rows) {
+      const hit = findColdResumeInRow(r);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function findColdResumeInRow(
+  r: PresentationRow,
+): SessionEvent["coldResume"] | null {
+  if (r.kind === "agent") {
+    if (r.event.coldResume) return r.event.coldResume;
+    for (const ge of r.groupedEvents) {
+      if (ge.coldResume) return ge.coldResume;
+    }
+  } else if (r.kind === "tool-group") {
+    for (const e of r.events) if (e.coldResume) return e.coldResume;
+  }
+  return null;
+}
+
+/** Amber notice embedded at the top of a turn whose first assistant request
+ *  had to rebuild the prompt cache. Pairs with the preceding IdleDivider —
+ *  idle bar explains *why* the cache expired, this notice explains *what
+ *  that cost*. */
+function ColdResumeNotice({
+  info,
+  model,
+}: {
+  info: NonNullable<SessionEvent["coldResume"]>;
+  model?: string;
+}) {
+  const { gapMs, writeTokens, writeRatio } = info;
+  const estUsd = estimateCost(
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: writeTokens },
+    model,
+  );
+  // ratio ≥ 0.9 → fully cold (past 1h extended tier); lower → partial.
+  const fullyCold = writeRatio >= 0.9;
+  return (
+    <div
+      style={{
+        padding: "8px 12px",
+        background: "rgba(217, 119, 6, 0.08)",
+        border: "1px solid rgba(217, 119, 6, 0.35)",
+        borderLeft: "3px solid rgba(217, 119, 6, 0.9)",
+        borderRadius: 6,
+        fontSize: 11.5,
+        color: "var(--af-text-secondary)",
+        lineHeight: 1.5,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontWeight: 600,
+          color: "#78350F",
+          letterSpacing: "0.01em",
+        }}
+      >
+        <span style={{ fontSize: 13 }}>⚡</span>
+        Session resumed cold · idle {formatGap(gapMs)}
+      </div>
+      <div style={{ marginTop: 4, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        Rewrote <b>{formatTokens(writeTokens)}</b> tokens into prompt cache
+        {estUsd >= 0.005 && (
+          <>
+            {" "}
+            · est. <b>{formatCost(estUsd)}</b>
+          </>
+        )}
+        {" "}
+        · {fullyCold ? "fully cold" : "partial"} ({Math.round(writeRatio * 100)}% write)
+      </div>
+      <div
+        style={{
+          marginTop: 3,
+          fontSize: 10.5,
+          color: "var(--af-text-tertiary)",
+          fontStyle: "italic",
+        }}
+      >
+        Prompt cache expired during idle. Resuming within 5 min keeps the cache warm
+        and avoids the rewrite tax.
+      </div>
+    </div>
+  );
+}
+
+/** Session-level rollup shown in the header stats bar when any turns in
+ *  the session paid a cache-rebuild tax. Complements the in-transcript
+ *  dividers with a top-line "this session had N cold resumes" number. */
+function ColdResumeSessionStat({
+  count,
+  writeTokens,
+  model,
+}: {
+  count: number;
+  writeTokens: number;
+  model?: string;
+}) {
+  const [hover, setHover] = useState(false);
+  const estUsd = estimateCost(
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: writeTokens },
+    model,
+  );
+  return (
+    <span
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: "#78350F",
+        background: "rgba(217, 119, 6, 0.12)",
+        padding: "2px 8px",
+        borderRadius: 100,
+        cursor: "default",
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <span style={{ fontSize: 12 }}>⚡</span>
+      {count} cold resume{count === 1 ? "" : "s"} · {formatTokens(writeTokens)} rewritten
+      {hover && (
+        <Tooltip style={{ bottom: "calc(100% + 6px)", left: 0, minWidth: 260 }}>
+          <TooltipRow label="Cold resumes" value={count.toLocaleString()} />
+          <TooltipRow label="Tokens rewritten" value={writeTokens.toLocaleString()} />
+          {estUsd >= 0.005 && (
+            <TooltipRow label="Est. rebuild cost" value={formatCost(estUsd)} />
+          )}
+          <div
+            style={{
+              marginTop: 6,
+              paddingTop: 6,
+              borderTop: "1px solid rgba(241,245,249,0.12)",
+              opacity: 0.65,
+              fontSize: 10,
+              whiteSpace: "normal",
+              lineHeight: 1.4,
+            }}
+          >
+            Turns where the prompt cache had expired during idle, so the whole
+            prefix had to be rewritten at 1.25× base input price. Resuming
+            within 5 min avoids it.
+          </div>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
+
+/** Amber pill shown inside CollapsedTurnRow when the turn paid cache-rebuild
+ *  tax. Complements ColdResumeDivider above the turn for at-a-glance scanning
+ *  when scrolling past a long session. */
+function ColdResumeChip({
+  info,
+  model,
+}: {
+  info: NonNullable<SessionEvent["coldResume"]>;
+  model?: string;
+}) {
+  const { writeTokens } = info;
+  const estUsd = estimateCost(
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: writeTokens },
+    model,
+  );
+  return (
+    <span
+      title={`Prompt cache expired during idle; this turn rewrote ${writeTokens.toLocaleString()} tokens into cache${estUsd >= 0.005 ? ` (est. ${formatCost(estUsd)})` : ""}.`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 10.5,
+        fontWeight: 600,
+        padding: "2px 7px",
+        borderRadius: 3,
+        background: "rgba(217, 119, 6, 0.14)",
+        color: "#78350F",
+        letterSpacing: "0.01em",
+        cursor: "default",
+      }}
+    >
+      ⚡ cold resume · {formatTokens(writeTokens)} rewritten
+    </span>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Collapsed turn row                                                 */
 /*                                                                     */
@@ -2446,6 +2804,8 @@ function CollapsedTurnRow({
   stickyOffset,
   inProgress,
   team,
+  coldResume,
+  model,
 }: {
   turn: TurnMegaRow;
   /** Fires when the user wants to fully expand this turn into the
@@ -2456,6 +2816,8 @@ function CollapsedTurnRow({
   stickyOffset: number;
   inProgress?: boolean;
   team?: (TimelineData & { teamName: string }) | null;
+  coldResume?: NonNullable<SessionEvent["coldResume"]>;
+  model?: string;
 }) {
   const theme = ROLE_THEMES.agent;
   const s = turn.summary;
@@ -2526,7 +2888,7 @@ function CollapsedTurnRow({
         Agent
       </span>
 
-      {/* Col 3 — content (first · stats · steps · last · bottom bar) */}
+      {/* Col 3 — content (cold-resume notice · first · stats · steps · last · bottom bar) */}
       <div
         style={{
           minWidth: 0,
@@ -2536,6 +2898,15 @@ function CollapsedTurnRow({
           paddingBottom: 10,
         }}
       >
+        {/* Cold-resume notice — attached to the top of the agent response so
+            it's clear THIS turn paid the cache-rebuild tax after user revived
+            the session. Sits above the first message. */}
+        {coldResume && (
+          <div onClick={stop}>
+            <ColdResumeNotice info={coldResume} model={model} />
+          </div>
+        )}
+
         {/* 1. First agent message — clickable to expand into full markdown */}
         {firstAgentRow && (
           <ExpandableMessage
@@ -3027,7 +3398,17 @@ function TurnStatsLine({
   );
 }
 
-function ExpandedTurnHeader({ turn, onClick }: { turn: TurnMegaRow; onClick: () => void }) {
+function ExpandedTurnHeader({
+  turn,
+  onClick,
+  coldResume,
+  model,
+}: {
+  turn: TurnMegaRow;
+  onClick: () => void;
+  coldResume?: NonNullable<SessionEvent["coldResume"]>;
+  model?: string;
+}) {
   const s = turn.summary;
   return (
     <div
@@ -3060,6 +3441,11 @@ function ExpandedTurnHeader({ turn, onClick }: { turn: TurnMegaRow; onClick: () 
         {s.toolCalls === 1 ? "" : "s"}
         {turn.durationMs !== undefined ? ` · ${formatGap(turn.durationMs)}` : ""}
       </span>
+      {coldResume && (
+        <span style={{ marginLeft: "auto" }}>
+          <ColdResumeChip info={coldResume} model={model} />
+        </span>
+      )}
     </div>
   );
 }

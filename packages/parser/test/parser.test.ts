@@ -146,6 +146,74 @@ describe("parseTranscript", () => {
     const { meta } = parseTranscript(lines);
     expect(meta.toolCallCount).toBe(2);
   });
+
+  it("flags cold-resume turns when the cache expired during idle", () => {
+    // Turn 1: normal warm request (small cache write, big cache read)
+    // Turn 2: more than 5 min later, cache expired — huge cache write,
+    //         zero cache read. Should be flagged coldResume.
+    const lines = [
+      makeUser("start", "2026-04-10T10:00:00.000Z"),
+      makeAssistantText("hi", "2026-04-10T10:00:01.000Z", {
+        messageId: "msg-warm",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 20,
+          cache_read_input_tokens: 40_000,
+          cache_creation_input_tokens: 500,
+        },
+      }),
+      makeUser("resume after lunch", "2026-04-10T14:00:00.000Z"),
+      makeAssistantText("back", "2026-04-10T14:00:05.000Z", {
+        messageId: "msg-cold",
+        usage: {
+          input_tokens: 10,
+          output_tokens: 30,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 42_000,
+        },
+      }),
+    ];
+    const { meta, events } = parseTranscript(lines);
+    const warm = events.find((e) => e.messageId === "msg-warm")!;
+    const cold = events.find((e) => e.messageId === "msg-cold")!;
+    expect(warm.coldResume).toBeUndefined();
+    expect(cold.coldResume).toBeDefined();
+    expect(cold.coldResume!.writeTokens).toBe(42_000);
+    expect(cold.coldResume!.writeRatio).toBeCloseTo(1, 2);
+    expect(cold.coldResume!.gapMs).toBe(4 * 60 * 60 * 1000 + 4000);
+    expect(meta.coldResumeCount).toBe(1);
+    expect(meta.cacheRebuildTokens).toBe(42_000);
+  });
+
+  it("does not flag cold-resume when cache read dominates (warm turn)", () => {
+    const lines = [
+      makeUser("q1", "2026-04-10T10:00:00.000Z"),
+      makeAssistantText("a1", "2026-04-10T10:00:01.000Z", {
+        messageId: "m1",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 20,
+          cache_read_input_tokens: 10_000,
+          cache_creation_input_tokens: 200,
+        },
+      }),
+      // 10 min later — past TTL — but cacheRead still dominates (cache hit
+      // via 1h extended tier). Should NOT be flagged.
+      makeUser("q2", "2026-04-10T10:10:00.000Z"),
+      makeAssistantText("a2", "2026-04-10T10:10:05.000Z", {
+        messageId: "m2",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 20,
+          cache_read_input_tokens: 10_200,
+          cache_creation_input_tokens: 200,
+        },
+      }),
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.coldResumeCount).toBe(0);
+    expect(meta.cacheRebuildTokens).toBe(0);
+  });
 });
 
 describe("buildPresentation", () => {
