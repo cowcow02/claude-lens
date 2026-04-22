@@ -302,7 +302,9 @@ if gcloud artifacts docker images describe "$IMAGE" --project "$PROJECT" >/dev/n
   ok "Image already present in Artifact Registry — reusing"
 else
   gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet >/dev/null
-  docker pull --platform linux/amd64 "$SOURCE_IMAGE" --quiet
+  if ! docker pull --platform linux/amd64 "$SOURCE_IMAGE" --quiet 2>&1; then
+    die "Could not pull $SOURCE_IMAGE. If the tag does not exist on GHCR yet (common right after a new release), pin a known-good sha:  SOURCE_IMAGE=ghcr.io/cowcow02/fleetlens-team-server:<sha> ./install.sh"
+  fi
   docker tag "$SOURCE_IMAGE" "$IMAGE"
   docker push --quiet "$IMAGE"
   ok "Image copied"
