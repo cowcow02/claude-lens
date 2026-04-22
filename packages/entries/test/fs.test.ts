@@ -7,6 +7,8 @@ import {
   readEntry,
   listEntriesForDay,
   listEntriesForSession,
+  listEntriesWithStatus,
+  listKnownProjects,
   __setEntriesDirForTest,
 } from "../src/fs.js";
 import { CURRENT_ENTRY_SCHEMA_VERSION, pendingEnrichment, type Entry } from "../src/types.js";
@@ -88,5 +90,62 @@ describe("fs storage", () => {
     const path = join(tmp, "bad__2026-04-22.json");
     writeFileSync(path, "{not json");
     expect(() => readEntry("bad", "2026-04-22")).toThrow();
+  });
+});
+
+import { type EntryEnrichmentStatus } from "../src/types.js";
+
+describe("listEntriesWithStatus", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "entries-status-"));
+    __setEntriesDirForTest(tmp);
+  });
+
+  function mk(session_id: string, local_day: string, status: "pending" | "done" | "error" | "skipped_trivial"): Entry {
+    const base = makeEntry(session_id, local_day);
+    return { ...base, enrichment: { ...base.enrichment, status } };
+  }
+
+  it("returns only entries matching the requested status and orders oldest-first", () => {
+    writeEntry(mk("sess-2026-04-01", "2026-04-01", "pending"));
+    writeEntry(mk("sess-2026-04-15", "2026-04-15", "pending"));
+    writeEntry(mk("sess-2026-04-20", "2026-04-20", "pending"));
+    writeEntry(mk("sess-2026-04-05", "2026-04-05", "done"));
+    writeEntry(mk("sess-2026-04-18", "2026-04-18", "done"));
+    writeEntry(mk("sess-2026-04-10", "2026-04-10", "error"));
+
+    const pending = listEntriesWithStatus(["pending"]);
+    expect(pending).toHaveLength(3);
+    expect(pending.map(e => e.local_day)).toEqual(["2026-04-01", "2026-04-15", "2026-04-20"]);
+
+    const both = listEntriesWithStatus(["pending", "error"]);
+    expect(both).toHaveLength(4);
+    expect(both.map(e => e.local_day)).toEqual(["2026-04-01", "2026-04-10", "2026-04-15", "2026-04-20"]);
+  });
+
+  it("returns empty array when no entries match", () => {
+    writeEntry(mk("sess-a", "2026-04-01", "done"));
+    expect(listEntriesWithStatus(["error"])).toEqual([]);
+  });
+});
+
+describe("listKnownProjects", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "entries-proj-"));
+    __setEntriesDirForTest(tmp);
+  });
+
+  it("returns sorted unique project values", () => {
+    const e1 = makeEntry("s1", "2026-04-01"); e1.project = "/b/foo";
+    const e2 = makeEntry("s2", "2026-04-02"); e2.project = "/a/bar";
+    const e3 = makeEntry("s3", "2026-04-03"); e3.project = "/a/bar";
+    writeEntry(e1); writeEntry(e2); writeEntry(e3);
+    expect(listKnownProjects()).toEqual(["/a/bar", "/b/foo"]);
+  });
+
+  it("returns empty array when no entries exist", () => {
+    expect(listKnownProjects()).toEqual([]);
   });
 });
