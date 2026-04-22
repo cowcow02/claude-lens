@@ -66,27 +66,32 @@ fi
 [ -n "$PROJECT" ] || die "No project set. Run: gcloud config set project <id> (or pass PROJECT=<id>)."
 
 #—— Preflight inspection (READ ONLY) ————————————————————————————————
+# Each probe prints a line the moment it starts and updates in place on
+# completion. Without this the user stares at a silent header for 20–30s.
+probe_start() { printf "  %s…%s %-46s" "$d" "$x" "$1"; }
+probe_end()   { printf "\r  %s✓%s %-46s %s\n" "$g" "$x" "$1" "$2"; }
+
 hdr "Preflight — inspecting environment (no changes yet)"
 
-# Verify the project exists and we can describe it (implicitly checks auth)
+probe_start "Resolving project number"
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
-[ -n "$PROJECT_NUMBER" ] || die "Cannot access project '$PROJECT' as $ACCOUNT. Check gcloud auth list / gcloud config set project."
+[ -n "$PROJECT_NUMBER" ] || { printf "\n"; die "Cannot access project '$PROJECT' as $ACCOUNT. Check gcloud auth list / gcloud config set project."; }
+probe_end "Resolving project number" "$PROJECT_NUMBER"
 
-# Billing status — non-fatal probe. If the 'beta' component isn't installed,
-# we fall back to a heuristic (if any paid API is enabled, billing is linked).
+probe_start "Checking billing status"
 BILLING_OK="unknown"
 if gcloud beta billing projects describe "$PROJECT" --format="value(billingEnabled)" 2>/dev/null | grep -q True; then
   BILLING_OK="yes"
 elif gcloud services list --enabled --project "$PROJECT" --filter="name:run.googleapis.com OR name:cloudbuild.googleapis.com" --format="value(name)" 2>/dev/null | grep -q .; then
   BILLING_OK="yes (inferred from enabled APIs)"
 fi
+probe_end "Checking billing status" "$BILLING_OK"
 
 # Derive final image path
 IMAGE_TAG="${SOURCE_IMAGE##*:}"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REPO/team-server:$IMAGE_TAG"
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-# Check which APIs need enabling
 REQUIRED_APIS=(
   run.googleapis.com
   sqladmin.googleapis.com
@@ -97,25 +102,45 @@ REQUIRED_APIS=(
   iam.googleapis.com
   iamcredentials.googleapis.com
 )
+
+probe_start "Listing enabled APIs (of 8 required)"
 ENABLED_APIS="$(gcloud services list --enabled --project "$PROJECT" --format='value(config.name)' 2>/dev/null || true)"
 APIS_TO_ENABLE=()
 for api in "${REQUIRED_APIS[@]}"; do
   grep -qx "$api" <<<"$ENABLED_APIS" || APIS_TO_ENABLE+=("$api")
 done
+ENABLED_COUNT=$((${#REQUIRED_APIS[@]} - ${#APIS_TO_ENABLE[@]}))
+probe_end "Listing enabled APIs (of 8 required)" "$ENABLED_COUNT already on, ${#APIS_TO_ENABLE[@]} to enable"
 
-# Check which resources already exist
 action_for() {
   gcloud "$@" >/dev/null 2>&1 && echo "reuse" || echo "create"
 }
-AR_ACTION="$(action_for artifacts repositories describe "$AR_REPO" --location "$REGION" --project "$PROJECT")"
-SQL_ACTION="$(action_for sql instances describe "$DB_INSTANCE" --project "$PROJECT")"
-RUN_ACTION="$(action_for run services describe "$SERVICE" --region "$REGION" --project "$PROJECT")"
-SCH_ACTION="$(action_for scheduler jobs describe fleetlens-prune --location "$REGION" --project "$PROJECT")"
 
+probe_start "Probing Artifact Registry '$AR_REPO'"
+AR_ACTION="$(action_for artifacts repositories describe "$AR_REPO" --location "$REGION" --project "$PROJECT")"
+probe_end "Probing Artifact Registry '$AR_REPO'" "$AR_ACTION"
+
+probe_start "Probing Cloud SQL '$DB_INSTANCE'"
+SQL_ACTION="$(action_for sql instances describe "$DB_INSTANCE" --project "$PROJECT")"
+probe_end "Probing Cloud SQL '$DB_INSTANCE'" "$SQL_ACTION"
+
+probe_start "Probing Cloud Run '$SERVICE'"
+RUN_ACTION="$(action_for run services describe "$SERVICE" --region "$REGION" --project "$PROJECT")"
+probe_end "Probing Cloud Run '$SERVICE'" "$RUN_ACTION"
+
+probe_start "Probing Cloud Scheduler 'fleetlens-prune'"
+SCH_ACTION="$(action_for scheduler jobs describe fleetlens-prune --location "$REGION" --project "$PROJECT")"
+probe_end "Probing Cloud Scheduler 'fleetlens-prune'" "$SCH_ACTION"
+
+probe_start "Probing 4 Secret Manager entries"
 SECRET_ACTIONS=()
+SECRETS_EXIST=0
 for secret in fleetlens-db-password fleetlens-encryption-key fleetlens-scheduler-secret fleetlens-database-url; do
-  SECRET_ACTIONS+=("$secret=$(action_for secrets describe "$secret" --project "$PROJECT")")
+  a="$(action_for secrets describe "$secret" --project "$PROJECT")"
+  SECRET_ACTIONS+=("$secret=$a")
+  [ "$a" = "reuse" ] && SECRETS_EXIST=$((SECRETS_EXIST+1))
 done
+probe_end "Probing 4 Secret Manager entries" "$SECRETS_EXIST exist, $((4 - SECRETS_EXIST)) to create"
 
 #—— Summary banner ————————————————————————————————————————————————
 hdr "What this installer will do"
