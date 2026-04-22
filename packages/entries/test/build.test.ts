@@ -1,0 +1,188 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseTranscript } from "@claude-lens/parser";
+import { buildEntries } from "../src/build.js";
+import type { SessionDetail } from "@claude-lens/parser";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function load(name: string): SessionDetail {
+  const filePath = resolve(__dirname, "fixtures", name);
+  const rawLines = readFileSync(filePath, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+  const { meta, events } = parseTranscript(rawLines);
+  return {
+    ...meta,
+    id: "test-session",
+    filePath,
+    projectDir: "test-project-dir",
+    projectName: meta.cwd ?? "/test/project",
+    events,
+  };
+}
+
+// ── 4a: skeleton + orchestrator ────────────────────────────────────────────
+
+describe("buildEntries (deterministic)", () => {
+  it("produces one Entry for a single-day session", () => {
+    const sd = load("one-day-session.jsonl");
+    const entries = buildEntries(sd);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.session_id).toBe("test-session");
+    expect(entries[0]!.version).toBe(2);
+    expect(entries[0]!.enrichment.status).toMatch(/^(pending|skipped_trivial)$/);
+  });
+
+  it("splits a midnight-spanning session into two Entries", () => {
+    const sd = load("span-midnight-session.jsonl");
+    const entries = buildEntries(sd);
+    expect(entries).toHaveLength(2);
+    const days = entries.map(e => e.local_day).sort();
+    expect(days[0]).not.toBe(days[1]);
+  });
+
+  it("initialises enrichment as pending object, never null", () => {
+    const sd = load("one-day-session.jsonl");
+    const entries = buildEntries(sd);
+    for (const e of entries) {
+      expect(e.enrichment).toBeTypeOf("object");
+      expect(e.enrichment).not.toBeNull();
+      expect(e.enrichment.user_instructions).toEqual(expect.any(Array));
+    }
+  });
+
+  it("is deterministic — repeated calls produce byte-equal JSON (excluding generated_at)", () => {
+    const sd = load("one-day-session.jsonl");
+    const a = buildEntries(sd);
+    const b = buildEntries(sd);
+    for (const e of [...a, ...b]) e.generated_at = "fixed";
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  it("entries are sorted by local_day ascending", () => {
+    const sd = load("span-midnight-session.jsonl");
+    const entries = buildEntries(sd);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]!.local_day < entries[1]!.local_day).toBe(true);
+  });
+});
+
+// ── 4b: numbers cluster ────────────────────────────────────────────────────
+
+describe("buildEntries numbers cluster", () => {
+  it("computes turn_count and tools_total for one-day fixture", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // fixture has 1 real user turn (non-tool-result user event) → 1 closed turn
+    expect(entry!.numbers.turn_count).toBe(1);
+    // fixture has 1 Bash tool_use → tools_total = 1
+    expect(entry!.numbers.tools_total).toBe(1);
+  });
+
+  it("active_min is positive for a session with 3-minute events", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.numbers.active_min).toBeGreaterThan(0);
+  });
+
+  it("tokens_total reflects assistant usage (deduped by message id)", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // msg_00000001: 500 in + 50 out = 550; msg_00000002: 600 in + 80 out = 680; total = 1230
+    expect(entry!.numbers.tokens_total).toBe(1230);
+  });
+
+  it("tool_errors counts is_error:true tool results", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // fixture has no tool errors
+    expect(entry!.numbers.tool_errors).toBe(0);
+  });
+});
+
+// ── 4c: text + model + project fields ─────────────────────────────────────
+
+describe("buildEntries text + model + project fields", () => {
+  it("extracts first_user from full block text, not preview", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.first_user.length).toBeGreaterThan(0);
+    expect(entry!.first_user).toContain("foo function");
+  });
+
+  it("extracts final_agent from last assistant text block", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.final_agent.length).toBeGreaterThan(0);
+    expect(entry!.final_agent).toContain("foo function");
+  });
+
+  it("sets primary_model from assistant events", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.primary_model).toBe("claude-opus-4-6");
+  });
+
+  it("model_mix counts per model", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.model_mix["claude-opus-4-6"]).toBeGreaterThan(0);
+  });
+
+  it("top_tools includes Bash with sub-verbs when Bash is used", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // one Bash call with "cat" command
+    expect(entry!.top_tools.some(t => t.startsWith("Bash"))).toBe(true);
+  });
+
+  it("project uses cwd from tool-using events, canonicalized", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // cwd in fixture is /test/project; no worktree suffix
+    expect(entry!.project).toBe("/test/project");
+  });
+});
+
+// ── 4d: flags + signals ────────────────────────────────────────────────────
+
+describe("buildEntries flags + signals", () => {
+  it("flags is an array (empty when no thresholds hit)", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(Array.isArray(entry!.flags)).toBe(true);
+  });
+
+  it("satisfaction_signals are zero for neutral fixture text", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // fixture text is neutral: "can you implement the foo function..."
+    expect(entry!.satisfaction_signals.happy).toBe(0);
+    expect(entry!.satisfaction_signals.frustrated).toBe(0);
+  });
+
+  it("does not count teammate messages as human in user_input_sources", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // all user events in fixture are plain text (human)
+    expect(entry!.user_input_sources.human).toBeGreaterThan(0);
+    expect(entry!.user_input_sources.teammate).toBe(0);
+  });
+
+  it("user_input_sources.human equals real human user events count", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // fixture has 1 real human turn (the tool_result event is not counted)
+    expect(entry!.user_input_sources.human).toBe(1);
+  });
+
+  it("enrichment.user_instructions populated from human text in non-trivial sessions", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    // fixture has "can you implement" → should yield at least 1 instruction if not trivial
+    if (entry!.enrichment.status === "pending") {
+      expect(entry!.enrichment.user_instructions.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+});
