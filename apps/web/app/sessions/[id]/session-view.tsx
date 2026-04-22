@@ -2735,7 +2735,7 @@ function ColdResumeSessionStat({
       <span style={{ fontSize: 12 }}>⚡</span>
       {count} cache rebuild{count === 1 ? "" : "s"} · {formatTokens(writeTokens)} rewritten
       {hover && (
-        <Tooltip style={{ bottom: "calc(100% + 6px)", left: 0, minWidth: 260 }}>
+        <Tooltip style={{ top: "calc(100% + 6px)", left: 0, minWidth: 260 }}>
           <TooltipRow label="Cache rebuilds" value={count.toLocaleString()} />
           <TooltipRow label="Tokens rewritten" value={writeTokens.toLocaleString()} />
           {estUsd >= 0.005 && (
