@@ -62,30 +62,18 @@ export type SessionEvent = {
   /** raw attachment type when role=system */
   attachmentType?: string;
   /** Set on the first assistant event after the prompt cache was
-   *  effectively invalidated, forcing Claude to rewrite the prefix.
-   *
-   *  Two triggers, both surfaced in the UI under the same amber styling:
-   *  - `"idle"`: previous API call was > 5 min ago so the cache TTL
-   *    expired during the gap
-   *  - `"compact"`: a `compact_boundary` system event (auto or manual
-   *    `/compact`) rewrote the conversation with a summary; the summary
-   *    has to be written to a fresh cache regardless of idle gap */
+   *  invalidated. Two triggers: `"idle"` (previous API call > 5 min ago,
+   *  TTL expired) or `"compact"` (a `compact_boundary` summarized the
+   *  conversation — the new summary must be written to a fresh cache). */
   coldResume?: {
-    /** What caused the cache to be rewritten */
     trigger: "idle" | "compact";
-    /** Gap (ms) since previous assistant event. For compact this is
-     *  usually small; the boundary event is the real evidence. */
     gapMs: number;
-    /** cache_creation_input_tokens on this turn */
     writeTokens: number;
     /** cacheWrite / (cacheWrite + cacheRead). ~1.0 is fully cold; compact
      *  rebuilds sit 0.5–0.75 since some post-summary context warms fast. */
     writeRatio: number;
-    /** Only present when trigger==="compact" */
     compact?: {
-      /** Manual `/compact` vs auto-compact at context limit */
       trigger: "manual" | "auto";
-      /** Tokens BEFORE compaction — the prefix that got summarized away */
       preTokens: number;
     };
   };
@@ -144,13 +132,10 @@ export type SessionMeta = {
   linesRemoved?: number;
   /** derived: number of unique files touched (Edit + Write) */
   filesEdited?: number;
-  /** derived: count of cold-resume turns in this session — assistant
-   *  turns where the prompt cache had expired during idle, so Claude
-   *  had to rewrite the cached prefix. */
+  /** derived: count of turns flagged with `coldResume` (idle + compact) */
   coldResumeCount?: number;
-  /** derived: total cache_creation_input_tokens across cold-resume
-   *  turns only. This is the "cache rebuild tax" that eats into the
-   *  5h budget on every session resume past the cache TTL. */
+  /** derived: sum of cacheWrite across flagged turns — the "cache rebuild
+   *  tax" billed against the 5h budget at 1.25× base input price. */
   cacheRebuildTokens?: number;
   /** derived: sum of event-to-event gaps under the idle threshold
    *  (default 3 minutes) — a close approximation of "how long was

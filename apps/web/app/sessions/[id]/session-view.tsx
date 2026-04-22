@@ -286,9 +286,6 @@ export function SessionView({
   /** Detect PR creations in this session. */
   const prMarkers = useMemo(() => detectPrMarkers(session), [session]);
 
-  // Cold-resume markers — dedup by messageId (the flag is copied onto every
-  // sibling event in the same response) and carry the tOffsetMs so the
-  // minimap can drop an amber marker at each cache-rebuild point.
   const coldResumeMarkers = useMemo(() => {
     const seen = new Set<string>();
     const out: {
@@ -1821,9 +1818,6 @@ function Minimap({
           );
         })}
 
-        {/* Cold-resume markers — amber diamond + dashed line at each cache
-            rebuild. Same presentation language as PRs so the timeline reads
-            consistently: "events worth noticing" live on this row. */}
         {coldResumeMarkers?.map((cr, i) => {
           const x = msToX(cr.tOffsetMs);
           return (
@@ -2109,11 +2103,10 @@ function MinimapHoverCard({
       { input: 0, output: 0, cacheRead: 0, cacheWrite: writeTokens },
       model,
     );
-    const label = isCompact
-      ? compact?.trigger === "auto"
-        ? "⚡ AUTO-COMPACT"
-        : "⚡ /COMPACT"
-      : "⚡ CACHE REBUILD";
+    let label: string;
+    if (!isCompact) label = "⚡ CACHE REBUILD";
+    else if (compact?.trigger === "auto") label = "⚡ AUTO-COMPACT";
+    else label = "⚡ /COMPACT";
     const detailLine = isCompact
       ? `${formatTokens(writeTokens)} rewritten · pre-compact ${formatTokens(compact?.preTokens ?? 0)}`
       : `${formatTokens(writeTokens)} rewritten · idle ${formatGap(gapMs)}`;
@@ -2598,9 +2591,6 @@ function IdleDivider({ gapMs }: { gapMs: number }) {
   );
 }
 
-/** Scan a DisplayRow for a cold-resume event. Returns the first one found,
- *  or null. Cold resumes are set on assistant events by the parser when the
- *  first turn after > 5 min of idle had to rewrite the prompt cache. */
 function findColdResumeInDisplayRow(
   d: DisplayRow,
 ): SessionEvent["coldResume"] | null {
@@ -2628,10 +2618,6 @@ function findColdResumeInRow(
   return null;
 }
 
-/** Amber notice embedded at the top of a turn whose first assistant request
- *  had to rebuild the prompt cache. Pairs with the preceding IdleDivider —
- *  idle bar explains *why* the cache expired, this notice explains *what
- *  that cost*. */
 function ColdResumeNotice({
   info,
   model,
@@ -2645,12 +2631,11 @@ function ColdResumeNotice({
     model,
   );
   const isCompact = trigger === "compact";
-  const title = isCompact
-    ? compact?.trigger === "auto"
-      ? "Auto-compact rebuilt the cache"
-      : "Conversation compacted · cache rebuilt"
-    : `Session resumed cold · idle ${formatGap(gapMs)}`;
   const fullyCold = writeRatio >= 0.9;
+  let title: string;
+  if (!isCompact) title = `Session resumed cold · idle ${formatGap(gapMs)}`;
+  else if (compact?.trigger === "auto") title = "Auto-compact rebuilt the cache";
+  else title = "Conversation compacted · cache rebuilt";
   const hint = isCompact
     ? "Compaction summarizes the conversation, so the prefix must be rewritten into a fresh cache. Any /compact or auto-compact will cost this rewrite."
     : "Prompt cache expired during idle. Resuming within 5 min keeps the cache warm and avoids the rewrite tax.";
@@ -2715,9 +2700,6 @@ function ColdResumeNotice({
   );
 }
 
-/** Session-level rollup shown in the header stats bar when any turns in
- *  the session paid a cache-rebuild tax. Complements the in-transcript
- *  dividers with a top-line "this session had N cold resumes" number. */
 function ColdResumeSessionStat({
   count,
   writeTokens,
@@ -2781,9 +2763,6 @@ function ColdResumeSessionStat({
   );
 }
 
-/** Amber pill shown inside CollapsedTurnRow when the turn paid cache-rebuild
- *  tax. Complements ColdResumeDivider above the turn for at-a-glance scanning
- *  when scrolling past a long session. */
 function ColdResumeChip({
   info,
   model,
@@ -2928,9 +2907,6 @@ function CollapsedTurnRow({
           paddingBottom: 10,
         }}
       >
-        {/* Cold-resume notice — attached to the top of the agent response so
-            it's clear THIS turn paid the cache-rebuild tax after user revived
-            the session. Sits above the first message. */}
         {coldResume && (
           <div onClick={stop}>
             <ColdResumeNotice info={coldResume} model={model} />
