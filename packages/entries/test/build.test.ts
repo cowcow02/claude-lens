@@ -32,6 +32,7 @@ describe("buildEntries (deterministic)", () => {
     expect(entries[0]!.session_id).toBe("test-session");
     expect(entries[0]!.version).toBe(2);
     expect(entries[0]!.enrichment.status).toMatch(/^(pending|skipped_trivial)$/);
+    expect(entries[0]!.local_day).toBe("2026-04-22");
   });
 
   it("splits a midnight-spanning session into two Entries", () => {
@@ -263,5 +264,38 @@ describe("buildEntries flags + signals", () => {
     const total = src.human + src.teammate + src.skill_load + src.slash_command;
     // fixture: 1 real user input event (tool_result event excluded)
     expect(total).toBe(1);
+  });
+});
+
+// ── positive-case tests (spec-required) ────────────────────────────────────
+
+describe("buildEntries positive cases", () => {
+  it("extracts pr_titles from gh pr create Bash commands", () => {
+    const sd = load("pr-ship-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.pr_titles).toContain("feat: test ship");
+    expect(entry!.numbers.prs).toBe(1);
+  });
+
+  it("extracts subagent dispatches with type, description, prompt_preview", () => {
+    const sd = load("subagent-dispatch.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.subagents.length).toBeGreaterThan(0);
+    const s = entry!.subagents[0]!;
+    expect(s.type).toBe("explorer");
+    expect(s.description).toBe("scan repo");
+    expect(s.prompt_preview).toBe("look at src/");
+    expect(s.background).toBe(false);
+    expect(s.type).toBeTypeOf("string");
+    expect(s.description).toBeTypeOf("string");
+    expect(s.prompt_preview).toBeTypeOf("string");
+    expect(s.background).toBeTypeOf("boolean");
+  });
+
+  it("does not count <teammate-message> as human input", () => {
+    const sd = load("teammate-dispatch.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.user_input_sources.teammate).toBeGreaterThan(0);
+    expect(entry!.user_input_sources.human).toBe(0);
   });
 });
