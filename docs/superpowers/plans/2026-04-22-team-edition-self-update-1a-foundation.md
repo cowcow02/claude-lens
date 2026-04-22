@@ -209,7 +209,9 @@ on:
   workflow_dispatch:
 ```
 
-Note: the `release:` trigger is intentionally removed. The monorepo's `release.yml` is CLI-only; team-server has its own tag namespace.
+Notes:
+- The `release:` trigger is intentionally removed. The monorepo's `release.yml` is CLI-only; team-server has its own tag namespace.
+- GitHub Actions applies the `paths:` filter to BOTH branch and tag pushes under the same `push:` key. This is intentional and relies on an invariant: a `server-v*` tag is always placed on a commit produced by `npm version patch` in Task 18, which always modifies `packages/team-server/package.json` — matching the `paths:` filter. If a future workflow pushes a `server-v*` tag to a commit that doesn't touch team-server paths (e.g., a cherry-pick or hand-tagged commit), the build will be silently filtered out. Do not add such tags by hand.
 
 - [ ] **Step 2: Add a step to read the team-server version**
 
@@ -350,19 +352,19 @@ git commit -m "build(team-server): add drizzle-orm + drizzle-kit (pinned) with c
 **Files:**
 - Modify: `packages/team-server/src/db/schema.ts`
 
-The existing `SCHEMA_SQL` string has nine tables (`user_accounts`, `teams`, `memberships`, `invites`, `sessions`, `daily_rollups`, `events`, `ingest_log`, `server_config`) plus a few indexes. Each gets a Drizzle `pgTable` declaration.
+The existing `SCHEMA_SQL` string has nine tables plus indexes + CHECK + FK constraints. Each gets a Drizzle `pgTable` declaration.
 
-The generated SQL must match the existing schema **structurally and nominally** — same column names, same types, same defaults, same constraints, same index names. The baseline hash-match in Chunk 3 relies on `0000_initial.sql` being what Drizzle would have produced if we'd started with it.
+The generated SQL must match the existing schema **structurally and nominally** — same column names, same types, same defaults, same constraints, same index names. The parity oracle is the extended `migrate.test.ts` in Task 12 Step 3, which introspects `information_schema` to verify every table and key column.
 
 - [ ] **Step 1: Read the current `SCHEMA_SQL` carefully**
 
 Run: `cat packages/team-server/src/db/schema.ts`
 
-Note every `CREATE TABLE`, column, default, `CHECK` constraint, `FOREIGN KEY`, and `CREATE INDEX`. This is the oracle.
+Read every `CREATE TABLE`, column, default, `CHECK` constraint, `FOREIGN KEY`, and `CREATE INDEX`. This is the reference you're porting.
 
-- [ ] **Step 2: Rewrite `schema.ts` as Drizzle declarations**
+- [ ] **Step 2: Rewrite `schema.ts` as Drizzle declarations — full translation of all 9 tables**
 
-Replace the entire file contents with (example; match the exact SQL):
+Replace the entire file contents with this. The imports at the top must include every Drizzle builder actually used (missing ones will show up as typecheck errors):
 
 ```ts
 import {
@@ -374,11 +376,12 @@ import {
   date,
   integer,
   bigint,
+  bigserial,
   jsonb,
   index,
   uniqueIndex,
   check,
-  bigserial,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -425,10 +428,98 @@ export const memberships = pgTable(
   }),
 );
 
-// ... continue for invites, sessions, daily_rollups, events, ingest_log, server_config ...
+export const invites = pgTable(
+  "invites",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by").notNull().references(() => userAccounts.id),
+    email: text("email"),
+    tokenHash: text("token_hash").notNull().unique(),
+    role: text("role").notNull().default("member"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    roleCheck: check("invites_role_check", sql`${t.role} IN ('admin','member')`),
+  }),
+);
+
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userAccountId: uuid("user_account_id")
+      .notNull()
+      .references(() => userAccounts.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => ({
+    userIdx: index("idx_sessions_user").on(t.userAccountId),
+  }),
+);
+
+export const dailyRollups = pgTable(
+  "daily_rollups",
+  {
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id").notNull().references(() => memberships.id, { onDelete: "cascade" }),
+    day: date("day").notNull(),
+    agentTimeMs: bigint("agent_time_ms", { mode: "number" }).notNull().default(0),
+    sessions: integer("sessions").notNull().default(0),
+    toolCalls: integer("tool_calls").notNull().default(0),
+    turns: integer("turns").notNull().default(0),
+    tokensInput: bigint("tokens_input", { mode: "number" }).notNull().default(0),
+    tokensOutput: bigint("tokens_output", { mode: "number" }).notNull().default(0),
+    tokensCacheRead: bigint("tokens_cache_read", { mode: "number" }).notNull().default(0),
+    tokensCacheWrite: bigint("tokens_cache_write", { mode: "number" }).notNull().default(0),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.teamId, t.membershipId, t.day] }),
+    teamDay: index("idx_daily_rollups_team_day").on(t.teamId, sql`${t.day} DESC`),
+  }),
+);
+
+export const events = pgTable(
+  "events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }),
+    actorId: uuid("actor_id").references(() => userAccounts.id),
+    action: text("action").notNull(),
+    payload: jsonb("payload").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    teamCreated: index("idx_events_team_created").on(t.teamId, sql`${t.createdAt} DESC`),
+  }),
+);
+
+export const ingestLog = pgTable(
+  "ingest_log",
+  {
+    ingestId: text("ingest_id").primaryKey(),
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id").notNull().references(() => memberships.id, { onDelete: "cascade" }),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    received: index("idx_ingest_log_received").on(t.receivedAt),
+  }),
+);
+
+export const serverConfig = pgTable("server_config", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 ```
 
-**Reference the current `SCHEMA_SQL` byte-by-byte** for every table. Don't guess at column nullability or defaults — read them.
+**Cross-check every table against the current `SCHEMA_SQL`** before moving on. The oracle is byte-for-byte agreement on: column names, column types, NOT NULL, DEFAULT expressions, CHECK constraints (and their names), FOREIGN KEY cascade behavior, primary key composition, index names, index columns, and partial-index WHERE clauses. If any drift slips through, Task 12 Step 3's introspection test will fail.
 
 - [ ] **Step 3: Remove the old `SCHEMA_SQL` export**
 
@@ -461,51 +552,18 @@ Run: `cat packages/team-server/src/db/migrations/0000_initial.sql`
 
 Verify: every table from the old `SCHEMA_SQL` is present, with matching columns, defaults, constraints, and index names.
 
-- [ ] **Step 3: Spin up a clean Postgres and apply both the old schema and the new migration, compare**
+- [ ] **Step 3: Quick visual sanity check on the generated SQL**
 
-Start a throwaway Postgres (assumes Docker is available):
+Look for:
 
-```bash
-docker run -d --rm --name pg-schema-compare -e POSTGRES_PASSWORD=x -p 5440:5432 postgres:17
-sleep 5
-```
+- All 9 tables present: `user_accounts`, `teams`, `memberships`, `invites`, `sessions`, `daily_rollups`, `events`, `ingest_log`, `server_config`.
+- Every `CHECK` constraint from the old `SCHEMA_SQL` is present (memberships role, invites role).
+- Index names that the old schema explicitly set: `idx_memberships_team_active`, `idx_memberships_bearer`, `idx_sessions_user`, `idx_daily_rollups_team_day`, `idx_events_team_created`, `idx_ingest_log_received`.
+- Partial-index `WHERE` clauses preserved (`memberships_team_active` on `revoked_at IS NULL`, `memberships_bearer` on `bearer_token_hash IS NOT NULL`).
 
-Apply the OLD schema to one database:
+This is eyeballing, not a test — the authoritative parity oracle is Task 12 Step 3's extended `migrate.test.ts`, which introspects `information_schema` after Drizzle has run. If something drifts here but the test in Task 12 passes, the drift is cosmetic; if that test fails, the drift is real.
 
-```bash
-createdb -h localhost -p 5440 -U postgres old_schema 2>/dev/null || true
-# You'll need the old SCHEMA_SQL content. Easiest: check it out temporarily:
-git show HEAD~2:packages/team-server/src/db/schema.ts > /tmp/old_schema.ts
-# Extract the SQL between the backticks, pipe to psql:
-node -e "const s = require('/tmp/old_schema.ts'); console.log(s.SCHEMA_SQL);" \
-  | PGPASSWORD=x psql -h localhost -p 5440 -U postgres -d old_schema
-```
-
-(If extracting the SQL that way is fiddly, paste the SCHEMA_SQL body between `\`` marks into a `.sql` file and `psql -f` it.)
-
-Apply the NEW migration to another database:
-
-```bash
-createdb -h localhost -p 5440 -U postgres new_schema
-PGPASSWORD=x psql -h localhost -p 5440 -U postgres -d new_schema \
-  -f packages/team-server/src/db/migrations/0000_initial.sql
-```
-
-Dump both schemas and diff:
-
-```bash
-PGPASSWORD=x pg_dump -h localhost -p 5440 -U postgres --schema-only old_schema > /tmp/old.sql
-PGPASSWORD=x pg_dump -h localhost -p 5440 -U postgres --schema-only new_schema > /tmp/new.sql
-diff /tmp/old.sql /tmp/new.sql
-```
-
-Expected: output should be either empty OR limited to ordering / whitespace differences only. Any column, constraint, or index difference is a real issue — go back to Task 7 and fix the Drizzle schema declaration.
-
-Stop the Postgres container:
-
-```bash
-docker stop pg-schema-compare
-```
+Do NOT attempt a `pg_dump | diff` parity check against the old schema. `pg_dump` output is non-deterministic in ordering, whitespace, and comment headers, so diffs are noisy enough to be useless without extensive `sort`/`sed` normalization. The introspection test in Task 12 is a cleaner oracle that runs in CI.
 
 - [ ] **Step 4: Commit schema conversion + generated migration together**
 
@@ -540,16 +598,24 @@ This is the riskiest chunk: `baseline.ts` must insert a row into `drizzle.__driz
 **Files:**
 - Create: `packages/team-server/test/db/baseline.test.ts`
 
+**Important background on what makes the baseline correct:** Drizzle's migrator (as of 0.40.x) skips already-applied migrations by comparing `drizzle.__drizzle_migrations.created_at` against each migration's `folderMillis` (the timestamp embedded in `meta/_journal.json` at `drizzle-kit generate` time). A migration is skipped if and only if there exists a journal row whose `created_at >= folderMillis`. The `hash` column is written for consistency and audit but is **NOT** consulted by the skip decision.
+
+Our baseline inserts a row with `created_at = Date.now()` at runtime. Runtime is always after generate time, so `Date.now() > folderMillis` holds for every migration already present in the image. That's what makes `0000_initial` get skipped on existing DBs. The test must verify this behavior directly, not assert a hash-match invariant that doesn't drive correctness.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { Client } from "pg";
 import { readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { applyPreDrizzleBaselineIfNeeded } from "../../src/db/baseline.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = join(__dirname, "../../src/db/migrations");
 const CONN = process.env.DATABASE_URL ?? "postgres://localhost:5432/fleetlens_dev";
 
 async function wipeDb(client: Client) {
@@ -581,38 +647,55 @@ describe("applyPreDrizzleBaselineIfNeeded", () => {
     const { rows } = await client.query(
       "SELECT to_regclass('drizzle.__drizzle_migrations') AS tbl",
     );
-    // Table should not have been created on a fresh DB.
     expect(rows[0].tbl).toBeNull();
   });
 
-  it("creates the drizzle journal and inserts the baseline row when user_accounts exists", async () => {
-    // Simulate an existing v0.4.x deployment by applying 0000_initial.sql manually
-    // (this is what a legacy deployment's schema looks like after SCHEMA_SQL ran).
-    const sqlPath = join(__dirname, "../../src/db/migrations/0000_initial.sql");
-    const sql = readFileSync(sqlPath, "utf8");
+  it("creates the journal row with created_at >= folderMillis so Drizzle skips 0000_initial", async () => {
+    // Simulate an existing v0.4.x deployment by applying 0000_initial.sql manually.
+    const sql = readFileSync(join(MIGRATIONS_DIR, "0000_initial.sql"), "utf8");
     await client.query(sql);
+
+    // Insert a canary row into user_accounts that would be destroyed if Drizzle
+    // re-ran 0000_initial (which drops-and-recreates nothing but would error out
+    // on duplicate CREATE, aborting the transaction).
+    await client.query(
+      `INSERT INTO user_accounts (email, password_hash) VALUES ('canary@example.com', 'x')`,
+    );
 
     await applyPreDrizzleBaselineIfNeeded(client);
 
+    // Verify the journal entry's created_at is >= the journal's recorded folderMillis
+    // for 0000. This is the invariant Drizzle's skip logic checks.
+    const journal = JSON.parse(
+      readFileSync(join(MIGRATIONS_DIR, "meta/_journal.json"), "utf8"),
+    );
+    const folderMillis = journal.entries.find((e: { idx: number; when: number }) => e.idx === 0).when;
     const { rows } = await client.query(
-      "SELECT hash FROM drizzle.__drizzle_migrations ORDER BY id",
+      `SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY id`,
     );
     expect(rows).toHaveLength(1);
+    expect(Number(rows[0].created_at)).toBeGreaterThanOrEqual(folderMillis);
 
-    const expectedHash = createHash("sha256").update(sql).digest("hex");
-    expect(rows[0].hash).toBe(expectedHash);
+    // Now run Drizzle's migrator. If the baseline is effective, it should NOT
+    // attempt to re-run 0000_initial — which would error on duplicate CREATE TABLE.
+    // Canary row survives as further proof.
+    await migrate(drizzle(client), { migrationsFolder: MIGRATIONS_DIR });
+
+    const canary = await client.query(
+      `SELECT email FROM user_accounts WHERE email = 'canary@example.com'`,
+    );
+    expect(canary.rowCount).toBe(1);
   });
 
   it("is idempotent — calling twice does not insert duplicate rows", async () => {
-    const sqlPath = join(__dirname, "../../src/db/migrations/0000_initial.sql");
-    const sql = readFileSync(sqlPath, "utf8");
+    const sql = readFileSync(join(MIGRATIONS_DIR, "0000_initial.sql"), "utf8");
     await client.query(sql);
 
     await applyPreDrizzleBaselineIfNeeded(client);
     await applyPreDrizzleBaselineIfNeeded(client);
 
     const { rows } = await client.query(
-      "SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations",
+      `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`,
     );
     expect(rows[0].n).toBe(1);
   });
@@ -650,7 +733,9 @@ export async function applyPreDrizzleBaselineIfNeeded(client: Client): Promise<v
   if (existing.rowCount === 0) return;
 
   // Pre-create drizzle's journal schema + table so we can insert the baseline
-  // row before the migrator itself runs. The migrator is idempotent on this DDL.
+  // row before the migrator itself runs. Table shape matches what drizzle's
+  // migrator would create on first run, so post-baseline the migrator treats
+  // it as its own bookkeeping table.
   await client.query(`CREATE SCHEMA IF NOT EXISTS drizzle`);
   await client.query(`
     CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
@@ -665,12 +750,12 @@ export async function applyPreDrizzleBaselineIfNeeded(client: Client): Promise<v
   );
   if (existingJournal.rows[0].n > 0) return; // already baselined
 
-  // Compute the hash Drizzle's migrator would compute for 0000_initial.sql.
-  // As of drizzle-orm 0.40 + drizzle-kit 0.30, this is sha256 of the raw SQL
-  // file contents (hex encoded). Verified against drizzle-orm/migrator.ts.
-  // If this algorithm changes in a future Drizzle version, the pinned deps
-  // are what protects us — the contract test in baseline.test.ts will fail
-  // loudly if we ever upgrade past a compatible version.
+  // Drizzle's migrator (0.40.x) decides whether to skip a migration by
+  // comparing drizzle.__drizzle_migrations.created_at against each migration's
+  // folderMillis from meta/_journal.json. The hash column is populated but not
+  // consulted by the skip logic — we fill it with sha256 of the raw SQL for
+  // audit consistency, not correctness. What makes the skip work is
+  // Date.now() > folderMillis, which is trivially true at customer boot time.
   const sqlPath = join(__dirname, "migrations", "0000_initial.sql");
   const sql = readFileSync(sqlPath, "utf8");
   const hash = createHash("sha256").update(sql).digest("hex");
@@ -685,50 +770,9 @@ export async function applyPreDrizzleBaselineIfNeeded(client: Client): Promise<v
 - [ ] **Step 2: Run the test — expect all 3 cases to pass**
 
 Run: `pnpm -F @claude-lens/team-server test test/db/baseline.test.ts`
-Expected: `3 passed (3)`.
+Expected: `3 passed (3)`. The third case (post-baseline `migrate()` doesn't re-run 0000, canary survives) is the load-bearing assertion — it proves the baseline actually prevents re-application.
 
-- [ ] **Step 3: Cross-check against what Drizzle's migrator actually computes**
-
-This is the critical parity check. Run a one-off node script to apply `0000_initial.sql` via Drizzle's migrator on a separate *fresh* DB, then read back its hash:
-
-```bash
-createdb -h localhost -U postgres drizzle_migrator_parity
-DATABASE_URL="postgres://localhost:5432/drizzle_migrator_parity" \
-  node -e '
-    const { drizzle } = require("./packages/team-server/node_modules/drizzle-orm/node-postgres");
-    const { migrate } = require("./packages/team-server/node_modules/drizzle-orm/node-postgres/migrator");
-    const { Client } = require("pg");
-    (async () => {
-      const c = new Client({ connectionString: process.env.DATABASE_URL });
-      await c.connect();
-      await migrate(drizzle(c), { migrationsFolder: "packages/team-server/src/db/migrations" });
-      const { rows } = await c.query("SELECT hash FROM drizzle.__drizzle_migrations");
-      console.log("Drizzle-computed hash:", rows[0].hash);
-      await c.end();
-    })();
-  '
-```
-
-Then compute our own hash:
-
-```bash
-node -e '
-  const { createHash } = require("node:crypto");
-  const { readFileSync } = require("node:fs");
-  const sql = readFileSync("packages/team-server/src/db/migrations/0000_initial.sql", "utf8");
-  console.log("Our computed hash:     ", createHash("sha256").update(sql).digest("hex"));
-'
-```
-
-Expected: the two hex strings are identical. If they differ, Drizzle is computing the hash differently than we assume (possibly normalizing whitespace or newlines); stop here and investigate by reading `drizzle-orm/src/node-postgres/migrator.ts` on GitHub at the pinned version.
-
-Cleanup:
-
-```bash
-dropdb -h localhost -U postgres drizzle_migrator_parity
-```
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add packages/team-server/src/db/baseline.ts \
@@ -797,23 +841,123 @@ export async function runMigrations(): Promise<void> {
 Run: `pnpm -F @claude-lens/team-server typecheck`
 Expected: clean (no errors). The `SCHEMA_SQL` import error from Task 9's checkpoint is now resolved.
 
-- [ ] **Step 3: Run the pre-existing `migrate.test.ts` to confirm backward compatibility**
+- [ ] **Step 3: Extend `migrate.test.ts` with introspection-based parity assertions**
+
+The existing `migrate.test.ts` asserts only that the 9 tables exist. That's not enough to catch column-level drift in the Drizzle conversion. Extend the file with a new test that introspects `information_schema` and verifies column names, nullability, constraints, and index names match the old `SCHEMA_SQL`.
+
+Append to `packages/team-server/test/db/migrate.test.ts`:
+
+```ts
+describe("schema parity with SCHEMA_SQL", () => {
+  it("every expected column exists with the correct nullability and default hints", async () => {
+    const pool = getPool();
+
+    // Shape-level introspection. (Types reported by information_schema are
+    // generic — e.g. "text" not "varchar(255)" — but are stable enough to
+    // assert against. For bigint columns we also check `data_type = 'bigint'`.)
+    const { rows } = await pool.query(`
+      SELECT table_name, column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+      ORDER BY table_name, ordinal_position
+    `);
+    const byTable = new Map<string, typeof rows>();
+    for (const r of rows) {
+      if (!byTable.has(r.table_name)) byTable.set(r.table_name, []);
+      byTable.get(r.table_name)!.push(r);
+    }
+
+    // Load the old SCHEMA_SQL from the prior commit and diff critical columns.
+    // Spot-check a handful of high-risk columns that are easy to mis-translate:
+    const memberships = byTable.get("memberships")!;
+    expect(memberships.map((c) => c.column_name)).toEqual([
+      "id",
+      "user_account_id",
+      "team_id",
+      "role",
+      "bearer_token_hash",
+      "joined_at",
+      "last_seen_at",
+      "revoked_at",
+    ]);
+    const roleCol = memberships.find((c) => c.column_name === "role")!;
+    expect(roleCol.is_nullable).toBe("NO");
+
+    const dailyRollups = byTable.get("daily_rollups")!;
+    expect(dailyRollups.map((c) => c.column_name)).toEqual([
+      "team_id",
+      "membership_id",
+      "day",
+      "agent_time_ms",
+      "sessions",
+      "tool_calls",
+      "turns",
+      "tokens_input",
+      "tokens_output",
+      "tokens_cache_read",
+      "tokens_cache_write",
+    ]);
+    expect(dailyRollups.find((c) => c.column_name === "agent_time_ms")!.data_type).toBe("bigint");
+
+    const events = byTable.get("events")!;
+    expect(events.find((c) => c.column_name === "id")!.data_type).toBe("bigint");
+  });
+
+  it("expected indexes are present with correct names", async () => {
+    const pool = getPool();
+    const { rows } = await pool.query<{ indexname: string }>(`
+      SELECT indexname FROM pg_indexes WHERE schemaname = 'public'
+    `);
+    const names = new Set(rows.map((r) => r.indexname));
+    for (const expected of [
+      "idx_memberships_team_active",
+      "idx_memberships_bearer",
+      "idx_sessions_user",
+      "idx_daily_rollups_team_day",
+      "idx_events_team_created",
+      "idx_ingest_log_received",
+    ]) {
+      expect(names.has(expected), `missing index ${expected}`).toBe(true);
+    }
+  });
+
+  it("CHECK constraints on role columns enforce admin/member", async () => {
+    const pool = getPool();
+    // memberships row with a bad role should be rejected:
+    await expect(
+      pool.query(
+        `INSERT INTO memberships (user_account_id, team_id, role)
+         VALUES (gen_random_uuid(), gen_random_uuid(), 'bogus')`,
+      ),
+    ).rejects.toThrow();
+
+    // invites row with a bad role should be rejected:
+    await expect(
+      pool.query(
+        `INSERT INTO invites (team_id, created_by, token_hash, role, expires_at)
+         VALUES (gen_random_uuid(), gen_random_uuid(), 'hash', 'bogus', now() + interval '1 day')`,
+      ),
+    ).rejects.toThrow();
+  });
+});
+```
 
 Run: `pnpm -F @claude-lens/team-server test test/db/migrate.test.ts`
-Expected: both existing test cases pass — "creates all tables" and "is idempotent — running twice does not throw". The new code path (through Drizzle) produces the same tables on a fresh DB.
+Expected: the original 2 tests plus 3 new tests all pass (5 total). The "schema parity with SCHEMA_SQL" describe block is the real parity oracle.
 
-If these fail, the Drizzle-generated `0000_initial.sql` is missing a table or constraint; go back to Task 8's parity check.
+If any assertion fails, the Drizzle schema in Task 7 doesn't match the old `SCHEMA_SQL`. Typical issues: a column was reordered, a default was dropped, an index name got auto-generated by Drizzle instead of explicitly set, or a CHECK constraint was lost.
 
 - [ ] **Step 4: Run the full team-server suite to confirm nothing downstream broke**
 
 Run: `pnpm -F @claude-lens/team-server test`
-Expected: 243+ tests pass (baseline test adds 3 more = 246). No failures.
+Expected: 243+ tests pass (baseline test adds 3, parity tests add 3 = 249). No failures.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/team-server/src/db/migrate.ts
-git commit -m "refactor(team-server): migrate.ts uses Drizzle + advisory lock on dedicated Client"
+git add packages/team-server/src/db/migrate.ts \
+        packages/team-server/test/db/migrate.test.ts
+git commit -m "refactor(team-server): migrate.ts uses Drizzle + advisory lock; add schema parity tests"
 ```
 
 ### Task 13: Add MIGRATIONS.md with expand/contract rules
@@ -911,7 +1055,7 @@ git commit -m "docs(team-server): expand/contract migration rules + author check
 - [ ] **Step 1: Run the full test suite one more time**
 
 Run: `pnpm -F @claude-lens/team-server test`
-Expected: all 246 tests pass (243 original + 3 new baseline tests).
+Expected: all 249 tests pass (243 original + 3 new baseline tests + 3 new migrate-parity tests).
 
 - [ ] **Step 2: Run typecheck + lint across the monorepo**
 
@@ -1078,7 +1222,7 @@ git commit -m "docs: document dual release tracks for CLI (v*) and team-server (
 - [ ] **Step 1: Full test suite**
 
 Run: `pnpm test`
-Expected: all packages pass. Team-server should show 246 tests (or more if Plan 1b's tests snuck in — verify they didn't for this plan).
+Expected: all packages pass. Team-server should show 249 tests (or more if Plan 1b's tests snuck in — verify they didn't for this plan).
 
 - [ ] **Step 2: Typecheck across the monorepo**
 
@@ -1103,19 +1247,31 @@ Expected: `0.4.2`
 ### Task 18: Release team-server v0.4.2
 
 **Files:**
-- Modify: `packages/team-server/package.json` (via `pnpm version patch`)
+- Modify: `packages/team-server/package.json` (via `npm version patch` from inside the package dir)
 
 This is the final task. After it, the publish workflow runs on GitHub Actions and produces the v0.4.2 image.
+
+**Why `npm version`, not `pnpm version`:** `pnpm version` inside a workspace package bumps the `package.json` but does NOT create the git commit or tag that npm's version command normally does. `npm version` from the sub-package directory DOES honor the `.npmrc`'s `tag-version-prefix=server-v` AND creates the commit + tag. This was verified empirically — see the plan-review notes.
 
 - [ ] **Step 1: Confirm the current team-server version**
 
 Run: `jq -r .version packages/team-server/package.json`
 Expected: `0.4.1`.
 
-- [ ] **Step 2: Bump**
+- [ ] **Step 2: Confirm the working tree is clean**
 
-Run: `pnpm --filter @claude-lens/team-server version patch`
-Expected: the version becomes `0.4.2`, a commit is made with message matching `0.4.2` or similar, and a git tag `server-v0.4.2` is created locally.
+Run: `git status -sb`
+Expected: `## feat/team-edition-next` with no uncommitted files (all plan tasks committed). `npm version` refuses to run with a dirty tree, so this check prevents a confusing failure.
+
+- [ ] **Step 3: Bump from inside the team-server directory**
+
+```bash
+cd packages/team-server
+npm version patch
+cd -
+```
+
+Expected: `npm version` prints `server-v0.4.2` to stdout, bumps `package.json` to `0.4.2`, creates a commit titled `0.4.2` (or similar), and creates a git tag `server-v0.4.2` on that commit.
 
 Verify:
 
@@ -1125,12 +1281,16 @@ jq -r .version packages/team-server/package.json
 git tag --list 'server-v*'
 # server-v0.4.2
 git log --oneline -1
-# ec6d931 0.4.2  (or similar)
+# <sha> 0.4.2
 ```
 
-**If the tag is `v0.4.2` (no `server-` prefix):** the `.npmrc` from Task 2 isn't being picked up. Investigate and fix before pushing. Safe recovery: `git tag -d v0.4.2 && git reset --soft HEAD~1 && git checkout -- packages/team-server/package.json` then retry.
+**Failure recoveries:**
 
-- [ ] **Step 3: Push the branch + tag**
+- **No tag created (plain `git tag --list` shows nothing matching):** `npm version` didn't run git-tag creation, usually because of a dirty tree or because you're not inside the package dir. Re-check with `git status`; `cd packages/team-server` explicitly; retry.
+- **Tag created as `v0.4.2` instead of `server-v0.4.2`:** the `.npmrc` from Task 2 isn't being read. From `packages/team-server/`, run `npm config get tag-version-prefix`; it must output `server-v`. If not, inspect `packages/team-server/.npmrc` for a typo. Recovery: `git tag -d v0.4.2 && git reset --hard HEAD~1`, fix the `.npmrc`, retry.
+- **Commit was made but the tag points at the wrong commit:** `git tag -d server-v0.4.2 && git tag server-v0.4.2 HEAD` to retag.
+
+- [ ] **Step 4: Push the branch + tag**
 
 Only push the tag once the branch is merged to master (or once you're ready for the tag to trigger a release). For a PR-first flow:
 
@@ -1149,19 +1309,21 @@ git push origin master
 git push origin server-v0.4.2
 ```
 
-- [ ] **Step 4: Watch the publish workflow**
+- [ ] **Step 5: Watch the publish workflow**
 
 Run: `gh run watch` (with `gh` CLI) or visit `https://github.com/cowcow02/fleetlens/actions`
 Expected: the `Publish team-server image` workflow runs, passes the tag-assertion step, builds the image, publishes to GHCR, creates a GitHub Release `server-v0.4.2` with `migrations-manifest.json` attached.
 
-- [ ] **Step 5: Verify the published artifacts**
+- [ ] **Step 6: Verify the published artifacts**
 
-Check GHCR:
+Check GHCR via the GitHub API (which works for public and private repos without needing `docker login`):
 
 ```bash
-docker manifest inspect ghcr.io/cowcow02/fleetlens-team-server:0.4.2 > /dev/null
-echo $?   # expect 0
+gh api /orgs/cowcow02/packages/container/fleetlens-team-server/versions \
+  --jq '.[0:5] | .[] | {tags: .metadata.container.tags, created: .created_at}'
 ```
+
+Expected: the most recent entry has `tags` including `"0.4.2"`, `"latest"`, and a 7-char sha.
 
 Check the GitHub Release:
 
@@ -1175,10 +1337,10 @@ jq '.version, .migrations[0].filename' /tmp/mm.json
 # "0000_initial.sql"
 ```
 
-- [ ] **Step 6: Final commit check**
+- [ ] **Step 7: Final commit check**
 
 Run: `git log --oneline origin/master..HEAD` (or `git log --oneline -20` if merged)
-Expected: a clean linear history with the `0.4.2` commit (produced by `pnpm version`) as the last one on this branch. No WIP commits, no squash markers.
+Expected: a clean linear history with the `0.4.2` commit (produced by `npm version`) as the last one on this branch. No WIP commits, no squash markers.
 
 ---
 
