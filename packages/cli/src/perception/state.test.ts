@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -61,7 +61,6 @@ describe("perception state", () => {
 
   it("atomic write pattern — no tmp file leftover after updateCheckpoint", () => {
     updateCheckpoint("/path/foo.jsonl", { byte_offset: 100, last_event_ts: null, affects_days: [] });
-    const { readdirSync } = require("node:fs");
     const files = readdirSync(tmp);
     expect(files.some((f: string) => f.endsWith(".tmp"))).toBe(false);
   });

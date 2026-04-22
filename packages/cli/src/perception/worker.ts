@@ -78,6 +78,8 @@ export async function runPerceptionSweep(): Promise<SweepResult> {
 
         const built = buildEntries(sd);
         for (const e of built) {
+          // Stamp real byte_offset so enrichment readers have accurate provenance
+          e.source_checkpoint.byte_offset = stat.size;
           writeEntry(e);
           entries++;
         }
