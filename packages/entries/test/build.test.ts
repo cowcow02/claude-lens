@@ -99,6 +99,35 @@ describe("buildEntries numbers cluster", () => {
     // fixture has no tool errors
     expect(entry!.numbers.tool_errors).toBe(0);
   });
+
+  it("numbers object has all required keys", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    const n = entry!.numbers;
+    expect(typeof n.active_min).toBe("number");
+    expect(typeof n.turn_count).toBe("number");
+    expect(typeof n.tools_total).toBe("number");
+    expect(typeof n.subagent_calls).toBe("number");
+    expect(typeof n.skill_calls).toBe("number");
+    expect(typeof n.task_ops).toBe("number");
+    expect(typeof n.interrupts).toBe("number");
+    expect(typeof n.tool_errors).toBe("number");
+    expect(typeof n.consec_same_tool_max).toBe("number");
+    expect(typeof n.exit_plan_calls).toBe("number");
+    expect(typeof n.prs).toBe("number");
+    expect(typeof n.commits).toBe("number");
+    expect(typeof n.pushes).toBe("number");
+    expect(typeof n.tokens_total).toBe("number");
+  });
+
+  it("midnight-split entries each have independent turn_count", () => {
+    const sd = load("span-midnight-session.jsonl");
+    const entries = buildEntries(sd);
+    expect(entries).toHaveLength(2);
+    // each half has 1 real user turn
+    expect(entries[0]!.numbers.turn_count).toBe(1);
+    expect(entries[1]!.numbers.turn_count).toBe(1);
+  });
 });
 
 // ── 4c: text + model + project fields ─────────────────────────────────────
