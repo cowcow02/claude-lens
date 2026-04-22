@@ -179,14 +179,23 @@ done
 probe_end "Probing 4 Secret Manager entries" "$SECRETS_EXIST exist, $((4 - SECRETS_EXIST)) to create"
 
 #—— Summary banner ————————————————————————————————————————————————
+# Every line explains the installer's CHOICE — not what the GCP primitive
+# is. Reader is assumed GCP-literate; they want to know "why this specific
+# tier / scope / shape, and what can I override?".
+why() { printf "                 %s↳ %s%s\n" "$d" "$1" "$x"; }
+
 hdr "What this installer will do"
 
 printf "%sEnvironment%s\n" "$b" "$x"
 plan "Account"  "$ACCOUNT"
 plan "Project"  "$PROJECT  (number $PROJECT_NUMBER)"
+why  "override with PROJECT=<id> (defaults to gcloud config)"
 plan "Region"   "$REGION"
+why  "override with REGION=<region> (defaults to gcloud config run/region)"
 plan "Billing"  "$BILLING_OK"
 plan "Image"    "$SOURCE_IMAGE"
+why  "public GHCR image built from this repo on every master push"
+why  "override with SOURCE_IMAGE=<ref> to pin a specific sha"
 
 printf "\n%sGCP APIs%s\n" "$b" "$x"
 if [ ${#APIS_TO_ENABLE[@]} -eq 0 ]; then
@@ -201,22 +210,48 @@ fi
 
 printf "\n%sResources%s\n" "$b" "$x"
 plan "$AR_ACTION"   "Artifact Registry repo '$AR_REPO' in $REGION"
-plan "copy"         "Image  $SOURCE_IMAGE  →  $IMAGE"
-plan "$SQL_ACTION"  "Cloud SQL instance '$DB_INSTANCE' ($DB_TIER, POSTGRES_15, 10 GB SSD)"
-for line in "${SECRET_ACTIONS[@]}"; do plan "${line##*=}" "Secret Manager: ${line%%=*}"; done
-plan "$RUN_ACTION"  "Cloud Run service '$SERVICE' (1 vCPU / 512 MiB, min=0 max=3, public HTTPS)"
-plan "$SCH_ACTION"  "Cloud Scheduler job 'fleetlens-prune' (hourly → /api/admin/prune)"
+why  "Cloud Run cannot pull from ghcr.io (only gcr.io / *.pkg.dev / docker.io);"
+why  "this is where the GHCR image gets copied on first install"
+plan "copy"         "Image $SOURCE_IMAGE → $IMAGE"
+why  "one docker pull + tag + push on the machine running this script"
+why  "subsequent installs with the same tag skip this step"
+plan "$SQL_ACTION"  "Cloud SQL instance '$DB_INSTANCE' ($DB_TIER, POSTGRES_15, 10 GB SSD, no HA)"
+why  "$DB_TIER is the cheapest tier (~\$7.50/mo) — fits a team of ~20; no HA keeps cost down"
+why  "POSTGRES_15 chosen over 17 for gcloud SDK compatibility (15 is supported since 2023)"
+why  "override tier with DB_TIER=db-custom-1-3840 for production scale"
+plan "create/reuse" "4 Secret Manager entries: db-password, encryption-key, scheduler-secret, database-url"
+why  "all generated via 'openssl rand -hex' on first install; reused on re-run"
+why  "database-url is a composed secret containing db-password inline — single env injection"
+plan "$RUN_ACTION"  "Cloud Run service '$SERVICE' — 1 vCPU / 512 MiB / min=0 max=3 / public HTTPS"
+why  "min=0 means no idle cost; first request after sleep adds ~1–3s cold start"
+why  "max=3 caps runaway scale; team workloads rarely exceed 1 instance in practice"
+why  "512 MiB comfortably fits the Next.js standalone bundle (~250 MB resident)"
+why  "public HTTPS is required — signup + CLI ingest need reachability"
+plan "$SCH_ACTION"  "Cloud Scheduler job 'fleetlens-prune' — cron '0 * * * *' → POST /api/admin/prune"
+why  "runs hourly because Cloud Run scales to zero and setInterval can't fire reliably"
+why  "authenticated via x-scheduler-secret header (shared secret in Secret Manager)"
 
-printf "\n%sIAM changes on %s%s\n" "$b" "$RUNTIME_SA" "$x"
-info "roles/secretmanager.secretAccessor on 3 secrets"
-info "roles/cloudsql.client at project scope"
+printf "\n%sIAM changes on the default Cloud Run runtime service account%s\n" "$b" "$x"
+printf "  %s%s%s\n" "$d" "$RUNTIME_SA" "$x"
+plan "grant"  "roles/secretmanager.secretAccessor — on 3 of the 4 secrets"
+why  "URL, encryption-key, scheduler-secret are mounted as env vars at runtime"
+why  "db-password isn't mounted directly (it's embedded in database-url)"
+plan "grant"  "roles/cloudsql.client — at project scope"
+why  "allows the Cloud Run socket mount at /cloudsql/<conn> to connect to the instance"
+why  "could be narrowed to instance-scope; project-scope keeps config simple"
 
 printf "\n%sCost + time estimate%s\n" "$b" "$x"
-info "~\$10/mo idle (Cloud SQL db-f1-micro is the floor at \$7.50)"
-info "~\$25/mo under moderate usage"
-info "~5–6 min wall time for a fresh install; ~1 min on re-run"
+info "~\$10/mo idle (Cloud SQL db-f1-micro is the floor at \$7.50; everything else scales to zero)"
+info "~\$25/mo under moderate usage (5–20 engineers pushing metrics every 5 min)"
+info "~5–6 min wall time for a fresh install; ~1 min on re-run (Cloud SQL provisioning dominates)"
+
+printf "\n%sAfter you confirm%s\n" "$b" "$x"
+info "A public URL is printed. Open it in a browser and you'll land on /signup."
+info "The first account to sign up becomes the admin of team #1."
+info "Pair your local CLI with 'fleetlens team join <url> <device-token>'."
 
 printf "\n%sTo undo everything later:%s see deploy/gcp/TUTORIAL.md 'Tearing it down'.\n" "$b" "$x"
+printf "%sAll steps are idempotent — re-running resumes where it stopped.%s\n" "$d" "$x"
 
 # Hidden INSPECT_ONLY (also --inspect-only): run preflight + summary, stop
 # here. Used when debugging preflight behavior from a non-TTY harness
