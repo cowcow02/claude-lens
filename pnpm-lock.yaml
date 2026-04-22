@@ -101,6 +101,10 @@ importers:
         version: 2.1.9(@types/node@20.19.39)(lightningcss@1.32.0)
 
   packages/cli:
+    dependencies:
+      '@claude-lens/entries':
+        specifier: workspace:*
+        version: link:../entries
     devDependencies:
       '@claude-lens/parser':
         specifier: workspace:*

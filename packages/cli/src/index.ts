@@ -45,6 +45,11 @@ async function main() {
       await capsules(args.slice(1));
       break;
     }
+    case "entries": {
+      const { entries } = await import("./commands/entries.js");
+      await entries(args.slice(1));
+      break;
+    }
     case "daemon": {
       const { daemon } = await import("./commands/daemon.js");
       await daemon(args.slice(1));
@@ -76,6 +81,7 @@ Terminal:
   usage [--save]                             Plan utilization snapshot (5h/7d)
   usage --history [-s D] [--days N]          Daily token/cost table
   capsules [--days N] [--json]               Per-session insight capsules
+  entries [--day D|--session ID|--all] [--json]  Perception-layer entries
 
 Advanced:
   web [page] [--no-open]            Open dashboard in browser without auto-starting daemon
