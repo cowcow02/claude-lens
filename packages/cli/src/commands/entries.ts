@@ -19,6 +19,11 @@ export async function entries(args: string[]): Promise<void> {
     return;
   }
 
+  if (args[0] === "regenerate") {
+    await regenerate(args.slice(1));
+    return;
+  }
+
   const json = args.includes("--json");
   const dayArg = flag(args, "--day");
   const sessionArg = flag(args, "--session");
@@ -70,21 +75,80 @@ function printEntries(list: Entry[], json?: boolean): void {
   }
 }
 
+async function regenerate(args: string[]): Promise<void> {
+  const since = flag(args, "--since");
+  const force = args.includes("--force");
+  const json = args.includes("--json");
+
+  const { readSettings, runEnrichmentQueue, monthToDateSpend } = await import("@claude-lens/entries/node");
+  const { writeEntry, listEntriesWithStatus } = await import("@claude-lens/entries/fs");
+
+  const settings = readSettings();
+  if (!settings.ai_features.enabled) {
+    console.error("ai_features.enabled is false — nothing to do. Toggle it in Settings or settings.json.");
+    process.exit(2);
+  }
+
+  // --force: reset matched Entries to pending + retry_count=0 before running the queue.
+  // Explicitly excludes skipped_trivial — triviality is deterministic, re-enriching is wasteful.
+  if (force) {
+    const candidates = listEntriesWithStatus(["done", "error", "pending"])
+      .filter(e => !since || e.local_day >= since);
+    for (const e of candidates) {
+      writeEntry({
+        ...e,
+        enrichment: {
+          ...e.enrichment,
+          status: "pending",
+          retry_count: 0,
+          error: null,
+          generated_at: null,
+        },
+      });
+    }
+    if (!json) console.log(`Reset ${candidates.length} Entries to pending.`);
+  }
+
+  const budgetBefore = monthToDateSpend();
+  const result = await runEnrichmentQueue(settings.ai_features);
+  const budgetAfter = monthToDateSpend();
+
+  if ("skipped" in result && typeof result.skipped === "string") {
+    if (json) console.log(JSON.stringify(result));
+    else console.log(`skipped: ${result.skipped}`);
+    const exit = result.skipped === "disabled" ? 2
+      : result.skipped === "budget_cap_reached" ? 3
+      : 0;
+    process.exit(exit);
+  }
+  const r = result as { enriched: number; errors: number; skipped: number };
+  if (json) console.log(JSON.stringify(r));
+  else console.log(`enriched=${r.enriched} errors=${r.errors} skipped=${r.skipped}`);
+
+  // Detect budget exceeded mid-run: spend advanced AND is now >= cap -> exit 3.
+  const cap = settings.ai_features.monthlyBudgetUsd;
+  if (cap !== null && budgetAfter > budgetBefore && budgetAfter >= cap) {
+    process.exit(3);
+  }
+  process.exit(0);
+}
+
 function printHelp(): void {
-  console.log(`fleetlens entries — inspect perception-layer Entries
+  console.log(`fleetlens entries — inspect and regenerate perception-layer Entries
 
 Usage:
-  fleetlens entries                       Summary: count of entries, sessions, days
-  fleetlens entries --day YYYY-MM-DD      All entries for a given local day
-  fleetlens entries --session UUID        All entries for a given session
-  fleetlens entries --all                 All entries in the store
+  fleetlens entries                            Summary: count of entries, sessions, days
+  fleetlens entries --day YYYY-MM-DD           All entries for a given local day
+  fleetlens entries --session UUID             All entries for a given session
+  fleetlens entries --all                      All entries in the store
+  fleetlens entries regenerate [--since D] [--force] [--json]
+                                               Re-run enrichment. --force resets
+                                               status+retry_count on matched non-trivial
+                                               Entries (skipped_trivial NOT reset).
 
-Options:
-  --json          Output structured JSON instead of human-readable lines.
-
-Examples:
-  fleetlens entries
-  fleetlens entries --day 2026-04-22
-  fleetlens entries --day 2026-04-22 --json | jq '.[].enrichment.status'
-  fleetlens entries --session abc123 --json`);
+Exit codes:
+  0 — success (or no-op)
+  2 — ai_features.enabled is false
+  3 — monthly budget cap reached (pre-run or mid-run)
+`);
 }

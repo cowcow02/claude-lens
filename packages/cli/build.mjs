@@ -10,6 +10,10 @@ const shared = {
   format: "esm",
   external: ["fsevents"],
   define: { CLI_VERSION: JSON.stringify(pkg.version) },
+  // server-only throws unconditionally — harmless guard in Next.js but fatal
+  // in the CLI bundle. Redirect to a no-op stub so @claude-lens/entries/node
+  // can be dynamically imported without crashing.
+  alias: { "server-only": "./src/server-only-stub.js" },
 };
 
 const entries = [
