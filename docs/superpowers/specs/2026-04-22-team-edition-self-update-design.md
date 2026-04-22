@@ -70,7 +70,46 @@ Trust boundary: **the running server holds credentials to redeploy itself.** On 
 
 ## Components
 
-### 1. Image + version scheme
+### 1. Versioning model — CLI and team-server decoupled
+
+The monorepo today uses `scripts/version-sync.mjs` to stamp every sub-package with the root `package.json` version on every `npm version` run. This was fine when only the solo CLI shipped, but team-server and the solo CLI are genuinely different products with different users, different runtimes, and different update mechanisms. Self-update would make the coupling painful: every CLI patch would trigger a "new version available" banner on team-server deployments for a release containing no team-server changes.
+
+This spec **decouples team-server's version from the rest of the monorepo**:
+
+| Version | Source of truth | Tracks changes to | Release tag | Distribution |
+|---|---|---|---|---|
+| **CLI version** | root `package.json` → synced to `packages/parser`, `packages/cli`, `apps/web` | Solo CLI, daemon, parser, solo dashboard, `fleetlens team <cmd>` commands | `v<X.Y.Z>` (existing) | npm (`fleetlens` package) |
+| **Team-server version** | `packages/team-server/package.json` (self-contained, not synced) | Team-server app, DB schema, ingest API, admin UI | `server-v<X.Y.Z>` (new) | GHCR image (`ghcr.io/cowcow02/fleetlens-team-server`) |
+
+Concrete changes:
+
+- **`scripts/version-sync.mjs`** skips `packages/team-server` when propagating the root version. Team-server's `package.json` `version` field is modified only by explicit `pnpm --filter @claude-lens/team-server version <patch|minor|major>`.
+- **Release workflow** (`.github/workflows/release.yml`) is unchanged — still triggers on `v*` tags, still publishes the CLI to npm. No team-server involvement.
+- **Image publish workflow** (`.github/workflows/publish-team-server-image.yml`) gains a new tag trigger:
+  ```yaml
+  on:
+    push:
+      branches: [master]
+      paths: [...existing...]
+      tags: ["server-v*"]
+    # release: drop this trigger — release.yml covers the CLI only
+    workflow_dispatch:
+  ```
+  On a `server-v<X.Y.Z>` tag push: build, tag GHCR as `:<X.Y.Z>` + `:latest` + `:<sha7>`, create a GitHub Release named `server-v<X.Y.Z>` with auto-generated notes filtered to team-server paths.
+- **CLI and team-server versions evolve independently.** Today both happen to read `0.4.1`; tomorrow CLI might bump to `0.5.0` while team-server stays at `0.4.1`, or vice versa. They are different products.
+- **Self-update UI compares only team-server versions.** The GHCR tags list is team-server's release history; the GitHub Releases API query for the changelog targets `server-v*` releases, not CLI `v*` releases.
+
+**Release command for team-server** (new):
+
+```bash
+pnpm --filter @claude-lens/team-server version patch   # or minor / major
+git push origin master
+git push origin server-v<X.Y.Z>
+```
+
+This mirrors the existing CLI release flow (`npm version patch` at repo root). The plan for this spec includes updating `CLAUDE.md`'s "Versioning" + "Release process" sections to document both flows side-by-side.
+
+### 1a. Image + version scheme
 
 **Dockerfile change** (`packages/team-server/Dockerfile`):
 
@@ -90,28 +129,35 @@ CMD ["node", "packages/team-server/server.js"]
 
 **Publish workflow change** (`.github/workflows/publish-team-server-image.yml`):
 
-Today the workflow has no `build-args:` key on `docker/build-push-action@v6`. Two concrete changes:
+Today the workflow has no `build-args:` key on `docker/build-push-action@v6`. Three concrete changes (the first overlaps with Section 1's tag-trigger change):
 
-1. Add a new step (or extend the existing "Compute tags" step) that computes `APP_VERSION`:
-   - On release event: `APP_VERSION=${VERSION#v}` (strip leading `v`).
-   - On master push / workflow_dispatch: `APP_VERSION=0.0.0-dev+${GITHUB_SHA::7}` (so master-push images carry a clearly-non-release identifier and never semver-sort above real releases).
-   - Expose via `echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"`.
-2. Add `build-args:` block to the `docker/build-push-action@v6` invocation:
+1. **Source of truth for `APP_VERSION`**: read from `packages/team-server/package.json`, not the root. A step along the lines of:
+   ```yaml
+   - name: Read team-server version
+     id: tsver
+     run: echo "version=$(jq -r .version packages/team-server/package.json)" >> "$GITHUB_OUTPUT"
+   ```
+2. **Compute image tags** (replacing the existing "Compute tags" step):
+   - On `server-v<X.Y.Z>` tag push: `APP_VERSION=<X.Y.Z>` (strip the `server-v` prefix). Image tags: `:<X.Y.Z>` + `:latest` + `:<sha7>`.
+   - On master push / workflow_dispatch: `APP_VERSION=0.0.0-dev+${GITHUB_SHA::7}` (so master-push images never semver-sort above real releases). Image tags: `:<sha7>` + `:latest`.
+3. Add `build-args:` block to the `docker/build-push-action@v6` invocation:
    ```yaml
    build-args: |
-     APP_VERSION=${{ steps.tags.outputs.app_version }}
+     APP_VERSION=${{ steps.tsver.outputs.version }}
    ```
 
-**GHCR tags produced by the existing workflow** (preserved, documented here so the implementer doesn't regress):
+**GHCR tags produced by the updated workflow**:
 
 | Event | Tags pushed |
 |---|---|
-| Master push | `:<sha7>`, `:latest` |
-| Release `v0.5.0` | `:<sha7>`, `:0.5.0`, `:latest` |
+| Master push (non-tag) | `:<sha7>`, `:latest` |
+| `server-v0.5.0` tag push | `:<sha7>`, `:0.5.0`, `:latest` |
 
-Release tags strip the leading `v` — this matches the existing `${VERSION#v}` expansion in the workflow. Version discovery must match this convention (filter to semver tags *without* a `v` prefix).
+The `server-v` prefix on git tags keeps team-server releases distinct from CLI `v*` tags in `git tag --list`. Image tags in GHCR drop the prefix (just `:0.5.0`) — this is both more readable and matches the existing GHCR convention.
 
-**Version discovery query**: `GET https://ghcr.io/v2/cowcow02/fleetlens-team-server/tags/list`. For public GHCR images, no auth token is needed. Filter to tags matching `^\d+\.\d+\.\d+$`, semver-sort, take the highest. That's the latest available version.
+**Version discovery query**: `GET https://ghcr.io/v2/cowcow02/fleetlens-team-server/tags/list`. For public GHCR images, no auth token is needed. Filter to tags matching `^\d+\.\d+\.\d+$`, semver-sort, take the highest. That's the latest available team-server version.
+
+**Changelog discovery**: `GET https://api.github.com/repos/cowcow02/fleetlens/releases/tags/server-v<X.Y.Z>`. The release body is the markdown shown on the Review page. Because the release tag is `server-v*`, the auto-generated notes can be further filtered by release-workflow config (e.g., `--notes-start-tag server-v<previous>`) to include only commits that touched `packages/team-server/` or `packages/parser/` — see the Release workflow comment in Section 1.
 
 ### 2. Migration framework — Drizzle
 
@@ -492,21 +538,25 @@ The running server checks for the required env vars at boot. If missing, the `/a
 - `test/api/admin-updates.integration.test.ts` — full HTTP flow: staff GETs `/api/admin/updates` succeeds, non-staff (team-admin but `is_staff=false`) gets 403, staff POSTs apply with invalid version gets 400, staff POSTs apply with valid version calls mocked adapter's `redeploy`.
 - `test/db/migrate.drizzle.test.ts` — migrations run against a fresh Postgres produce the expected schema; migrations run against an existing "pre-Drizzle" schema trigger the baseline insert and skip `0000_initial`.
 
-**Manual smoke tests** (release checklist):
+**Manual smoke tests** (release checklist, all referring to team-server versions):
 
-- Deploy v0.4.1 to a throwaway GCP project, then publish v0.4.2 as a test release, verify the banner appears within the hour, click through, apply, confirm new revision rolls out.
+- Deploy team-server `0.4.1` to a throwaway GCP project, then publish a test `server-v0.4.2` release, verify the banner appears within the hour, click through, apply, confirm new revision rolls out.
 - Same against a throwaway Railway instance.
-- Simulate failed migration: temporarily publish a v0.4.3 image with an intentionally broken migration, verify Cloud Run keeps v0.4.2 serving and admin sees error.
+- Simulate failed migration: temporarily publish a `server-v0.4.3-test` image with an intentionally broken migration, verify Cloud Run keeps `0.4.2` serving and the staff user sees an error on `/admin/updates`.
 
 ## Phased rollout
 
-The self-update feature ships as v0.5.0 of team-server. Existing v0.4.x deployments cannot self-update to v0.5.0 (they have no button yet). They must re-run the installer once — this is the last time they do so.
+The self-update feature ships as **team-server v0.5.0** (git tag `server-v0.5.0`, GHCR `:0.5.0`). Existing deployments on team-server v0.4.x cannot self-update to v0.5.0 (they have no button yet). They must re-run the installer once — this is the last time they do so.
+
+Note that **team-server and CLI versions decouple at this cutover.** The CLI will continue to version independently via the root `package.json` and `v*` tags; team-server now uses `packages/team-server/package.json` and `server-v*` tags. If the CLI happens to be at `0.4.1` when team-server ships `0.5.0`, that's not a conflict — they're different products.
 
 **v0.5.0 release notes will say:**
 
 > **One-time action required:** Re-run your installer (`./install.sh` for GCP, or re-import the Railway template) to pick up new permissions. This is the last time you'll need to do this — future updates happen entirely through the web UI.
 >
 > **Check your staff list:** The person who first signed up on your server is now your platform staff and can trigger updates. Visit **Settings → Staff** to grant that role to any additional decision-makers (CTO, CEO, etc.) before they need to upgrade the server themselves. Having at least two staff users is strongly recommended — if you lose access to the sole staff account, you'll need shell access to the database to recover via `./install.sh --grant-staff <email>`.
+>
+> **Versioning note:** From this release forward, team-server has its own version track separate from the Fleetlens CLI. Team-server releases are tagged `server-vX.Y.Z` on GitHub; CLI releases remain `vX.Y.Z`. You'll only see update banners for team-server releases — CLI improvements ship through `npm update -g fleetlens` on your engineers' laptops, unchanged.
 
 ## Open questions / future work
 
@@ -534,7 +584,7 @@ Changelog and migration preview still display. Only the button is disabled.
 
 ### Solo-CLI symmetry
 
-Solo CLI's existing auto-update (`checkForUpdate` in `packages/cli/src/updater.ts`) uses npm. That flow is unaffected by this work but shares architecture: poll registry → compare semver → user confirms → re-exec with new binary. No direct code reuse in v1, but in a future refactor, a shared `VersionCheck` helper across solo and team-server is plausible.
+Solo CLI's existing auto-update (`checkForUpdate` in `packages/cli/src/updater.ts`) uses npm and continues to version/release via `v*` tags and the root `package.json` — unchanged by this spec. It shares conceptual architecture with team-server self-update (poll registry → compare semver → confirm → re-exec) but the registries, version spaces, and update mechanisms are genuinely different. No direct code reuse in v1. In a future refactor, a shared semver-compare helper across solo and team-server is plausible but low priority — the diff in registry protocols (npm vs GHCR Docker Registry API) is most of the complexity and doesn't share.
 
 ### Version pinning
 
@@ -554,23 +604,24 @@ The self-update flow requires outbound HTTPS from the deployed server to `ghcr.i
 
 ## Summary
 
-Self-update ships as v0.5.0 of team-server. Core pieces:
+Self-update ships as **team-server v0.5.0** (tag `server-v0.5.0`, published to GHCR as `:0.5.0`). The monorepo's CLI version evolves independently from here forward. Core pieces:
 
-1. **Drizzle** replaces the `CREATE TABLE IF NOT EXISTS` schema string. Migrations live in `packages/team-server/src/db/migrations/`, generated via `drizzle-kit`, run on boot under a Postgres advisory lock held on a dedicated `pg.Client` (not the app pool). Existing v0.4.x DBs are baselined via a pre-run hash-matched insert into `drizzle.__drizzle_migrations`. Expand/contract discipline enforced by reviewer convention + `MIGRATIONS.md` allow-list.
-2. **Versioned GHCR tags** — each release publishes `:latest` + `:X.Y.Z`. `APP_VERSION` baked into the image via Dockerfile `ARG`, wired through the publish workflow's `build-args:` block. GHCR's public tags-list API powers discovery.
-3. **Platform adapters** — thin `PlatformAdapter` interface with `GcpCloudRunAdapter` (uses `@google-cloud/run` SDK + ADC; read-modify-write on the Service spec) and `RailwayAdapter` (uses GraphQL + project token; mutation names to be verified against current schema at implementation time).
-4. **Admin UI** — `/admin/updates` list + `/admin/updates/[version]` review, gated to `is_staff = true` (platform staff, not per-team admin), with a global banner across admin pages. Changelog from GitHub Releases; migration preview from a per-release `migrations-manifest.json` asset.
-5. **Staff management** — new `/admin/staff` page for promote/revoke; first-signup auto-promotion; refusal to revoke the last staff; `--grant-staff <email>` installer flag as the lockout recovery path. Keeps the feature usable for multi-person orgs (CEO/CTO can be granted staff by the IT installer) without risking an un-upgradable server.
-6. **One-time install bump** — `deploy/gcp/install.sh` adds `roles/run.developer` scoped to the one Cloud Run service on the existing default Compute SA, plus the new `--grant-staff` flag. Railway template adds a `RAILWAY_TOKEN` env var. Existing deploys re-run the installer / re-import the template once; every future update is button-click only.
-7. **Rollback** — automatic via Cloud Run / Railway health-check-gated revision promotion. No manual rollback UI in v1.
+1. **Decoupled versioning** — team-server gets its own version source (`packages/team-server/package.json`), its own release tag namespace (`server-v*`), and its own changelog. The CLI on npm continues to version via the root `package.json` and `v*` tags. `scripts/version-sync.mjs` is updated to skip team-server.
+2. **Drizzle** replaces the `CREATE TABLE IF NOT EXISTS` schema string. Migrations live in `packages/team-server/src/db/migrations/`, generated via `drizzle-kit`, run on boot under a Postgres advisory lock held on a dedicated `pg.Client` (not the app pool). Existing v0.4.x DBs are baselined via a pre-run hash-matched insert into `drizzle.__drizzle_migrations`. Expand/contract discipline enforced by reviewer convention + `MIGRATIONS.md` allow-list.
+3. **Versioned GHCR tags** — each team-server release publishes `:latest` + `:X.Y.Z`. `APP_VERSION` baked into the image via Dockerfile `ARG`, read from `packages/team-server/package.json` in the publish workflow. GHCR's public tags-list API powers discovery.
+4. **Platform adapters** — thin `PlatformAdapter` interface with `GcpCloudRunAdapter` (uses `@google-cloud/run` SDK + ADC; read-modify-write on the Service spec) and `RailwayAdapter` (uses GraphQL + project token; mutation names to be verified against current schema at implementation time).
+5. **Admin UI** — `/admin/updates` list + `/admin/updates/[version]` review, gated to `is_staff = true` (platform staff, not per-team admin), with a global banner across admin pages. Changelog from GitHub Releases filtered to `server-v*` tags; migration preview from a per-release `migrations-manifest.json` asset.
+6. **Staff management** — new `/admin/staff` page for promote/revoke; first-signup auto-promotion; refusal to revoke the last staff; `--grant-staff <email>` installer flag as the lockout recovery path. Keeps the feature usable for multi-person orgs (CEO/CTO can be granted staff by the IT installer) without risking an un-upgradable server.
+7. **One-time install bump** — `deploy/gcp/install.sh` adds `roles/run.developer` scoped to the one Cloud Run service on the existing default Compute SA, plus the new `--grant-staff` flag. Railway template adds a `RAILWAY_TOKEN` env var. Existing deploys re-run the installer / re-import the template once; every future update is button-click only.
+8. **Rollback** — automatic via Cloud Run / Railway health-check-gated revision promotion. No manual rollback UI in v1.
 
-Total new LoC estimate: ~700 for team-server code (including staff management) + ~150 for deploy-script changes + ~250 for tests. Most of the complexity is in the Drizzle baseline, platform adapters, and the migrations-manifest plumbing in the release workflow.
+Total new LoC estimate: ~750 for team-server code (including staff management and the versioning split) + ~150 for deploy-script and workflow changes + ~250 for tests. Most of the complexity is in the Drizzle baseline, platform adapters, and the migrations-manifest plumbing in the release workflow. **CLAUDE.md's "Versioning" and "Release process" sections must be updated** to document both release flows (`v*` for CLI, `server-v*` for team-server) — this is part of the implementation scope, not a follow-up.
 
 ### Suggested plan split (implementer's discretion)
 
 The spec is right at the edge of single-plan scope. If phase discipline looks risky, split along this line:
 
-- **Plan 1a — Migration framework foundation.** Drizzle conversion, baseline insert, `migrations-manifest.json` workflow asset, advisory-lock runner. Ships as v0.4.2 (patch; no user-visible change). Unlocks safe schema evolution for Plans 2/3/4 even if self-update UI isn't ready.
-- **Plan 1b — Self-update mechanism + staff management.** Platform adapters, admin UI pages (updates + staff), `requireStaff` helper, first-signup auto-promotion, installer IAM + `--grant-staff` flag + token updates, end-to-end smoke tests against real Cloud Run + Railway projects. Ships as v0.5.0.
+- **Plan 1a — Versioning decouple + migration framework foundation.** `scripts/version-sync.mjs` update, team-server's independent version field, `server-v*` tag trigger in the image publish workflow, CLAUDE.md docs update, Drizzle conversion, baseline insert, `migrations-manifest.json` workflow asset, advisory-lock runner. Ships as **team-server v0.4.2** (patch; no user-visible change). Unlocks safe schema evolution for Plans 2/3/4 even if self-update UI isn't ready, and establishes the separate release flow so the CLI and team-server can diverge starting day one.
+- **Plan 1b — Self-update mechanism + staff management.** Platform adapters, admin UI pages (updates + staff), `requireStaff` helper, first-signup auto-promotion, installer IAM + `--grant-staff` flag + token updates, end-to-end smoke tests against real Cloud Run + Railway projects. Ships as **team-server v0.5.0**.
 
-The split is low-cost — 1a's migration framework is the foundation 1b builds on, and 1a is independently valuable even if 1b slips. A single-plan implementation is still feasible for an author with tight scope discipline.
+The split is low-cost — 1a's migration framework + versioning decouple is the foundation 1b builds on, and 1a is independently valuable even if 1b slips. A single-plan implementation is still feasible for an author with tight scope discipline.
