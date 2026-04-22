@@ -1,3 +1,4 @@
+-- description: Initial schema for team-server Plan 1 (foundation) — verbatim port of SCHEMA_SQL
 CREATE TABLE "daily_rollups" (
 	"team_id" uuid NOT NULL,
 	"membership_id" uuid NOT NULL,
