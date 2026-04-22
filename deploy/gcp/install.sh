@@ -32,22 +32,25 @@ for arg in "$@"; do
   esac
 done
 
-# Detect a timeout command — GNU coreutils `timeout` on Linux/Cloud Shell,
-# `gtimeout` on macOS with `brew install coreutils`. Without one, hangs block
-# indefinitely; we warn and continue.
-if command -v timeout  >/dev/null; then TIMEOUT_CMD=timeout
-elif command -v gtimeout >/dev/null; then TIMEOUT_CMD=gtimeout
-else TIMEOUT_CMD=""; fi
+# Bounded wait for gcloud probes. In preference order:
+#   1. GNU coreutils `timeout` (Linux / Cloud Shell)
+#   2. `gtimeout` (macOS with `brew install coreutils`)
+#   3. `perl -e 'alarm N; exec ...'` — portable, present on every macOS and
+#      Cloud Shell by default, replaces perl with gcloud via exec so command
+#      substitution captures gcloud's stdout normally.
+# Stdin is redirected from /dev/null so any interactive prompt (e.g.
+# "install beta component?") fails fast instead of blocking.
+if command -v timeout   >/dev/null; then TIMEOUT_KIND=timeout
+elif command -v gtimeout >/dev/null; then TIMEOUT_KIND=gtimeout
+elif command -v perl     >/dev/null; then TIMEOUT_KIND=perl
+else TIMEOUT_KIND=none; fi
 
-# Wrap a single gcloud call with a bounded timeout. Uses stdin redirected
-# from /dev/null so interactive prompts (e.g. 'install beta component?')
-# fail fast instead of blocking.
 g() {
-  if [ -n "$TIMEOUT_CMD" ]; then
-    "$TIMEOUT_CMD" "$PROBE_TIMEOUT" gcloud "$@" </dev/null
-  else
-    gcloud "$@" </dev/null
-  fi
+  case "$TIMEOUT_KIND" in
+    timeout|gtimeout) "$TIMEOUT_KIND" "$PROBE_TIMEOUT" gcloud "$@" </dev/null ;;
+    perl)             perl -e '$SIG{ALRM}=sub{exit 124}; alarm shift; exec @ARGV' "$PROBE_TIMEOUT" gcloud "$@" </dev/null ;;
+    none)             gcloud "$@" </dev/null ;;
+  esac
 }
 
 #—— tiny logger ———————————————————————————————————————————————————
@@ -98,7 +101,7 @@ probe_end()   { printf "\r  %s✓%s %-46s %s\n" "$g" "$x" "$1" "$2"; }
 probe_fail()  { printf "\r  %s✗%s %-46s %s\n" "$r" "$x" "$1" "$2"; }
 
 hdr "Preflight — inspecting environment (no changes yet)"
-[ -z "$TIMEOUT_CMD" ] && warn "No 'timeout' command found — gcloud calls have no bounded wait. Install GNU coreutils if a probe hangs."
+[ "$TIMEOUT_KIND" = "none" ] && warn "No timeout mechanism (timeout / gtimeout / perl) found — gcloud calls have no bounded wait."
 
 probe_start "Resolving project number"
 PROJECT_NUMBER="$(g projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
