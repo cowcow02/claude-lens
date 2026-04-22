@@ -9,7 +9,7 @@
 
 ## Overview
 
-Once a Fleetlens Team Edition instance is deployed (to GCP Cloud Run or Railway), the site administrator — the person with the `admin` membership role on the team server web UI — can update the server to a new version by clicking a button in the UI. No shell access, no `gcloud` or `railway` CLI, no involvement from whoever originally owned the cloud account at install time.
+Once a Fleetlens Team Edition instance is deployed (to GCP Cloud Run or Railway), a platform staff user (`user_accounts.is_staff = true` — see Section 5a for why this is distinct from per-team admin) can update the server to a new version by clicking a button in the UI. No shell access, no `gcloud` or `railway` CLI, no involvement from whoever originally owned the cloud account at install time.
 
 The update flow:
 
@@ -402,6 +402,8 @@ The `is_staff` column already exists in the Plan 1 schema. What this section add
 
 **Recovery path if all staff are lost.** If the only staff account is locked out (person leaves company, forgotten password with no email recovery, etc.), the deployment becomes un-upgradable via the UI. The fallback is `./install.sh --grant-staff <email>` — a new installer flag that runs a single SQL statement (`UPDATE user_accounts SET is_staff = true WHERE email = $1`) against the database. Requires shell access to the install environment (GCP project / Railway project), which is exactly the scenario where re-running the installer is already the accepted answer. Document this in the release notes, not in the web UI.
 
+**Audit note for the recovery path:** `--grant-staff` grants are intentionally **not** written to the `events` table. The installer is out-of-band; detection of recovery-path use happens via cloud-provider audit logs (Cloud SQL query logs / Railway project activity log) and the installer's own run output, not in-app. Anyone with cloud-account access is by definition outside the in-app threat model.
+
 **`requireStaff` helper** (`packages/team-server/src/lib/route-helpers.ts`, add alongside existing `requireAdmin`):
 
 ```ts
@@ -419,9 +421,9 @@ The existing `SessionContext` already carries user fields (see `packages/team-se
 
 **Tests** (add to Section 8):
 
-- `test/api/staff.integration.test.ts` — promote/revoke happy paths + RBAC (non-staff gets 403) + last-staff refusal.
+- `test/api/staff.integration.test.ts` — covers all three staff routes: `GET /api/admin/staff` returns the list for staff and 403 for non-staff; `POST /grant` promotes a user; `POST /revoke` demotes a user; `POST /revoke` on the last remaining staff returns 400; team-admin (not staff) gets 403 from every route.
 - `test/lib/auth.test.ts` — extend existing coverage: `requireStaff` returns 401 for no session, 403 for non-staff, success for staff.
-- `test/api/signup.integration.test.ts` — extend with: first signup on fresh DB auto-promotes; second signup does not.
+- `test/api/signup.integration.test.ts` — extend with: (a) first signup on fresh DB auto-promotes to `is_staff = true`; (b) second signup does not auto-promote; (c) two concurrent first-signups end with exactly one `is_staff = true` user — locks down the atomicity claim from Section 5a.
 
 ### 6. Install-time provisioning changes
 
