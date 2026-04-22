@@ -107,8 +107,15 @@ This is the flow I use after any change to parser, web, or CLI. Without `prepare
 **Never edit sub-package version fields manually.** Always go through the right release command:
 
 - CLI: `npm version <patch|minor|major>` at the repo root.
-- Team-server: `cd packages/team-server && npm version <patch|minor|major> && cd -`.
-  The `tag-version-prefix=server-v` in `packages/team-server/.npmrc` produces the correct tag. Use `npm version` from inside the package dir rather than `pnpm --filter ... version`, because `pnpm version` does NOT create the git commit or tag that `npm version` does.
+- Team-server: bump the version and create the commit + tag manually — from the repo root:
+  ```bash
+  (cd packages/team-server && npm version <patch|minor|major> --no-git-tag-version)
+  V=$(jq -r .version packages/team-server/package.json)
+  git add packages/team-server/package.json
+  git commit -m "$V"
+  git tag -a "server-v$V" -m "server-v$V"
+  ```
+  `--no-git-tag-version` is required because `npm version` relies on `@npmcli/git`'s `is()` check (a `stat()` for `.git` at its own cwd) which returns false from any subdirectory — so npm silently drops the commit + tag step. Tagging manually sidesteps that. The `tag-version-prefix=server-v` in `packages/team-server/.npmrc` is kept for convention and would be used if a future npm release fixes the sub-directory detection.
 
 The web UI reads its version via `import pkg from "../package.json" with { type: "json" }` in `apps/web/app/layout.tsx` and passes it to the sidebar. The team-server UI reads `process.env.APP_VERSION`, baked into the Docker image at build time from `packages/team-server/package.json`.
 
@@ -145,11 +152,17 @@ The agent does not need npm credentials. The workflow runs with the stored token
 ### Releasing team-server (`ghcr.io/cowcow02/fleetlens-team-server` image)
 
 ```bash
-pnpm -F @claude-lens/team-server test              # team-server tests must pass
-cd packages/team-server && npm version patch && cd -   # or minor/major — bumps team-server only
+pnpm -F @claude-lens/team-server test                              # team-server tests must pass
+(cd packages/team-server && npm version patch --no-git-tag-version) # or minor/major — bumps team-server only
+V=$(jq -r .version packages/team-server/package.json)
+git add packages/team-server/package.json
+git commit -m "$V"
+git tag -a "server-v$V" -m "server-v$V"
 git push origin master
-git push origin server-v<version>                  # pushing the server-v* tag triggers publish-team-server-image.yml
+git push origin "server-v$V"                                        # pushing the server-v* tag triggers publish-team-server-image.yml
 ```
+
+See the "Versioning" section above for why `--no-git-tag-version` + manual git commit/tag is necessary (npm can't create commits from a sub-directory).
 
 Pushing a `server-v*` tag triggers `.github/workflows/publish-team-server-image.yml`, which:
 
