@@ -4,12 +4,20 @@
 
 Click the button. Cloud Shell opens with the repo cloned and a guided walkthrough. The whole deploy takes ~5 minutes and costs ~$10–25/mo.
 
-Full flow + configuration knobs → [`TUTORIAL.md`](./TUTORIAL.md).
+The installer runs in two phases: a **preflight** that inspects your environment (account, project, region, billing, which APIs and resources already exist) and prints every change it would make, then an explicit confirmation prompt before any mutation. Skip the prompt with `--yes` or `ASSUME_YES=1`.
+
+## Three ways to install
+
+| If you want… | Use… |
+|---|---|
+| One-click deploy from Cloud Shell | The button above (runs `install.sh` interactively) |
+| Run the installer locally with full control | [`install.sh`](./install.sh) + [`TUTORIAL.md`](./TUTORIAL.md) |
+| Run every gcloud command yourself, with explanations | [`docs/gcp-manual-install.md`](../../docs/gcp-manual-install.md) |
 
 ## Stack
 
 - **Cloud Run** — stateless container, autoscales 0→N, public HTTPS
-- **Cloud SQL Postgres 17** — `db-f1-micro` by default, connected over Unix socket (no VPC required)
+- **Cloud SQL Postgres 15** — `db-f1-micro` by default, connected over Unix socket (no VPC required)
 - **Secret Manager** — DB password, encryption key, scheduler shared-secret
 - **Cloud Scheduler** — hourly prune of `ingest_log` (Cloud Run request-based CPU makes `setInterval` unreliable)
 - **Container image** — `ghcr.io/cowcow02/fleetlens-team-server:latest`, published on every master push by the `publish-team-server-image` workflow

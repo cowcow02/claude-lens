@@ -21,15 +21,16 @@ gcloud config set run/region asia-southeast1   # or us-central1, europe-west1…
 ./install.sh
 ```
 
-That's it. The script:
+The installer runs in **two phases**:
 
-1. Enables required APIs (Cloud Run, Cloud SQL Admin, Secret Manager, Cloud Scheduler, IAM)
-2. Creates a Cloud SQL Postgres instance (`fleetlens-db`, ~4 min — the bottleneck)
-3. Generates random DB password + encryption key + scheduler secret into Secret Manager
-4. Creates the `fleetlens` database and user
-5. Grants the Cloud Run runtime service account access to secrets + Cloud SQL
-6. Deploys `ghcr.io/cowcow02/fleetlens-team-server:latest` to Cloud Run, wired to Cloud SQL via Unix socket
-7. Creates a Cloud Scheduler job that hits `/api/admin/prune` every hour
+1. **Preflight (no changes)** — prints a summary of your environment and every resource / API / IAM change it would make, with cost and time estimate. No mutations happen yet.
+2. **Execution (only after you confirm)** — enables APIs, creates Cloud SQL, generates secrets, deploys Cloud Run, sets up Cloud Scheduler. Each action is labeled `create` or `reuse` based on current state.
+
+Skip the confirmation prompt with `./install.sh --yes` or `ASSUME_YES=1 ./install.sh` — useful for scripted deploys.
+
+### Prefer manual commands?
+
+If you'd rather run every `gcloud` command yourself (with inline explanations and the chance to inspect / adapt each step), use [`docs/gcp-manual-install.md`](../../docs/gcp-manual-install.md) instead. Same end state, no bash installer required.
 
 At the end you'll see:
 

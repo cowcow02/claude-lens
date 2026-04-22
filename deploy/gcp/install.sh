@@ -4,7 +4,13 @@
 # Provisions Cloud SQL (Postgres) + Cloud Run + Secret Manager + Cloud
 # Scheduler, wires them together, and prints the public URL.
 #
+# Two-phase flow:
+#   1. Preflight — read-only. Inspects your environment and prints a
+#      summary of everything this script WOULD create or modify.
+#   2. Execute  — runs only after you confirm with 'y'.
+#
 # Idempotent: safe to re-run. Existing resources are detected and reused.
+# Skip the prompt with --yes or ASSUME_YES=1 (useful in CI).
 
 set -euo pipefail
 
@@ -16,51 +22,140 @@ DB_TIER="${DB_TIER:-db-f1-micro}"
 DB_INSTANCE="${DB_INSTANCE:-fleetlens-db}"
 SERVICE="${SERVICE:-fleetlens-team-server}"
 AR_REPO="${AR_REPO:-fleetlens}"
+ASSUME_YES="${ASSUME_YES:-0}"
+[[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && ASSUME_YES=1
 
 #—— tiny logger ———————————————————————————————————————————————————
-b=$'\033[1m'; g=$'\033[32m'; y=$'\033[33m'; r=$'\033[31m'; x=$'\033[0m'
+b=$'\033[1m'; d=$'\033[2m'; g=$'\033[32m'; y=$'\033[33m'; r=$'\033[31m'; c=$'\033[36m'; x=$'\033[0m'
+hdr()  { printf "\n%s━━━ %s ━━━%s\n" "$b" "$1" "$x"; }
 step() { printf "\n%s▶ %s%s\n" "$b" "$1" "$x"; }
 ok()   { printf "%s✓%s %s\n" "$g" "$x" "$1"; }
+info() { printf "  %s%s%s\n" "$d" "$1" "$x"; }
 warn() { printf "%s!%s %s\n" "$y" "$x" "$1"; }
 die()  { printf "%s✗%s %s\n" "$r" "$x" "$1" >&2; exit 1; }
+plan() { printf "  %s%-12s%s %s\n" "$c" "$1" "$x" "$2"; }
 
-#—— Preflight ——————————————————————————————————————————————————————
-command -v gcloud >/dev/null || die "gcloud CLI not found. Use Cloud Shell or install https://cloud.google.com/sdk."
+#—— Tooling ————————————————————————————————————————————————————————
+command -v gcloud  >/dev/null || die "gcloud CLI not found. Use Cloud Shell or install https://cloud.google.com/sdk."
 command -v openssl >/dev/null || die "openssl required for secret generation."
+command -v docker  >/dev/null || die "docker required to copy image from GHCR to Artifact Registry. Cloud Shell has it preinstalled."
 
+#—— Preflight inspection (READ ONLY) ————————————————————————————————
+hdr "Preflight — inspecting environment (no changes yet)"
+
+ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
+[ -n "$ACCOUNT" ] || die "No active gcloud account. Run: gcloud auth login"
 [ -n "$PROJECT" ] || die "No project set. Run: gcloud config set project <id> (or pass PROJECT=<id>)."
 
-step "Fleetlens Team Edition — deploying to project ${b}${PROJECT}${x} in ${b}${REGION}${x}"
-echo "   Cloud SQL tier: $DB_TIER    Source image: $SOURCE_IMAGE"
+# Verify the project exists and we can describe it (implicitly checks auth)
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)' 2>/dev/null || true)"
+[ -n "$PROJECT_NUMBER" ] || die "Cannot access project '$PROJECT' as $ACCOUNT. Check gcloud auth list / gcloud config set project."
 
-if ! gcloud beta billing projects describe "$PROJECT" --format="value(billingEnabled)" 2>/dev/null | grep -q True; then
-  # `beta` may not be installed; fall back to a permission-based probe.
-  if ! gcloud services list --project "$PROJECT" --filter name=cloudbilling --enabled >/dev/null 2>&1; then
-    warn "Could not verify billing. If the next step errors with BILLING_DISABLED, link a billing account:"
-    warn "    https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT"
-  fi
+# Billing status — non-fatal probe. If the 'beta' component isn't installed,
+# we fall back to a heuristic (if any paid API is enabled, billing is linked).
+BILLING_OK="unknown"
+if gcloud beta billing projects describe "$PROJECT" --format="value(billingEnabled)" 2>/dev/null | grep -q True; then
+  BILLING_OK="yes"
+elif gcloud services list --enabled --project "$PROJECT" --filter="name:run.googleapis.com OR name:cloudbuild.googleapis.com" --format="value(name)" 2>/dev/null | grep -q .; then
+  BILLING_OK="yes (inferred from enabled APIs)"
 fi
+
+# Derive final image path
+IMAGE_TAG="${SOURCE_IMAGE##*:}"
+IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REPO/team-server:$IMAGE_TAG"
+RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+# Check which APIs need enabling
+REQUIRED_APIS=(
+  run.googleapis.com
+  sqladmin.googleapis.com
+  sql-component.googleapis.com
+  secretmanager.googleapis.com
+  cloudscheduler.googleapis.com
+  artifactregistry.googleapis.com
+  iam.googleapis.com
+  iamcredentials.googleapis.com
+)
+ENABLED_APIS="$(gcloud services list --enabled --project "$PROJECT" --format='value(config.name)' 2>/dev/null || true)"
+APIS_TO_ENABLE=()
+for api in "${REQUIRED_APIS[@]}"; do
+  grep -qx "$api" <<<"$ENABLED_APIS" || APIS_TO_ENABLE+=("$api")
+done
+
+# Check which resources already exist
+action_for() {
+  gcloud "$@" >/dev/null 2>&1 && echo "reuse" || echo "create"
+}
+AR_ACTION="$(action_for artifacts repositories describe "$AR_REPO" --location "$REGION" --project "$PROJECT")"
+SQL_ACTION="$(action_for sql instances describe "$DB_INSTANCE" --project "$PROJECT")"
+RUN_ACTION="$(action_for run services describe "$SERVICE" --region "$REGION" --project "$PROJECT")"
+SCH_ACTION="$(action_for scheduler jobs describe fleetlens-prune --location "$REGION" --project "$PROJECT")"
+
+SECRET_ACTIONS=()
+for secret in fleetlens-db-password fleetlens-encryption-key fleetlens-scheduler-secret fleetlens-database-url; do
+  SECRET_ACTIONS+=("$secret=$(action_for secrets describe "$secret" --project "$PROJECT")")
+done
+
+#—— Summary banner ————————————————————————————————————————————————
+hdr "What this installer will do"
+
+printf "%sEnvironment%s\n" "$b" "$x"
+plan "Account"  "$ACCOUNT"
+plan "Project"  "$PROJECT  (number $PROJECT_NUMBER)"
+plan "Region"   "$REGION"
+plan "Billing"  "$BILLING_OK"
+plan "Image"    "$SOURCE_IMAGE"
+
+printf "\n%sGCP APIs%s\n" "$b" "$x"
+if [ ${#APIS_TO_ENABLE[@]} -eq 0 ]; then
+  info "All 8 required APIs are already enabled."
+else
+  info "${#APIS_TO_ENABLE[@]} of 8 required APIs need enabling:"
+  for api in "${APIS_TO_ENABLE[@]}"; do plan "  enable" "$api"; done
+  for api in "${REQUIRED_APIS[@]}"; do
+    grep -qx "$api" <<<"$ENABLED_APIS" && plan "  already-on" "$api"
+  done
+fi
+
+printf "\n%sResources%s\n" "$b" "$x"
+plan "$AR_ACTION"   "Artifact Registry repo '$AR_REPO' in $REGION"
+plan "copy"         "Image  $SOURCE_IMAGE  →  $IMAGE"
+plan "$SQL_ACTION"  "Cloud SQL instance '$DB_INSTANCE' ($DB_TIER, POSTGRES_15, 10 GB SSD)"
+for line in "${SECRET_ACTIONS[@]}"; do plan "${line##*=}" "Secret Manager: ${line%%=*}"; done
+plan "$RUN_ACTION"  "Cloud Run service '$SERVICE' (1 vCPU / 512 MiB, min=0 max=3, public HTTPS)"
+plan "$SCH_ACTION"  "Cloud Scheduler job 'fleetlens-prune' (hourly → /api/admin/prune)"
+
+printf "\n%sIAM changes on %s%s\n" "$b" "$RUNTIME_SA" "$x"
+info "roles/secretmanager.secretAccessor on 3 secrets"
+info "roles/cloudsql.client at project scope"
+
+printf "\n%sCost + time estimate%s\n" "$b" "$x"
+info "~\$10/mo idle (Cloud SQL db-f1-micro is the floor at \$7.50)"
+info "~\$25/mo under moderate usage"
+info "~5–6 min wall time for a fresh install; ~1 min on re-run"
+
+printf "\n%sTo undo everything later:%s see deploy/gcp/TUTORIAL.md 'Tearing it down'.\n" "$b" "$x"
+
+#—— Confirmation ——————————————————————————————————————————————————
+if [ "$ASSUME_YES" = "1" ]; then
+  printf "\n%sProceed (ASSUME_YES=1, skipping prompt)...%s\n" "$y" "$x"
+else
+  printf "\n%sProceed?%s [y/N] " "$b" "$x"
+  read -r REPLY </dev/tty || die "No controlling TTY — re-run with ASSUME_YES=1 or --yes"
+  [[ "$REPLY" =~ ^[Yy]$ ]] || die "Aborted."
+fi
+
+#—— Execution ——————————————————————————————————————————————————————
+hdr "Executing"
 
 #—— 1. Enable APIs ———————————————————————————————————————————————
 step "Enabling required APIs (idempotent)"
-gcloud services enable \
-  run.googleapis.com \
-  sqladmin.googleapis.com \
-  sql-component.googleapis.com \
-  secretmanager.googleapis.com \
-  cloudscheduler.googleapis.com \
-  artifactregistry.googleapis.com \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  --project "$PROJECT" --quiet
+gcloud services enable "${REQUIRED_APIS[@]}" --project "$PROJECT" --quiet
 ok "APIs enabled"
 
-#—— 1b. Artifact Registry repo + image copy ————————————————————————
-# Cloud Run cannot pull directly from ghcr.io (only gcr.io, docker.pkg.dev,
-# docker.io). We server-side-copy the public GHCR image into a regional
-# Artifact Registry repo owned by this project on first install.
-step "Artifact Registry ($AR_REPO in $REGION)"
-if gcloud artifacts repositories describe "$AR_REPO" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
+#—— 2. Artifact Registry + image copy —————————————————————————————
+step "Artifact Registry repo '$AR_REPO' in $REGION"
+if [ "$AR_ACTION" = "reuse" ]; then
   ok "Repository exists — reusing"
 else
   gcloud artifacts repositories create "$AR_REPO" \
@@ -71,15 +166,10 @@ else
   ok "Repository created"
 fi
 
-# Derive the destination tag from the source tag
-IMAGE_TAG="${SOURCE_IMAGE##*:}"
-IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REPO/team-server:$IMAGE_TAG"
-
 step "Copying image $SOURCE_IMAGE → $IMAGE"
 if gcloud artifacts docker images describe "$IMAGE" --project "$PROJECT" >/dev/null 2>&1; then
   ok "Image already present in Artifact Registry — reusing"
 else
-  command -v docker >/dev/null || die "docker required to copy image. Cloud Shell has it preinstalled."
   gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet >/dev/null
   docker pull --platform linux/amd64 "$SOURCE_IMAGE" --quiet
   docker tag "$SOURCE_IMAGE" "$IMAGE"
@@ -87,9 +177,9 @@ else
   ok "Image copied"
 fi
 
-#—— 2. Cloud SQL instance + DB ——————————————————————————————————————
-step "Cloud SQL Postgres ($DB_INSTANCE, tier=$DB_TIER, region=$REGION)"
-if gcloud sql instances describe "$DB_INSTANCE" --project "$PROJECT" >/dev/null 2>&1; then
+#—— 3. Cloud SQL instance + DB ——————————————————————————————————————
+step "Cloud SQL Postgres ($DB_INSTANCE, tier=$DB_TIER)"
+if [ "$SQL_ACTION" = "reuse" ]; then
   ok "Instance exists — reusing"
 else
   warn "Creating new instance — this is the slow step (~4 min)"
@@ -105,8 +195,8 @@ fi
 
 CONN_NAME="$(gcloud sql instances describe "$DB_INSTANCE" --project "$PROJECT" --format='value(connectionName)')"
 
-#—— 3. Generate / load secrets ————————————————————————————————————
-step "Secrets (generate on first run, reuse on re-run)"
+#—— 4. Generate / load secrets ————————————————————————————————————
+step "Secrets"
 
 ensure_secret() {
   local name="$1" value="$2"
@@ -126,14 +216,13 @@ ensure_secret "fleetlens-db-password"       "$DB_PASSWORD"
 ensure_secret "fleetlens-encryption-key"    "$ENC_KEY"
 ensure_secret "fleetlens-scheduler-secret"  "$SCHED_SECRET"
 
-# If secrets already existed, read them back so DATABASE_URL uses the correct password.
 DB_PASSWORD="$(gcloud secrets versions access latest --secret=fleetlens-db-password --project "$PROJECT")"
 SCHED_SECRET="$(gcloud secrets versions access latest --secret=fleetlens-scheduler-secret --project "$PROJECT")"
 
 DATABASE_URL="postgresql://fleetlens:$DB_PASSWORD@localhost/fleetlens?host=/cloudsql/$CONN_NAME"
 ensure_secret "fleetlens-database-url" "$DATABASE_URL"
 
-#—— 4. DB user + database ——————————————————————————————————————————
+#—— 5. DB user + database ————————————————————————————————————————
 step "Database + user inside Cloud SQL"
 if gcloud sql users list --instance="$DB_INSTANCE" --project "$PROJECT" --format='value(name)' | grep -qx fleetlens; then
   ok "User fleetlens exists — updating password"
@@ -150,10 +239,8 @@ else
   ok "Database fleetlens created"
 fi
 
-#—— 5. IAM: Cloud Run runtime SA gets secret + cloudsql access ————————
-step "IAM bindings"
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
-RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+#—— 6. IAM bindings —————————————————————————————————————————————————
+step "IAM bindings on $RUNTIME_SA"
 
 for secret in fleetlens-database-url fleetlens-encryption-key fleetlens-scheduler-secret; do
   gcloud secrets add-iam-policy-binding "$secret" \
@@ -168,7 +255,7 @@ gcloud projects add-iam-policy-binding "$PROJECT" \
   --role=roles/cloudsql.client --condition=None --quiet >/dev/null
 ok "Runtime SA can connect to Cloud SQL"
 
-#—— 6. Deploy Cloud Run service ————————————————————————————————————
+#—— 7. Deploy Cloud Run ——————————————————————————————————————————————
 step "Cloud Run deploy"
 gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
@@ -187,9 +274,9 @@ gcloud run deploy "$SERVICE" \
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format='value(status.url)')"
 ok "Service live at $URL"
 
-#—— 7. Cloud Scheduler — hourly prune ———————————————————————————————
+#—— 8. Cloud Scheduler ———————————————————————————————————————————————
 step "Cloud Scheduler job (hourly ingest_log prune)"
-if gcloud scheduler jobs describe fleetlens-prune --location "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
+if [ "$SCH_ACTION" = "reuse" ]; then
   gcloud scheduler jobs update http fleetlens-prune \
     --location "$REGION" \
     --project "$PROJECT" \
@@ -212,8 +299,9 @@ else
 fi
 
 #—— Done ——————————————————————————————————————————————————————————
-printf "\n%s━━━ Fleetlens Team Edition is live ━━━%s\n\n" "$g" "$x"
+hdr "Fleetlens Team Edition is live"
 printf "  %sURL:%s        %s\n" "$b" "$x" "$URL"
 printf "  %sSignup:%s     %s/signup\n" "$b" "$x" "$URL"
 printf "  %sPair CLI:%s   fleetlens team join %s <device-token>\n" "$b" "$x" "$URL"
-printf "\nThe first account to sign up becomes team #1's admin.\n\n"
+printf "\nThe first account to sign up becomes team #1's admin.\n"
+printf "Teardown commands: see deploy/gcp/TUTORIAL.md\n\n"
