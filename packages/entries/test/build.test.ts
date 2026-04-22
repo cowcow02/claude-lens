@@ -172,6 +172,28 @@ describe("buildEntries text + model + project fields", () => {
     // cwd in fixture is /test/project; no worktree suffix
     expect(entry!.project).toBe("/test/project");
   });
+
+  it("start_iso and end_iso are ISO8601 strings", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.start_iso).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(entry!.end_iso).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // start must be before or equal end
+    expect(entry!.start_iso <= entry!.end_iso).toBe(true);
+  });
+
+  it("first_user is truncated at 400 chars", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.first_user.length).toBeLessThanOrEqual(400);
+  });
+
+  it("pr_titles is empty array when no gh pr create in fixture", () => {
+    const sd = load("one-day-session.jsonl");
+    const [entry] = buildEntries(sd);
+    expect(entry!.pr_titles).toEqual([]);
+    expect(entry!.numbers.prs).toBe(0);
+  });
 });
 
 // ── 4d: flags + signals ────────────────────────────────────────────────────
