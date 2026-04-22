@@ -310,6 +310,109 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
     activeSegments.push({ startMs: segStart, endMs: segEnd });
   }
 
+  // Cache-rebuild detection. Two triggers cause a full prefix rewrite:
+  // idle past the 5-min cache TTL, and compact_boundary events (manual or
+  // auto). Both cost tokens at 1.25× base input price against the 5h
+  // budget. A single API response splits into several JSONL lines sharing
+  // a messageId — the flag must land on every sibling (thinking / tool_use
+  // / text) since presentation picks different rows for different content.
+  const COLD_GAP_MS = 5 * 60 * 1000;
+  const COLD_MIN_WRITE = 1000;
+  const COLD_MIN_RATIO = 0.3;
+
+  type MsgBucket = {
+    rep: (typeof events)[number];
+    ms: number;
+    siblings: (typeof events)[number][];
+  };
+  const buckets = new Map<string, MsgBucket>();
+  const compactBoundaries: { ms: number; trigger: "manual" | "auto"; preTokens: number }[] = [];
+  for (const e of events) {
+    if (!e.timestamp) continue;
+    const ms = Date.parse(e.timestamp);
+    if (Number.isNaN(ms)) continue;
+    if (e.rawType === "assistant" && e.usage && e.messageId) {
+      const b = buckets.get(e.messageId);
+      if (b) {
+        b.siblings.push(e);
+        if (ms < b.ms) {
+          b.rep = e;
+          b.ms = ms;
+        }
+      } else {
+        buckets.set(e.messageId, { rep: e, ms, siblings: [e] });
+      }
+    } else if (e.rawType === "system") {
+      const r = e.raw as Record<string, unknown> | null;
+      if (r?.subtype !== "compact_boundary") continue;
+      const meta = (r.compactMetadata ?? {}) as Record<string, unknown>;
+      compactBoundaries.push({
+        ms,
+        trigger: meta.trigger === "manual" ? "manual" : "auto",
+        preTokens: typeof meta.preTokens === "number" ? meta.preTokens : 0,
+      });
+    }
+  }
+  const assistantChrono = [...buckets.values()].sort((a, b) => a.ms - b.ms);
+  compactBoundaries.sort((a, b) => a.ms - b.ms);
+
+  let coldResumeCount = 0;
+  let cacheRebuildTokens = 0;
+  const applyFlag = (bucket: MsgBucket, flag: NonNullable<SessionEvent["coldResume"]>) => {
+    for (const sib of bucket.siblings) sib.coldResume = flag;
+    coldResumeCount++;
+    cacheRebuildTokens += flag.writeTokens;
+  };
+  const flagged = new Set<string>();
+
+  // Compact takes precedence over idle — a turn following a compact
+  // boundary is always a cache rebuild regardless of the pre-gap.
+  for (const b of compactBoundaries) {
+    const after = assistantChrono.find(
+      (a) => a.ms > b.ms && (a.rep.usage?.cacheWrite ?? 0) >= COLD_MIN_WRITE,
+    );
+    if (!after) continue;
+    let prevMs: number | undefined;
+    for (let i = assistantChrono.length - 1; i >= 0; i--) {
+      if (assistantChrono[i]!.ms <= b.ms) {
+        prevMs = assistantChrono[i]!.ms;
+        break;
+      }
+    }
+    const u = after.rep.usage!;
+    const denom = u.cacheWrite + u.cacheRead;
+    applyFlag(after, {
+      trigger: "compact",
+      gapMs: prevMs !== undefined ? after.ms - prevMs : 0,
+      writeTokens: u.cacheWrite,
+      writeRatio: denom > 0 ? u.cacheWrite / denom : 0,
+      compact: { trigger: b.trigger, preTokens: b.preTokens },
+    });
+    flagged.add(after.rep.messageId!);
+  }
+
+  for (let i = 1; i < assistantChrono.length; i++) {
+    const prev = assistantChrono[i - 1]!;
+    const cur = assistantChrono[i]!;
+    if (flagged.has(cur.rep.messageId!)) continue;
+    const u = cur.rep.usage!;
+    const denom = u.cacheWrite + u.cacheRead;
+    const writeRatio = denom > 0 ? u.cacheWrite / denom : 0;
+    const gapMs = cur.ms - prev.ms;
+    if (
+      gapMs > COLD_GAP_MS &&
+      u.cacheWrite >= COLD_MIN_WRITE &&
+      writeRatio >= COLD_MIN_RATIO
+    ) {
+      applyFlag(cur, {
+        trigger: "idle",
+        gapMs,
+        writeTokens: u.cacheWrite,
+        writeRatio,
+      });
+    }
+  }
+
   // Aggregate usage + derive session-level metadata.
   // Usage dedup: Claude Code splits one API response into multiple JSONL
   // lines, each carrying the same `usage`. Sum only once per message.id.
@@ -461,6 +564,8 @@ export function parseTranscript(rawLines: unknown[]): ParseResult {
       linesAdded,
       linesRemoved,
       filesEdited: filesEdited.size,
+      coldResumeCount,
+      cacheRebuildTokens,
       teamName,
       agentName,
       isTeamLead:
