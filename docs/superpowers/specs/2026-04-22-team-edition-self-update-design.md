@@ -90,16 +90,26 @@ CMD ["node", "packages/team-server/server.js"]
 
 **Publish workflow change** (`.github/workflows/publish-team-server-image.yml`):
 
-Add `--build-arg APP_VERSION=$VERSION` to the `docker/build-push-action` invocation. `$VERSION` comes from the release tag (already extracted). On master-push builds (which don't have a release tag), pass the short SHA as the version — these images are explicitly labeled bleeding-edge and never show up in the admin's update candidate list.
+Today the workflow has no `build-args:` key on `docker/build-push-action@v6`. Two concrete changes:
 
-**GHCR tags after this change** (existing convention preserved):
+1. Add a new step (or extend the existing "Compute tags" step) that computes `APP_VERSION`:
+   - On release event: `APP_VERSION=${VERSION#v}` (strip leading `v`).
+   - On master push / workflow_dispatch: `APP_VERSION=0.0.0-dev+${GITHUB_SHA::7}` (so master-push images carry a clearly-non-release identifier and never semver-sort above real releases).
+   - Expose via `echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"`.
+2. Add `build-args:` block to the `docker/build-push-action@v6` invocation:
+   ```yaml
+   build-args: |
+     APP_VERSION=${{ steps.tags.outputs.app_version }}
+   ```
+
+**GHCR tags produced by the existing workflow** (preserved, documented here so the implementer doesn't regress):
 
 | Event | Tags pushed |
 |---|---|
-| Master push | `:latest`, `:<sha7>` |
-| Release tag `v0.5.0` push | `:latest`, `:0.5.0`, `:<sha7>` |
+| Master push | `:<sha7>`, `:latest` |
+| Release `v0.5.0` | `:<sha7>`, `:0.5.0`, `:latest` |
 
-Note the release tag strips the leading `v` — this matches what's already in the workflow (`${VERSION#v}`).
+Release tags strip the leading `v` — this matches the existing `${VERSION#v}` expansion in the workflow. Version discovery must match this convention (filter to semver tags *without* a `v` prefix).
 
 **Version discovery query**: `GET https://ghcr.io/v2/cowcow02/fleetlens-team-server/tags/list`. For public GHCR images, no auth token is needed. Filter to tags matching `^\d+\.\d+\.\d+$`, semver-sort, take the highest. That's the latest available version.
 
@@ -124,29 +134,49 @@ packages/team-server/
         0000_snapshot.json             # Schema snapshot per migration
 ```
 
-**Migration runner** (`migrate.ts`) changes:
+**Migration runner** (`migrate.ts`) changes — uses a single dedicated `pg.Client` for the entire migration transaction so the advisory lock and all DDL travel over the same connection:
 
 ```ts
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { getPool } from "./pool";
+import { Client } from "pg";
+import { applyPreDrizzleBaselineIfNeeded } from "./baseline";
 
-const MIGRATION_LOCK_ID = 0x_FLEETLENS_MIGRATE; // fixed 64-bit int
+// Fixed lock key — any 64-bit integer unique across the database works.
+// Must stay constant across releases so concurrent boots of different
+// versions still serialize.
+const MIGRATION_LOCK_ID = 7326544091n; // arbitrary fixed bigint
 
 export async function runMigrations(): Promise<void> {
-  const db = drizzle(getPool());
-  const client = await getPool().connect();
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("DATABASE_URL is not set");
+
+  // Dedicated one-shot client, NOT the shared app pool. pg_advisory_lock
+  // (session-scoped) is held only on its acquiring connection, so the
+  // drizzle migrator must run every statement on this same client.
+  const client = new Client({ connectionString });
+  await client.connect();
   try {
-    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
+    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID.toString()]);
+    await applyPreDrizzleBaselineIfNeeded(client);
+    const db = drizzle(client);
     await migrate(db, { migrationsFolder: "src/db/migrations" });
   } finally {
-    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_ID]);
-    client.release();
+    // Advisory lock is released automatically on disconnect, but release
+    // explicitly so multiple migrate() calls in tests behave predictably.
+    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_ID.toString()]).catch(() => {});
+    await client.end();
   }
 }
 ```
 
-The advisory lock serializes concurrent boot-time migrations if Cloud Run scales the revision to >1 instance. Drizzle's migrator already skips already-applied migrations via its `__drizzle_migrations` metadata table, so a second instance arriving after the first finishes is a no-op.
+Key correctness points (all learned during spec review):
+
+- **`drizzle(client)` accepts a single `pg.Client`, not only a Pool.** This is the supported pattern for one-shot migrations and is what guarantees the lock + every migrator query share a connection.
+- **`pg_advisory_lock` is session-scoped.** A pool-based wiring would check out a different connection for DDL and race.
+- **The lock ID is passed as a string** to avoid node-postgres silently truncating a JS `number` above 2^31. The BIGINT lock ID arrives in Postgres as bigint either way.
+- **Drizzle's migrator handles already-applied migrations** via the `__drizzle_migrations` journal table (inside schema `drizzle`); a second instance arriving after the first finishes the full set is a no-op.
+- **The main app `Pool`** (used by queries) stays untouched in `pool.ts`. Migrations never use it.
 
 **Expand/contract discipline** (enforced by convention, not tooling, in v1):
 
@@ -154,7 +184,60 @@ The advisory lock serializes concurrent boot-time migrations if Cloud Run scales
 - Migrations MUST NOT be: `DROP COLUMN`, `RENAME COLUMN`, `ADD COLUMN ... NOT NULL` without a default, `ALTER COLUMN TYPE` (beyond compatible widening).
 - Removing a column takes two releases: release N stops reading/writing the column; release N+1 drops it. Document this in `packages/team-server/src/db/MIGRATIONS.md` with the allow-list and the rationale.
 
-**Initial migration (`0000_initial.sql`)** ports the existing `SCHEMA_SQL` verbatim. The first time an *existing* deployment boots a Drizzle-enabled image, the migrator finds tables already present, but its `__drizzle_migrations` table is empty. We handle this with a **baseline check** in `migrate.ts`: before running migrations, if `__drizzle_migrations` is empty AND `user_accounts` exists, insert a row marking `0000_initial` as applied. From that point on, Drizzle's journal is authoritative.
+**Initial migration (`0000_initial.sql`)** ports the existing `SCHEMA_SQL` verbatim. The first time an *existing* deployment boots a Drizzle-enabled image, the migrator would otherwise try to re-run `CREATE TABLE IF NOT EXISTS ...` — safe — but Drizzle expects no pre-existing schema and tracks each applied migration by SQL-content hash. We handle this with a **pre-run baseline step** (`packages/team-server/src/db/baseline.ts`):
+
+```ts
+// packages/team-server/src/db/baseline.ts
+import { Client } from "pg";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+
+export async function applyPreDrizzleBaselineIfNeeded(client: Client): Promise<void> {
+  // 1) Is this a fresh DB? If `user_accounts` doesn't exist, there's nothing
+  //    to baseline — let the normal migrator run everything.
+  const { rowCount } = await client.query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='user_accounts'",
+  );
+  if (rowCount === 0) return;
+
+  // 2) Create drizzle's bookkeeping schema/table ourselves so we can insert
+  //    the baseline row before the migrator runs. The migrator is idempotent
+  //    on this DDL — if it exists, migrator uses it; if it doesn't, migrator
+  //    creates it. We create it to write to it.
+  await client.query(`CREATE SCHEMA IF NOT EXISTS drizzle`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+      id SERIAL PRIMARY KEY,
+      hash TEXT NOT NULL,
+      created_at BIGINT
+    )
+  `);
+
+  // 3) Short-circuit if already baselined (covers re-boot of an already
+  //    migrated deployment).
+  const journal = await client.query("SELECT COUNT(*) AS n FROM drizzle.__drizzle_migrations");
+  if (Number(journal.rows[0].n) > 0) return;
+
+  // 4) Compute the hash Drizzle would compute for 0000_initial.sql.
+  //    Drizzle's migrator (as of drizzle-orm >=0.30) hashes the SQL file
+  //    contents via sha256, hex-encoded. Verified against drizzle-orm source
+  //    at plan time. If this hashing changes in a future Drizzle, re-pin
+  //    drizzle-orm to a tested version — the contract test below catches it.
+  const sqlPath = join(process.cwd(), "src/db/migrations/0000_initial.sql");
+  const sql = readFileSync(sqlPath, "utf8");
+  const hash = createHash("sha256").update(sql).digest("hex");
+
+  await client.query(
+    "INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ($1, $2)",
+    [hash, Date.now()],
+  );
+}
+```
+
+**Contract test** (`test/db/baseline.test.ts` — required, not optional): given a fresh Postgres with `SCHEMA_SQL` applied manually, run `applyPreDrizzleBaselineIfNeeded` then `migrate()`. Assert (a) no migration runs, (b) `__drizzle_migrations` has exactly one row, (c) its hash matches what Drizzle would compute on a truly fresh DB that just ran `0000_initial.sql`. This test is what locks the hashing contract in place — if a future Drizzle version changes its hashing, this test fails loudly instead of silently corrupting customer DBs.
+
+**Pinning note**: `drizzle-orm` and `drizzle-kit` versions are pinned exact (not `^`) in `packages/team-server/package.json`. Upgrading Drizzle is a deliberate cross-cut, not a dependabot change.
 
 ### 3. Platform adapter interface
 
@@ -175,16 +258,22 @@ export interface PlatformAdapter {
 
 **`GcpCloudRunAdapter`** (`gcp-cloud-run.ts`):
 
-Uses `@google-cloud/run` SDK. `redeploy(tag)` calls `ServicesClient.updateService` on the service identified by `process.env.K_SERVICE` (Cloud Run injects this), updating `template.containers[0].image`. Credentials from Application Default Credentials (the service's SA).
+Uses `@google-cloud/run` SDK. `redeploy(tag)` is a read-modify-write on the full Service spec (Cloud Run's `UpdateService` RPC is not a field-level patch):
+
+1. `ServicesClient.getService({ name })` — fetch current spec. `name` is built from `process.env.K_SERVICE` + `process.env.K_CONFIGURATION` + Cloud Run's project/region (all injected).
+2. Mutate `service.template.containers[0].image = "ghcr.io/cowcow02/fleetlens-team-server:" + tag` — leave all other fields (env vars, secrets, SA, traffic splits) untouched.
+3. `ServicesClient.updateService({ service })` — submit the updated spec. Cloud Run creates a new revision; traffic migrates after the new revision passes healthchecks.
+
+Credentials from Application Default Credentials (the service's runtime SA).
 
 **`RailwayAdapter`** (`railway.ts`):
 
-Uses plain `fetch` against `https://backboard.railway.app/graphql/v2`. `redeploy(tag)` runs two mutations:
+Uses plain `fetch` against `https://backboard.railway.app/graphql/v2`. The Railway public GraphQL schema evolves; verify exact mutation names against Railway's docs (https://docs.railway.com/reference/public-api) at implementation time. The shape of the work:
 
-1. `serviceInstanceUpdate` — set `source.image = "ghcr.io/...:"+tag`
-2. `serviceInstanceRedeploy` — trigger the redeploy
+1. Update the service instance's source image to `ghcr.io/cowcow02/fleetlens-team-server:<tag>` (today: `serviceInstanceUpdate` or equivalent; Railway's schema names have moved around).
+2. Trigger a redeploy (today: `serviceInstanceDeploy` or `deploymentRedeploy` depending on schema version).
 
-Token from `RAILWAY_TOKEN` env var, project + service + environment IDs from `RAILWAY_PROJECT_ID` / `RAILWAY_SERVICE_ID` / `RAILWAY_ENVIRONMENT_ID` (all provided by Railway's template).
+Token from `RAILWAY_TOKEN` env var, project + service + environment IDs from `RAILWAY_PROJECT_ID` / `RAILWAY_SERVICE_ID` / `RAILWAY_ENVIRONMENT_ID` (all provided by Railway's template variable system). The plan implementer must verify mutation names and argument shapes against Railway's current schema — this spec intentionally does not pin them because they've changed in the past year.
 
 **Selection logic**:
 
@@ -197,18 +286,59 @@ export function getPlatformAdapter(): PlatformAdapter | null {
 }
 ```
 
+**Behavior when adapter is null**: `checkForUpdates` still runs on schedule, so the banner can tell the admin a new version is available even on an unsupported platform. The Review page also still fetches and renders changelog + migrations manifest. Only the `[Apply update]` button is disabled; a "manual update" card shows the equivalent shell commands (see Section 7).
+
 ### 4. Update service
 
 Server-side service module (`packages/team-server/src/lib/self-update/service.ts`) exposes:
 
 - `getStatus()` → `{ currentVersion, latestVersion, updateAvailable, lastCheckedAt, lastUpdateAttempt }`. Cached for 60 seconds.
 - `checkNow()` → forces a fresh GHCR + GitHub releases query; writes to `update_check_cache` table; emits SSE event.
-- `getReview(targetVersion)` → returns `{ changelog: string (markdown), migrations: string[] }`. Changelog from GitHub Releases API. Migrations list from the target image's `_journal.json` — this is the one hard bit; see "Open question: migration preview" below.
+- `getReview(targetVersion)` → returns `{ changelog: string (markdown), migrations: MigrationInfo[] }`. Changelog from GitHub Releases API. Migrations manifest: see "Release-artifact manifest" below.
 - `applyUpdate(targetVersion, actorId)` → audits the action in the `events` table, calls `platformAdapter.redeploy(tag)`, returns `{ accepted: true, revisionId }`.
+
+**HTTP routes** (all under `/api/admin/updates`, all require `role='admin'`):
+
+| Method + path | Handler | Body / params |
+|---|---|---|
+| `GET /api/admin/updates` | `getStatus()` | — |
+| `POST /api/admin/updates/check` | `checkNow()` | — |
+| `GET /api/admin/updates/review?version=X.Y.Z` | `getReview()` | query `version` |
+| `POST /api/admin/updates/apply` | `applyUpdate()` | body `{ version: "X.Y.Z" }` |
+
+**Event audit strings** (written to the existing `events` table by `applyUpdate` and the scheduler):
+
+| `action` | `payload` |
+|---|---|
+| `self_update.check` | `{ currentVersion, latestVersion }` |
+| `self_update.apply_requested` | `{ fromVersion, toVersion, revisionId }` |
+| `self_update.applied` | `{ fromVersion, toVersion }` (written by the *new* container's startup after successful migration) |
+| `self_update.failed` | `{ fromVersion, toVersion, error }` (written by the *new* container if migrations fail before it crashes; best-effort) |
+
+**Release-artifact migrations manifest** (required for `getReview`):
+
+The release workflow (`.github/workflows/release.yml`) must publish a `migrations-manifest.json` as a GitHub Release asset, containing the filenames + SQL bodies of every Drizzle migration in that release. Shape:
+
+```json
+{
+  "version": "0.5.0",
+  "migrations": [
+    {
+      "filename": "0001_add_plan_utilization.sql",
+      "description": "Add plan_utilization table for Plan 2 finance view",
+      "sql": "CREATE TABLE ..."
+    }
+  ]
+}
+```
+
+`description` comes from a leading `-- description: ...` SQL comment on each migration file, enforced by a tiny check in the release workflow.
+
+`getReview` fetches `https://github.com/cowcow02/fleetlens/releases/download/v<version>/migrations-manifest.json`. The SQL bodies are rendered to the admin page as `<pre>` text (escaped, no execution, no parsing) — the review page is display-only. 15-second timeout; if the fetch fails, the review page shows "Changelog loaded; migration preview unavailable (network error)" with the Apply button still enabled.
 
 **Scheduler integration**: `packages/team-server/src/lib/scheduler.ts` already runs periodic tasks. Add a `checkForUpdates` job running every 1 hour. Cached results power the UI banner without making a live GHCR call on every page load.
 
-**Rate limiting**: `applyUpdate` is gated to once per 5 minutes per team server (global, not per-admin) via the existing rate-limiter. Prevents accidental double-clicks from triggering two redeploys.
+**Rate limiting**: `applyUpdate` is gated to once per 5 minutes per team server (global across all admins). If the existing rate-limiter (`packages/team-server/src/lib/rate-limit.ts`) doesn't already support a global key, add a simple single-key variant — the rate-limit surface is small. Prevents accidental double-clicks from triggering two concurrent redeploys.
 
 ### 5. Admin UI
 
@@ -240,15 +370,25 @@ New pages under the existing admin section:
 
 #### GCP (`deploy/gcp/install.sh`)
 
-Current installer creates the Cloud Run service with default compute SA. Change:
+Current installer deploys the Cloud Run service under the default Compute Engine SA (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`). We keep that SA — it's already the runtime principal with the existing secret and Cloud SQL bindings; switching SAs would force re-binding everything with no real security gain. The one addition:
 
-1. Create a dedicated service account `fleetlens-team-server-sa@$PROJECT.iam.gserviceaccount.com`.
-2. Bind `roles/run.developer` **scoped to the service resource** (not project-wide). Use `gcloud run services add-iam-policy-binding` on the service itself.
-3. Bind `roles/iam.serviceAccountUser` on the SA to itself (required for UpdateService).
-4. Deploy the Cloud Run service with `--service-account fleetlens-team-server-sa@...`.
-5. Set env var `GCP_PROJECT_ID=$PROJECT` on the service (Cloud Run already injects `K_SERVICE` and `K_REVISION`).
+1. Bind `roles/run.developer` to the existing runtime SA **scoped to the one Cloud Run service** (not project-wide). Using the resource-scoped form:
 
-Idempotency: re-running the installer detects the SA and existing bindings, skips creation, ensures all bindings present. Existing deployments re-run `install.sh` once to pick up the new permissions.
+   ```bash
+   gcloud run services add-iam-policy-binding "$SERVICE" \
+     --region "$REGION" \
+     --member "serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+     --role roles/run.developer
+   ```
+
+2. Set env var `GCP_PROJECT_ID=$PROJECT` on the service (Cloud Run already injects `K_SERVICE`, `K_REVISION`, `K_CONFIGURATION`).
+
+Notes the reviewer surfaced that are worth keeping here:
+
+- **No `roles/iam.serviceAccountUser` binding is needed.** That role is only required when changing *which* SA a service runs as. Self-update only changes `template.containers[0].image`, keeping the runtime SA constant, so the `actAs` check doesn't apply.
+- **Resource-scoped `run.developer` is the key safety property.** It permits `run.services.update` only on this one service. The SA cannot create, delete, or modify other Cloud Run services in the project.
+
+Idempotency: re-running the installer detects the existing binding and skips the add. Existing deployments re-run `install.sh` once to pick up the permission; every future update is then UI-driven.
 
 #### Railway (template update)
 
@@ -307,17 +447,12 @@ The self-update feature ships as v0.5.0 of team-server. Existing v0.4.x deployme
 
 ## Open questions / future work
 
-### Migration preview before applying
+### Migration preview: alternative sourcing strategies (deferred)
 
-The review page claims to show "pending migrations." For that to work, the *running* server (v0.4.1) needs to know what migrations the target image (v0.5.0) contains *before* starting the new container.
+Section 4's "Release-artifact migrations manifest" is the v1 choice. Two alternatives considered and rejected for v1:
 
-**Option 1 (v1 choice):** Publish a `migrations-manifest.json` alongside the image to a known URL (e.g., `https://github.com/cowcow02/fleetlens/releases/download/v0.5.0/migrations-manifest.json`) as part of the release workflow. Contains the filenames + SQL bodies of migrations added in that version. Server fetches this on the review page.
-
-**Option 2 (deferred):** Embed the migrations manifest in OCI artifact annotations on the image itself. More "correct" but requires buildx annotations + a registry call to fetch. Not worth the complexity in v1.
-
-**Option 3 (deferred):** Pull the new image into a temporary container, exec a dry-run against a clone of the current DB. Robust but slow and requires Docker-in-Docker or equivalent. Definitely post-v1.
-
-Going with Option 1. One extra file in the release workflow, trivial to implement, transparent to the admin.
+- **Embed manifest in OCI artifact annotations on the image itself.** More "correct" but requires buildx annotations + a GHCR registry API call to fetch before pull. Deferred.
+- **Pull the new image into a sidecar, run `drizzle-kit migrate --dry-run` against a clone of the current DB.** Robust but requires Docker-in-Docker (not available on Cloud Run) or an equivalent off-platform worker. Definitely post-v1.
 
 ### What to show if no platform adapter is detected
 
@@ -346,17 +481,32 @@ v1 always targets the highest available GHCR semver tag. If an admin wants to pi
 
 Cloud Run revision swap is nominally zero-downtime (new revision healthy before old drains). In practice, startup time + migration time for a typical Plan 2–4 migration is ~15–30 seconds. Document "expect 30 seconds of slowness during an update" on the review page so admins don't panic when the server feels sluggish.
 
+**In-flight requests at swap time:** Cloud Run sends SIGTERM to the old revision and gives it a configurable drain window (default 10 seconds). Short HTTP requests complete. Long-lived SSE connections (`/api/events` stream) will be cut — the browser reconnects automatically via the existing `LiveRefresher` retry logic. Flag this in the Apply-confirmation modal so admins with the dashboard open in another tab understand the momentary interruption.
+
+### Network dependency on github.com / ghcr.io
+
+The self-update flow requires outbound HTTPS from the deployed server to `ghcr.io` (tags list, image pulls) and `api.github.com` + `github.com` release-asset CDN (changelog + manifest). Most GCP and Railway deployments have no egress restrictions, but corporate VPC installations may block these. Document the required egress endpoints in the `/admin/updates` page error state when fetches fail ("Check that your deployment can reach ghcr.io and github.com").
+
 ---
 
 ## Summary
 
 Self-update ships as v0.5.0 of team-server. Core pieces:
 
-1. **Drizzle** replaces the `CREATE TABLE IF NOT EXISTS` schema string. Migrations live in `packages/team-server/src/db/migrations/`, generated via `drizzle-kit`, run on boot under a Postgres advisory lock. Expand/contract discipline enforced by reviewer convention + `MIGRATIONS.md` allow-list.
-2. **Versioned GHCR tags** — each release publishes `:latest` + `:X.Y.Z`. `APP_VERSION` baked into the image via Dockerfile `ARG`. GHCR's public tags-list API powers discovery.
-3. **Platform adapters** — thin `PlatformAdapter` interface with `GcpCloudRunAdapter` (uses `@google-cloud/run` SDK + ADC) and `RailwayAdapter` (uses GraphQL + project token).
-4. **Admin UI** — `/admin/updates` list + `/admin/updates/[version]` review, gated to admin role, with a global banner across admin pages. Changelog from GitHub Releases; migration list from a per-release `migrations-manifest.json` artifact.
-5. **One-time install bump** — `install.sh` + Railway template each grow one new IAM binding / env var. Existing deploys re-run the installer once to pick up the v0.5.0 baseline; every future update is button-click only.
+1. **Drizzle** replaces the `CREATE TABLE IF NOT EXISTS` schema string. Migrations live in `packages/team-server/src/db/migrations/`, generated via `drizzle-kit`, run on boot under a Postgres advisory lock held on a dedicated `pg.Client` (not the app pool). Existing v0.4.x DBs are baselined via a pre-run hash-matched insert into `drizzle.__drizzle_migrations`. Expand/contract discipline enforced by reviewer convention + `MIGRATIONS.md` allow-list.
+2. **Versioned GHCR tags** — each release publishes `:latest` + `:X.Y.Z`. `APP_VERSION` baked into the image via Dockerfile `ARG`, wired through the publish workflow's `build-args:` block. GHCR's public tags-list API powers discovery.
+3. **Platform adapters** — thin `PlatformAdapter` interface with `GcpCloudRunAdapter` (uses `@google-cloud/run` SDK + ADC; read-modify-write on the Service spec) and `RailwayAdapter` (uses GraphQL + project token; mutation names to be verified against current schema at implementation time).
+4. **Admin UI** — `/admin/updates` list + `/admin/updates/[version]` review, gated to admin role, with a global banner across admin pages. Changelog from GitHub Releases; migration preview from a per-release `migrations-manifest.json` asset.
+5. **One-time install bump** — `deploy/gcp/install.sh` adds `roles/run.developer` scoped to the one Cloud Run service on the existing default Compute SA. Railway template adds a `RAILWAY_TOKEN` env var. Existing deploys re-run the installer / re-import the template once; every future update is button-click only.
 6. **Rollback** — automatic via Cloud Run / Railway health-check-gated revision promotion. No manual rollback UI in v1.
 
-Total new LoC estimate: ~600 for team-server code + ~150 for deploy-script changes + ~200 for tests. Most of the complexity is in the review-page migration preview and the platform adapters; everything else is plumbing.
+Total new LoC estimate: ~600 for team-server code + ~150 for deploy-script changes + ~200 for tests. Most of the complexity is in the Drizzle baseline, platform adapters, and the migrations-manifest plumbing in the release workflow.
+
+### Suggested plan split (implementer's discretion)
+
+The spec is right at the edge of single-plan scope. If phase discipline looks risky, split along this line:
+
+- **Plan 1a — Migration framework foundation.** Drizzle conversion, baseline insert, `migrations-manifest.json` workflow asset, advisory-lock runner. Ships as v0.4.2 (patch; no user-visible change). Unlocks safe schema evolution for Plans 2/3/4 even if self-update UI isn't ready.
+- **Plan 1b — Self-update mechanism.** Platform adapters, admin UI pages, installer IAM + token updates, end-to-end smoke tests against real Cloud Run + Railway projects. Ships as v0.5.0.
+
+The split is low-cost — 1a's migration framework is the foundation 1b builds on, and 1a is independently valuable even if 1b slips. A single-plan implementation is still feasible for an author with tight scope discipline.
