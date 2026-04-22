@@ -5,7 +5,7 @@ import type { AiFeaturesSettings } from "./settings.js";
 import type { Entry } from "./types.js";
 
 export type EnrichmentResult =
-  | { skipped: "disabled" | "no_api_key" | "no_allowed_projects" | "budget_cap_reached" }
+  | { skipped: "disabled" | "no_allowed_projects" | "budget_cap_reached" }
   | { enriched: number; errors: number; skipped: number };
 
 export type EnrichmentQueueOptions = {
@@ -31,7 +31,6 @@ export async function runEnrichmentQueue(
   opts: EnrichmentQueueOptions = {},
 ): Promise<EnrichmentResult> {
   if (!settings.enabled) return { skipped: "disabled" };
-  if (!settings.apiKey) return { skipped: "no_api_key" };
   if (settings.allowedProjects.length === 0) return { skipped: "no_allowed_projects" };
 
   const budget = settings.monthlyBudgetUsd ?? Infinity;
@@ -58,7 +57,6 @@ export async function runEnrichmentQueue(
 
     try {
       const { entry: result, usage } = await enrichEntry(entry, {
-        apiKey: settings.apiKey,
         model: settings.model,
         callLLM: opts.callLLM,
       });

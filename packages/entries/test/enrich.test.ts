@@ -59,10 +59,7 @@ describe("enrichEntry", () => {
       model: "claude-sonnet-4-6",
     });
 
-    const { entry: out, usage } = await enrichEntry(mkEntry(), {
-      apiKey: "sk-fake",
-      callLLM,
-    });
+    const { entry: out, usage } = await enrichEntry(mkEntry(), { callLLM });
 
     expect(out.enrichment.status).toBe("done");
     expect(out.enrichment.brief_summary).toBe("You fixed the bug.");
@@ -87,7 +84,7 @@ describe("enrichEntry", () => {
         input_tokens: 850, output_tokens: 150, model: "claude-sonnet-4-6",
       });
 
-    const { entry: out, usage } = await enrichEntry(mkEntry(), { apiKey: "sk-fake", callLLM });
+    const { entry: out, usage } = await enrichEntry(mkEntry(), { callLLM });
     expect(out.enrichment.status).toBe("done");
     expect(callLLM).toHaveBeenCalledTimes(2);
     expect(usage).toEqual({ input_tokens: 1650, output_tokens: 170 });
@@ -100,7 +97,7 @@ describe("enrichEntry", () => {
         input_tokens: 800, output_tokens: 5, model: "claude-sonnet-4-6",
       });
 
-    const { entry: out, usage } = await enrichEntry(mkEntry(), { apiKey: "sk-fake", callLLM });
+    const { entry: out, usage } = await enrichEntry(mkEntry(), { callLLM });
     expect(out.enrichment.status).toBe("error");
     expect(out.enrichment.retry_count).toBe(1);
     expect(out.enrichment.error).toMatch(/parse|schema/);
@@ -111,7 +108,7 @@ describe("enrichEntry", () => {
   it("sets status=error and bumps retry_count on API exception; usage is null", async () => {
     const callLLM: CallLLM = vi.fn().mockRejectedValue(new Error("network down"));
 
-    const { entry: out, usage } = await enrichEntry(mkEntry(), { apiKey: "sk-fake", callLLM });
+    const { entry: out, usage } = await enrichEntry(mkEntry(), { callLLM });
     expect(out.enrichment.status).toBe("error");
     expect(out.enrichment.retry_count).toBe(1);
     expect(out.enrichment.error).toContain("network down");
@@ -123,7 +120,7 @@ describe("enrichEntry", () => {
     const entry = mkEntry();
     entry.enrichment.retry_count = 2;
 
-    const { entry: out } = await enrichEntry(entry, { apiKey: "sk-fake", callLLM });
+    const { entry: out } = await enrichEntry(entry, { callLLM });
     expect(out.enrichment.retry_count).toBe(3);
     expect(out.enrichment.status).toBe("error");
   });
@@ -133,7 +130,7 @@ describe("enrichEntry", () => {
       content: JSON.stringify({ ...validResponse, outcome: "halfway" }),
       input_tokens: 800, output_tokens: 150, model: "claude-sonnet-4-6",
     });
-    const { entry: out } = await enrichEntry(mkEntry(), { apiKey: "sk-fake", callLLM });
+    const { entry: out } = await enrichEntry(mkEntry(), { callLLM });
     expect(out.enrichment.status).toBe("error");
     expect(callLLM).toHaveBeenCalledTimes(2);
   });

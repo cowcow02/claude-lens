@@ -14,13 +14,13 @@ export default function SettingsPage() {
       <section>
         <h2 className="text-lg font-medium mb-2">AI Features</h2>
         <p className="text-sm text-gray-500 mb-4">
-          When enabled, the daemon enriches each (session × day) Entry via Claude Sonnet 4.6.
-          Your API key is stored locally at <code>~/.cclens/settings.json</code> (chmod 600) and never transmitted anywhere except to the Anthropic API.
+          When enabled, the daemon enriches each (session × day) Entry by spawning
+          your local <code>claude</code> CLI (same auth as <code>/insights</code> —
+          no API key required; uses your Claude Code subscription).
         </p>
         <AiFeaturesForm
           initial={{
             enabled: s.ai_features.enabled,
-            apiKeyIsSet: Boolean(s.ai_features.apiKey),
             model: s.ai_features.model,
             allowedProjects: s.ai_features.allowedProjects,
             monthlyBudgetUsd: s.ai_features.monthlyBudgetUsd,

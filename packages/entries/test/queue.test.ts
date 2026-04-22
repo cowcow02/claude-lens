@@ -13,7 +13,6 @@ import { pendingEnrichment } from "../src/types.js";
 // helper functions (added in Task 9). The queue only reads these five fields.
 type QueueSettings = {
   enabled: boolean;
-  apiKey: string;
   model: string;
   allowedProjects: string[];
   monthlyBudgetUsd: number | null;
@@ -63,8 +62,7 @@ describe("runEnrichmentQueue", () => {
 
   const baseSettings: QueueSettings = {
     enabled: true,
-    apiKey: "sk-fake",
-    model: "claude-sonnet-4-6",
+    model: "sonnet",
     allowedProjects: ["/Users/test/foo"],
     monthlyBudgetUsd: null,
   };
@@ -72,11 +70,6 @@ describe("runEnrichmentQueue", () => {
   it("returns skipped:disabled when ai_features.enabled is false", async () => {
     const r = await runEnrichmentQueue({ ...baseSettings, enabled: false });
     expect(r).toEqual({ skipped: "disabled" });
-  });
-
-  it("returns skipped:no_api_key when apiKey is blank", async () => {
-    const r = await runEnrichmentQueue({ ...baseSettings, apiKey: "" });
-    expect(r).toEqual({ skipped: "no_api_key" });
   });
 
   it("returns skipped:no_allowed_projects when allowedProjects is empty", async () => {

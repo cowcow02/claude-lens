@@ -6,7 +6,6 @@ import { homedir } from "node:os";
 
 export type AiFeaturesSettings = {
   enabled: boolean;
-  apiKey: string;
   model: string;
   allowedProjects: string[];
   monthlyBudgetUsd: number | null;
@@ -19,8 +18,7 @@ export type Settings = {
 const DEFAULT_SETTINGS: Settings = {
   ai_features: {
     enabled: false,
-    apiKey: "",
-    model: "claude-sonnet-4-6",
+    model: "sonnet",
     allowedProjects: [],
     monthlyBudgetUsd: null,
   },
@@ -43,7 +41,6 @@ export function __setSettingsPathForTest(path: string): void {
 type SettingsOnDisk = {
   ai_features: {
     enabled: boolean;
-    anthropic_api_key: string;
     model: string;
     allowed_projects: string[];
     monthly_budget_usd: number | null;
@@ -54,7 +51,6 @@ function toDisk(s: Settings): SettingsOnDisk {
   return {
     ai_features: {
       enabled: s.ai_features.enabled,
-      anthropic_api_key: s.ai_features.apiKey,
       model: s.ai_features.model,
       allowed_projects: s.ai_features.allowedProjects,
       monthly_budget_usd: s.ai_features.monthlyBudgetUsd,
@@ -67,7 +63,6 @@ function fromDisk(d: Partial<SettingsOnDisk>): Settings {
   return {
     ai_features: {
       enabled: af.enabled ?? DEFAULT_SETTINGS.ai_features.enabled,
-      apiKey: af.anthropic_api_key ?? DEFAULT_SETTINGS.ai_features.apiKey,
       model: af.model ?? DEFAULT_SETTINGS.ai_features.model,
       allowedProjects: af.allowed_projects ?? [],
       monthlyBudgetUsd: af.monthly_budget_usd ?? null,
@@ -77,26 +72,13 @@ function fromDisk(d: Partial<SettingsOnDisk>): Settings {
 
 export function readSettings(): Settings {
   const p = settingsPath();
-  let fromFile: Settings = DEFAULT_SETTINGS;
-  if (existsSync(p)) {
-    try {
-      const raw = readFileSync(p, "utf8");
-      fromFile = fromDisk(JSON.parse(raw) as Partial<SettingsOnDisk>);
-    } catch {
-      fromFile = DEFAULT_SETTINGS;
-    }
+  if (!existsSync(p)) return DEFAULT_SETTINGS;
+  try {
+    const raw = readFileSync(p, "utf8");
+    return fromDisk(JSON.parse(raw) as Partial<SettingsOnDisk>);
+  } catch {
+    return DEFAULT_SETTINGS;
   }
-  // Env-var fallback for apiKey
-  if (!fromFile.ai_features.apiKey && process.env.ANTHROPIC_API_KEY) {
-    fromFile = {
-      ...fromFile,
-      ai_features: {
-        ...fromFile.ai_features,
-        apiKey: process.env.ANTHROPIC_API_KEY,
-      },
-    };
-  }
-  return fromFile;
 }
 
 export function writeSettings(s: Settings): void {

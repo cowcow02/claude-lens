@@ -76,7 +76,10 @@ function trunc(s: string, n: number): string {
   return s.slice(0, n - 1) + "…";
 }
 
-export function buildEnrichmentPrompt(entry: Entry, humanTurns: string[]): string {
+/** Just the slice-facts + human-turns portion of the prompt. Use this as the
+ *  user-message stdin payload when calling `claude -p` with
+ *  `--append-system-prompt ENRICHMENT_SYSTEM_PROMPT`. */
+export function buildEnrichmentUserPrompt(entry: Entry, humanTurns: string[]): string {
   const facts = {
     active_min: entry.numbers.active_min,
     turn_count: entry.numbers.turn_count,
@@ -98,13 +101,17 @@ export function buildEnrichmentPrompt(entry: Entry, humanTurns: string[]): strin
     .map((t, i) => `${i + 1}. ${trunc(t, 300)}`)
     .join("\n");
 
-  return `${SYSTEM_PROMPT}
-
-SLICE FACTS:
+  return `SLICE FACTS:
 ${JSON.stringify(facts, null, 2)}
 
 HUMAN TURNS (up to 8, each truncated to 300 chars):
 ${turns || "(none — the user text was filtered out as non-human)"}`;
+}
+
+/** Combined system + user prompt. Kept for legibility; the subprocess path
+ *  uses ENRICHMENT_SYSTEM_PROMPT + buildEnrichmentUserPrompt separately. */
+export function buildEnrichmentPrompt(entry: Entry, humanTurns: string[]): string {
+  return `${SYSTEM_PROMPT}\n\n${buildEnrichmentUserPrompt(entry, humanTurns)}`;
 }
 
 /** System-prompt-only export — tests may assert on its length for prompt-caching planning. */

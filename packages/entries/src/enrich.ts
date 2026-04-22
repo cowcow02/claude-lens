@@ -1,6 +1,10 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { spawn } from "node:child_process";
 import { classifyUserInputSource } from "./signals.js";
-import { buildEnrichmentPrompt, EnrichmentResponseSchema } from "./prompts/enrich.js";
+import {
+  buildEnrichmentUserPrompt,
+  ENRICHMENT_SYSTEM_PROMPT,
+  EnrichmentResponseSchema,
+} from "./prompts/enrich.js";
 import type { Entry, EntryEnrichment } from "./types.js";
 
 export type LLMResponse = {
@@ -10,17 +14,18 @@ export type LLMResponse = {
   model: string;
 };
 
+// CallLLM takes a model alias + user-prompt body. No apiKey: the default
+// spawns the user's local `claude` CLI which uses their existing Claude Code
+// auth (same pattern as /api/insights and /api/ask).
 export type CallLLM = (args: {
-  apiKey: string;
   model: string;
-  systemAndUserPrompt: string;
+  userPrompt: string;
   reminder?: string;
 }) => Promise<LLMResponse>;
 
 export type EnrichOptions = {
-  apiKey: string;
   model?: string;
-  /** Test-only injection point. Default uses @anthropic-ai/sdk. */
+  /** Test-only injection point. Default spawns `claude -p`. */
   callLLM?: CallLLM;
 };
 
@@ -32,51 +37,113 @@ export type EnrichUsage = {
 export type EnrichResult = {
   entry: Entry;
   /** Aggregated token usage across all LLM attempts for this Entry.
-   *  Null only when every attempt threw before returning a response (e.g., network failure). */
+   *  Null only when every attempt threw before returning a response (e.g., subprocess failure). */
   usage: EnrichUsage | null;
 };
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
+const DEFAULT_MODEL = "sonnet";
 
-// Sonnet 4.6 pricing (USD per 1M tokens). Kept in-module rather than pulled
-// from @claude-lens/parser to avoid CLI↔entries dep inversion. Bump here and
-// in packages/cli/src/pricing.ts together if Anthropic changes prices.
-const PRICE_USD_PER_1M: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-4-6": { input: 3, output: 15 },
-  "claude-opus-4-7": { input: 15, output: 75 },
-};
-
+// Reference pricing for the spend log / monthly budget soft-cap. Subprocess
+// mode uses the user's Claude Code subscription (no API billing), so these
+// numbers don't represent actual charges — they're a rate-limiting proxy
+// against runaway enrichment runs.
 function computeCostUsd(model: string, inTokens: number, outTokens: number): number {
-  const p = PRICE_USD_PER_1M[model];
-  if (!p) return 0;
+  let p: { input: number; output: number } | undefined;
+  if (model.includes("opus")) p = { input: 15, output: 75 };
+  else if (model.includes("sonnet")) p = { input: 3, output: 15 };
+  else if (model.includes("haiku")) p = { input: 1, output: 5 };
+  else return 0;
   return (inTokens * p.input + outTokens * p.output) / 1_000_000;
 }
 
 async function defaultCallLLM(args: {
-  apiKey: string;
   model: string;
-  systemAndUserPrompt: string;
+  userPrompt: string;
   reminder?: string;
 }): Promise<LLMResponse> {
-  const client = new Anthropic({ apiKey: args.apiKey });
-  const messages: Array<{ role: "user"; content: string }> = [
-    { role: "user", content: args.systemAndUserPrompt },
-  ];
-  if (args.reminder) messages.push({ role: "user", content: args.reminder });
+  return new Promise((resolve, reject) => {
+    const claudeArgs = [
+      "-p",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--model", args.model,
+      "--tools", "",
+      "--disable-slash-commands",
+      "--no-session-persistence",
+      "--setting-sources", "",
+      "--append-system-prompt", ENRICHMENT_SYSTEM_PROMPT,
+    ];
+    const proc = spawn("claude", claudeArgs, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env },
+    });
 
-  const resp = await client.messages.create({
-    model: args.model,
-    max_tokens: 2048,
-    messages,
+    const stdinPayload = args.reminder
+      ? `${args.userPrompt}\n\n---\n\n${args.reminder}`
+      : args.userPrompt;
+    proc.stdin.write(stdinPayload);
+    proc.stdin.end();
+
+    let buffer = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let modelUsed = args.model;
+    let stderr = "";
+
+    proc.stdout.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const obj = JSON.parse(trimmed) as Record<string, unknown>;
+          if (obj.type === "assistant") {
+            const msg = obj.message as Record<string, unknown> | undefined;
+            const content = msg?.content as Array<Record<string, unknown>> | undefined;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === "text" && typeof block.text === "string") {
+                  buffer += block.text;
+                }
+              }
+            }
+            const msgModel = (msg as { model?: string } | undefined)?.model;
+            if (msgModel) modelUsed = msgModel;
+          }
+          if (obj.type === "result") {
+            const usage = obj.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            if (usage) {
+              inputTokens = usage.input_tokens ?? 0;
+              outputTokens = usage.output_tokens ?? 0;
+            }
+          }
+        } catch {
+          // skip non-JSON lines (verbose debug framing)
+        }
+      }
+    });
+
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    proc.on("close", (code) => {
+      if (code !== 0 && !buffer) {
+        reject(new Error(`claude exited ${code}: ${stderr.trim().slice(0, 300)}`));
+        return;
+      }
+      resolve({
+        content: buffer,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        model: modelUsed,
+      });
+    });
+
+    proc.on("error", (err) => {
+      reject(new Error(`Failed to spawn claude: ${err.message}`));
+    });
   });
-  const textBlock = resp.content.find(b => b.type === "text");
-  const content = textBlock?.type === "text" ? textBlock.text : "";
-  return {
-    content,
-    input_tokens: resp.usage.input_tokens,
-    output_tokens: resp.usage.output_tokens,
-    model: resp.model ?? args.model,
-  };
 }
 
 function selectHumanTurns(entry: Entry): string[] {
@@ -104,11 +171,11 @@ function parseAndValidate(
   return { ok: true, value: result.data };
 }
 
-export async function enrichEntry(entry: Entry, opts: EnrichOptions): Promise<EnrichResult> {
+export async function enrichEntry(entry: Entry, opts: EnrichOptions = {}): Promise<EnrichResult> {
   const model = opts.model ?? DEFAULT_MODEL;
   const callLLM = opts.callLLM ?? defaultCallLLM;
   const humanTurns = selectHumanTurns(entry);
-  const prompt = buildEnrichmentPrompt(entry, humanTurns);
+  const userPrompt = buildEnrichmentUserPrompt(entry, humanTurns);
   const generatedAt = new Date().toISOString();
 
   let totalInputTokens = 0;
@@ -118,7 +185,7 @@ export async function enrichEntry(entry: Entry, opts: EnrichOptions): Promise<En
   let lastError = "";
 
   try {
-    const r1 = await callLLM({ apiKey: opts.apiKey, model, systemAndUserPrompt: prompt });
+    const r1 = await callLLM({ model, userPrompt });
     anyCallReturned = true;
     totalInputTokens += r1.input_tokens;
     totalOutputTokens += r1.output_tokens;
@@ -134,9 +201,8 @@ export async function enrichEntry(entry: Entry, opts: EnrichOptions): Promise<En
     lastError = v1.error;
 
     const r2 = await callLLM({
-      apiKey: opts.apiKey,
       model,
-      systemAndUserPrompt: prompt,
+      userPrompt,
       reminder: "Your previous response was not valid JSON or did not match the required schema. Return ONLY the JSON object with the seven required fields — no prose, no code fence.",
     });
     totalInputTokens += r2.input_tokens;

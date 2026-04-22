@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { mkdtempSync, readFileSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,54 +11,26 @@ import {
 
 describe("settings", () => {
   let path: string;
-  const origKey = process.env.ANTHROPIC_API_KEY;
 
   beforeEach(() => {
     const tmp = mkdtempSync(join(tmpdir(), "settings-"));
     path = join(tmp, "settings.json");
     __setSettingsPathForTest(path);
-    delete process.env.ANTHROPIC_API_KEY;
-  });
-  afterEach(() => {
-    if (origKey !== undefined) process.env.ANTHROPIC_API_KEY = origKey;
-    else delete process.env.ANTHROPIC_API_KEY;
   });
 
   it("readSettings returns defaults when file does not exist", () => {
     const s = readSettings();
     expect(s.ai_features.enabled).toBe(false);
-    expect(s.ai_features.apiKey).toBe("");
+    expect(s.ai_features.model).toBe("sonnet");
     expect(s.ai_features.allowedProjects).toEqual([]);
     expect(s.ai_features.monthlyBudgetUsd).toBeNull();
   });
 
-  it("falls back to ANTHROPIC_API_KEY env var when settings apiKey is blank", () => {
-    process.env.ANTHROPIC_API_KEY = "sk-env-fallback";
-    const s = readSettings();
-    expect(s.ai_features.apiKey).toBe("sk-env-fallback");
-  });
-
-  it("prefers settings-file apiKey over env var when both set", () => {
-    process.env.ANTHROPIC_API_KEY = "sk-env";
-    writeSettings({
-      ai_features: {
-        enabled: true,
-        apiKey: "sk-file",
-        model: "claude-sonnet-4-6",
-        allowedProjects: [],
-        monthlyBudgetUsd: null,
-      },
-    });
-    const s = readSettings();
-    expect(s.ai_features.apiKey).toBe("sk-file");
-  });
-
-  it("writeSettings persists JSON atomically and sets chmod 600", () => {
+  it("writeSettings persists JSON atomically with snake_case on-disk shape + chmod 600", () => {
     const s: Settings = {
       ai_features: {
         enabled: true,
-        apiKey: "sk-test",
-        model: "claude-sonnet-4-6",
+        model: "sonnet",
         allowedProjects: ["/Users/test/foo"],
         monthlyBudgetUsd: 5,
       },
@@ -69,8 +41,7 @@ describe("settings", () => {
     expect(JSON.parse(raw)).toEqual({
       ai_features: {
         enabled: true,
-        anthropic_api_key: "sk-test",
-        model: "claude-sonnet-4-6",
+        model: "sonnet",
         allowed_projects: ["/Users/test/foo"],
         monthly_budget_usd: 5,
       },
@@ -85,8 +56,7 @@ describe("settings", () => {
     const original: Settings = {
       ai_features: {
         enabled: true,
-        apiKey: "sk-x",
-        model: "claude-sonnet-4-6",
+        model: "opus",
         allowedProjects: ["/a", "/b"],
         monthlyBudgetUsd: 10.5,
       },

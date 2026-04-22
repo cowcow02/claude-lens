@@ -3,7 +3,6 @@ import { useState } from "react";
 
 type Initial = {
   enabled: boolean;
-  apiKeyIsSet: boolean;
   model: string;
   allowedProjects: string[];
   monthlyBudgetUsd: number | null;
@@ -17,7 +16,6 @@ export function AiFeaturesForm({
   monthToDateSpend: number;
 }) {
   const [enabled, setEnabled] = useState(initial.enabled);
-  const [apiKey, setApiKey] = useState(initial.apiKeyIsSet ? "********" : "");
   const [model, setModel] = useState(initial.model);
   const [allowedProjects, setAllowedProjects] = useState<string[]>(initial.allowedProjects);
   const [budget, setBudget] = useState<string>(
@@ -35,7 +33,6 @@ export function AiFeaturesForm({
       body: JSON.stringify({
         ai_features: {
           enabled,
-          apiKey: apiKey === "********" ? "********" : apiKey,
           model,
           allowedProjects,
           monthlyBudgetUsd: budget === "" ? null : Number(budget),
@@ -60,27 +57,19 @@ export function AiFeaturesForm({
       </label>
 
       <label className="block">
-        <span className="text-sm text-gray-600">Anthropic API key</span>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          placeholder="sk-ant-…"
-          className="mt-1 block w-full border rounded px-2 py-1"
-        />
-        <span className="text-xs text-gray-500">
-          Leave blank to use the <code>ANTHROPIC_API_KEY</code> env var. Shown as ******** if already set.
-        </span>
-      </label>
-
-      <label className="block">
         <span className="text-sm text-gray-600">Model</span>
-        <input
-          type="text"
+        <select
           value={model}
           onChange={e => setModel(e.target.value)}
           className="mt-1 block w-full border rounded px-2 py-1"
-        />
+        >
+          <option value="sonnet">sonnet (default)</option>
+          <option value="opus">opus</option>
+          <option value="haiku">haiku</option>
+        </select>
+        <span className="text-xs text-gray-500">
+          Passed to <code>claude -p --model</code>; uses your existing Claude Code auth.
+        </span>
       </label>
 
       <fieldset>
@@ -102,7 +91,7 @@ export function AiFeaturesForm({
       </fieldset>
 
       <label className="block">
-        <span className="text-sm text-gray-600">Monthly budget cap (USD) — blank = no cap</span>
+        <span className="text-sm text-gray-600">Monthly usage cap (USD reference) — blank = no cap</span>
         <input
           type="number"
           value={budget}
@@ -110,10 +99,13 @@ export function AiFeaturesForm({
           step="0.01"
           className="mt-1 block w-full border rounded px-2 py-1"
         />
+        <span className="text-xs text-gray-500">
+          Reference-priced rate limit (you&apos;re billed via your Claude Code subscription, not per-token).
+        </span>
       </label>
 
       <p className="text-xs text-gray-500">
-        Month-to-date spend: ${monthToDateSpend.toFixed(2)}
+        Month-to-date usage (reference): ${monthToDateSpend.toFixed(2)}
       </p>
 
       <button
