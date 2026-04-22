@@ -107,6 +107,16 @@ git push origin master
 git push origin server-v<X.Y.Z>
 ```
 
+**Tag-prefix configuration** (critical — without this, `npm version patch` defaults to a `v<X.Y.Z>` tag that collides with the CLI tag namespace):
+
+Add `packages/team-server/.npmrc` with a single line:
+
+```
+tag-version-prefix=server-v
+```
+
+With that in place, `pnpm --filter @claude-lens/team-server version patch` bumps `packages/team-server/package.json`, creates a commit, and creates a `server-v<X.Y.Z>` tag — exactly what the publish workflow expects. The CLI's root-level `npm version` flow is unaffected (root `package.json` / `.npmrc` have no `tag-version-prefix`, so CLI keeps producing `v<X.Y.Z>` tags).
+
 This mirrors the existing CLI release flow (`npm version patch` at repo root). The plan for this spec includes updating `CLAUDE.md`'s "Versioning" + "Release process" sections to document both flows side-by-side.
 
 ### 1a. Image + version scheme
@@ -131,15 +141,25 @@ CMD ["node", "packages/team-server/server.js"]
 
 Today the workflow has no `build-args:` key on `docker/build-push-action@v6`. Three concrete changes (the first overlaps with Section 1's tag-trigger change):
 
-1. **Source of truth for `APP_VERSION`**: read from `packages/team-server/package.json`, not the root. A step along the lines of:
+1. **Single source of truth**: a new step reads `packages/team-server/package.json` and uses it to derive BOTH `APP_VERSION` and the image tag suffix. This prevents drift between what's baked into the image and what GHCR labels it as:
    ```yaml
    - name: Read team-server version
      id: tsver
      run: echo "version=$(jq -r .version packages/team-server/package.json)" >> "$GITHUB_OUTPUT"
    ```
-2. **Compute image tags** (replacing the existing "Compute tags" step):
-   - On `server-v<X.Y.Z>` tag push: `APP_VERSION=<X.Y.Z>` (strip the `server-v` prefix). Image tags: `:<X.Y.Z>` + `:latest` + `:<sha7>`.
+2. **Compute image tags** (replacing the existing "Compute tags" step). All branches read `steps.tsver.outputs.version`:
+   - On `server-v<X.Y.Z>` tag push: assert `steps.tsver.outputs.version == ${GITHUB_REF_NAME#server-v}` (fail the workflow on mismatch; protects against pushing a `server-v0.5.0` tag without a matching `package.json` bump). `APP_VERSION=<tsver.outputs.version>`. Image tags: `:<tsver.outputs.version>` + `:latest` + `:<sha7>`.
    - On master push / workflow_dispatch: `APP_VERSION=0.0.0-dev+${GITHUB_SHA::7}` (so master-push images never semver-sort above real releases). Image tags: `:<sha7>` + `:latest`.
+
+   A minimal implementation of the assertion:
+   ```yaml
+   - name: Verify tag matches package.json
+     if: startsWith(github.ref, 'refs/tags/server-v')
+     run: |
+       expected="${GITHUB_REF_NAME#server-v}"
+       actual="${{ steps.tsver.outputs.version }}"
+       [ "$expected" = "$actual" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json version $actual"; exit 1; }
+   ```
 3. Add `build-args:` block to the `docker/build-push-action@v6` invocation:
    ```yaml
    build-args: |
@@ -371,7 +391,7 @@ Staff-management routes (also staff-gated) are:
 
 **Release-artifact migrations manifest** (required for `getReview`):
 
-The release workflow (`.github/workflows/release.yml`) must publish a `migrations-manifest.json` as a GitHub Release asset, containing the filenames + SQL bodies of every Drizzle migration in that release. Shape:
+The **team-server** publish workflow (`.github/workflows/publish-team-server-image.yml`, triggered on `server-v*` tag pushes — see Section 1a) must additionally publish a `migrations-manifest.json` as a GitHub Release asset on the corresponding `server-v<X.Y.Z>` release, containing the filenames + SQL bodies of every Drizzle migration in that release. This is NOT a `release.yml` concern — that workflow is CLI-only per Section 1. Shape:
 
 ```json
 {
@@ -388,7 +408,7 @@ The release workflow (`.github/workflows/release.yml`) must publish a `migration
 
 `description` comes from a leading `-- description: ...` SQL comment on each migration file, enforced by a tiny check in the release workflow.
 
-`getReview` fetches `https://github.com/cowcow02/fleetlens/releases/download/v<version>/migrations-manifest.json`. The SQL bodies are rendered to the admin page as `<pre>` text (escaped, no execution, no parsing) — the review page is display-only. 15-second timeout; if the fetch fails, the review page shows "Changelog loaded; migration preview unavailable (network error)" with the Apply button still enabled.
+`getReview` fetches `https://github.com/cowcow02/fleetlens/releases/download/server-v<version>/migrations-manifest.json` (note the `server-v` prefix, matching the team-server release tag namespace from Section 1). The SQL bodies are rendered to the admin page as `<pre>` text (escaped, no execution, no parsing) — the review page is display-only. 15-second timeout; if the fetch fails, the review page shows "Changelog loaded; migration preview unavailable (network error)" with the Apply button still enabled.
 
 **Scheduler integration**: `packages/team-server/src/lib/scheduler.ts` already runs periodic tasks. Add a `checkForUpdates` job running every 1 hour. Cached results power the UI banner without making a live GHCR call on every page load.
 
