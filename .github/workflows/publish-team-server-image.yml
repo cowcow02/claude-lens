@@ -1,5 +1,13 @@
 name: Publish team-server image
 
+# NOTE on `paths:` + `tags:` interaction — GitHub Actions applies the paths
+# filter to BOTH branch and tag pushes under the same `push:` key. This only
+# works because `server-v*` tags are always placed on commits produced by
+# `npm version patch` in packages/team-server/, which always modify
+# packages/team-server/package.json — matching the paths filter. If a future
+# tag is pushed via `git tag server-vX.Y.Z <sha>` on a commit that doesn't
+# touch team-server paths, the workflow will be silently filtered out. See
+# docs/superpowers/specs/2026-04-22-team-edition-self-update-design.md.
 on:
   push:
     branches: [master]
@@ -33,7 +41,13 @@ jobs:
 
       - name: Read team-server version
         id: tsver
-        run: echo "version=$(jq -r .version packages/team-server/package.json)" >> "$GITHUB_OUTPUT"
+        run: |
+          v=$(jq -r .version packages/team-server/package.json)
+          if [ -z "$v" ] || [ "$v" = "null" ]; then
+            echo "::error::Could not read version from packages/team-server/package.json"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Assert tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/server-v')
