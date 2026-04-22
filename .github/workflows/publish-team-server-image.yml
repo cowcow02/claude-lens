@@ -2,7 +2,6 @@ name: Publish team-server image
 
 on:
   push:
-    branches: [master]
     paths:
       - "packages/team-server/**"
       - "packages/parser/**"
