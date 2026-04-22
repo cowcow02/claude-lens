@@ -1061,7 +1061,7 @@ function InlineStatDivider() {
 }
 
 function InlineTokenStat({ usage }: { usage: SessionEvent["usage"] }) {
-  const [hover, setHover] = useState(false);
+  const { ref, anchor, open, close } = useAnchoredTooltip();
   const u = usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const totalIn = u.input + u.cacheRead + u.cacheWrite;
   const pctRead = totalIn > 0 ? Math.round((u.cacheRead / totalIn) * 100) : 0;
@@ -1069,8 +1069,8 @@ function InlineTokenStat({ usage }: { usage: SessionEvent["usage"] }) {
 
   return (
     <span
+      ref={ref}
       style={{
-        position: "relative",
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
@@ -1079,20 +1079,15 @@ function InlineTokenStat({ usage }: { usage: SessionEvent["usage"] }) {
         cursor: "default",
         fontFamily: "var(--font-mono)",
       }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onMouseEnter={open}
+      onMouseLeave={close}
     >
-      {/* Primary: fresh input / output. This is the actually-new
-          per-request context — distinct from the cached context that
-          dominates most agentic sessions (often 99%+). */}
       <span>
         {formatTokens(u.input)}
         <span style={{ color: "var(--af-text-tertiary)", margin: "0 3px" }}>in</span>
         {formatTokens(u.output)}
         <span style={{ color: "var(--af-text-tertiary)", marginLeft: 3 }}>out</span>
       </span>
-      {/* Secondary: cached context as a separate hint so the header
-          doesn't lump 50M+ cache hits into the "tokens" number. */}
       {cached > 0 && (
         <span
           style={{
@@ -1105,14 +1100,8 @@ function InlineTokenStat({ usage }: { usage: SessionEvent["usage"] }) {
           +{formatTokens(cached)} cached
         </span>
       )}
-      {hover && (
-        <Tooltip
-          style={{
-            bottom: "calc(100% + 6px)",
-            left: 0,
-            minWidth: 240,
-          }}
-        >
+      {anchor && (
+        <AnchoredTooltip anchor={anchor} width={280}>
           <TooltipRow label="Input (fresh)" value={u.input.toLocaleString()} />
           <TooltipRow label="Output" value={u.output.toLocaleString()} />
           <TooltipRow label="Cache read" value={`${u.cacheRead.toLocaleString()} (${pctRead}%)`} />
@@ -1130,9 +1119,57 @@ function InlineTokenStat({ usage }: { usage: SessionEvent["usage"] }) {
           >
             Cache reads are cumulative across all API requests and billed at ~10% of regular input.
           </div>
-        </Tooltip>
+        </AnchoredTooltip>
       )}
     </span>
+  );
+}
+
+// Used for tooltips that live inside an overflow:hidden ancestor (like the
+// session-header row). getBoundingClientRect + position:fixed lets the
+// tooltip escape the clipping context instead of being cropped.
+function useAnchoredTooltip() {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const open = () => {
+    if (!ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    setAnchor({ top: r.bottom + 6, left: r.left });
+  };
+  const close = () => setAnchor(null);
+  return { ref, anchor, open, close };
+}
+
+function AnchoredTooltip({
+  anchor,
+  width,
+  children,
+}: {
+  anchor: { top: number; left: number };
+  width: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: anchor.top,
+        left: anchor.left,
+        zIndex: 1000,
+        background: "#1A1A1A",
+        color: "#F5F1EC",
+        padding: "8px 12px",
+        borderRadius: 6,
+        fontSize: 11,
+        fontFamily: "var(--font-mono)",
+        lineHeight: 1.5,
+        pointerEvents: "none",
+        boxShadow: "0 4px 16px rgba(15,23,42,0.24)",
+        width,
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -2709,21 +2746,11 @@ function ColdResumeSessionStat({
   writeTokens: number;
   model?: string;
 }) {
-  // The pill sits inside the session header, which has `overflow: hidden`
-  // for the truncating filename row. An absolute-positioned tooltip would
-  // be clipped at the header bounds, so we render the tooltip with
-  // position: fixed using the pill's viewport coordinates.
-  const ref = useRef<HTMLSpanElement>(null);
-  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const { ref, anchor, open, close } = useAnchoredTooltip();
   const estUsd = estimateCost(
     { input: 0, output: 0, cacheRead: 0, cacheWrite: writeTokens },
     model,
   );
-  const showTooltip = () => {
-    if (!ref.current) return;
-    const r = ref.current.getBoundingClientRect();
-    setAnchor({ top: r.bottom + 6, left: r.left });
-  };
   return (
     <span
       ref={ref}
@@ -2739,29 +2766,13 @@ function ColdResumeSessionStat({
         borderRadius: 100,
         cursor: "default",
       }}
-      onMouseEnter={showTooltip}
-      onMouseLeave={() => setAnchor(null)}
+      onMouseEnter={open}
+      onMouseLeave={close}
     >
       <span style={{ fontSize: 12 }}>⚡</span>
       {count} cache rebuild{count === 1 ? "" : "s"} · {formatTokens(writeTokens)} rewritten
       {anchor && (
-        <div
-          style={{
-            position: "fixed",
-            top: anchor.top,
-            left: anchor.left,
-            zIndex: 1000,
-            background: "#1A1A1A",
-            color: "#F1F5F9",
-            padding: "8px 12px",
-            borderRadius: 6,
-            fontSize: 11,
-            pointerEvents: "none",
-            boxShadow: "0 4px 16px rgba(15,23,42,0.24)",
-            width: 320,
-            lineHeight: 1.5,
-          }}
-        >
+        <AnchoredTooltip anchor={anchor} width={320}>
           <TooltipRow label="Cache rebuilds" value={count.toLocaleString()} />
           <TooltipRow label="Tokens rewritten" value={writeTokens.toLocaleString()} />
           {estUsd >= 0.005 && (
@@ -2783,7 +2794,7 @@ function ColdResumeSessionStat({
             (manual or auto) summarized the conversation. Both cost tokens
             at 1.25× base input price.
           </div>
-        </div>
+        </AnchoredTooltip>
       )}
     </span>
   );
