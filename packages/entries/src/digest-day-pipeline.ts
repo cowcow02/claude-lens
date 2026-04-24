@@ -24,6 +24,8 @@ export type PipelineOptions = {
   now?: () => number;
   /** The current local day in server TZ; if `date === todayLocalDay`, skip disk persistence. */
   todayLocalDay: string;
+  /** Attribution for spend records. Defaults to "web". */
+  caller?: "web" | "cli" | "daemon";
 };
 
 const THIRTY_MIN_MS = 30 * 60 * 1000;
@@ -84,7 +86,7 @@ export async function* runDayDigestPipeline(
           writeEntry(result);
           if (result.enrichment.status === "done") {
             appendSpend({
-              ts: new Date().toISOString(), caller: "web",
+              ts: new Date().toISOString(), caller: opts.caller ?? "web",
               model: result.enrichment.model ?? opts.settings.model,
               input_tokens: usage?.input_tokens ?? 0,
               output_tokens: usage?.output_tokens ?? 0,
@@ -115,7 +117,7 @@ export async function* runDayDigestPipeline(
       digest = r.digest;
       if (r.usage) {
         appendSpend({
-          ts: new Date().toISOString(), caller: "web",
+          ts: new Date().toISOString(), caller: opts.caller ?? "web",
           model: digest.model ?? opts.settings.model,
           input_tokens: r.usage.input_tokens,
           output_tokens: r.usage.output_tokens,

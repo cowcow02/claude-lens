@@ -47,7 +47,7 @@ const DEFAULT_MODEL = "sonnet";
 // mode uses the user's Claude Code subscription (no API billing), so these
 // numbers don't represent actual charges — they're a rate-limiting proxy
 // against runaway enrichment runs.
-function computeCostUsd(model: string, inTokens: number, outTokens: number): number {
+export function computeCostUsd(model: string, inTokens: number, outTokens: number): number {
   let p: { input: number; output: number } | undefined;
   if (model.includes("opus")) p = { input: 15, output: 75 };
   else if (model.includes("sonnet")) p = { input: 3, output: 15 };

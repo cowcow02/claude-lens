@@ -44,17 +44,17 @@ describe("fleetlens digest day", () => {
   });
 
   it("--date X --json prints a valid DayDigest JSON", () => {
-    mkFixtureEntry(entriesDir, "s1", "2026-04-23", 60);
+    mkFixtureEntry(entriesDir, "s1", "2030-01-15", 60);
     const env = { ...process.env, CCLENS_ENTRIES_DIR: entriesDir, CCLENS_AI_DISABLED: "1" };
-    const out = execSync(`node "${CLI}" digest day --date 2026-04-23 --json`, { env, encoding: "utf8" });
+    const out = execSync(`node "${CLI}" digest day --date 2030-01-15 --json`, { env, encoding: "utf8" });
     const parsed = JSON.parse(out);
     expect(parsed.scope).toBe("day");
-    expect(parsed.key).toBe("2026-04-23");
+    expect(parsed.key).toBe("2030-01-15");
     expect(parsed.agent_min).toBe(60);
   });
 
   it("exits non-zero on invalid date", () => {
-    mkFixtureEntry(entriesDir, "s1", "2026-04-23", 60);
+    mkFixtureEntry(entriesDir, "s1", "2030-01-15", 60);
     const env = { ...process.env, CCLENS_ENTRIES_DIR: entriesDir, CCLENS_AI_DISABLED: "1" };
     expect(() =>
       execSync(`node "${CLI}" digest day --date notadate --json`, { env, encoding: "utf8" })
@@ -62,10 +62,10 @@ describe("fleetlens digest day", () => {
   });
 
   it("prints pretty-format by default", () => {
-    mkFixtureEntry(entriesDir, "s1", "2026-04-23", 60);
+    mkFixtureEntry(entriesDir, "s1", "2030-01-15", 60);
     const env = { ...process.env, CCLENS_ENTRIES_DIR: entriesDir, CCLENS_AI_DISABLED: "1" };
-    const out = execSync(`node "${CLI}" digest day --date 2026-04-23`, { env, encoding: "utf8" });
-    expect(out).toContain("2026-04-23");
+    const out = execSync(`node "${CLI}" digest day --date 2030-01-15`, { env, encoding: "utf8" });
+    expect(out).toContain("2030-01-15");
     expect(out).toContain("60m");
   });
 });

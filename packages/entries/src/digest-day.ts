@@ -6,6 +6,7 @@ import {
   buildDigestUserPrompt,
 } from "./prompts/digest-day.js";
 import type { CallLLM, EnrichUsage, LLMResponse } from "./enrich.js";
+import { computeCostUsd } from "./enrich.js";
 
 function prettyProjectName(p: string): string {
   const parts = p.split("/").filter(Boolean);
@@ -203,7 +204,7 @@ export async function generateDayDigest(
     if (v1.ok) {
       return {
         digest: {
-          ...base, model: lastModel, cost_usd: null,
+          ...base, model: lastModel, cost_usd: computeCostUsd(lastModel, inT, outT),
           headline: v1.value.headline,
           narrative: v1.value.narrative,
           what_went_well: v1.value.what_went_well,
@@ -223,7 +224,7 @@ export async function generateDayDigest(
     if (v2.ok) {
       return {
         digest: {
-          ...base, model: lastModel, cost_usd: null,
+          ...base, model: lastModel, cost_usd: computeCostUsd(lastModel, inT, outT),
           headline: v2.value.headline,
           narrative: v2.value.narrative,
           what_went_well: v2.value.what_went_well,

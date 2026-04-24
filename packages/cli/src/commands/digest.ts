@@ -1,8 +1,9 @@
 import { flag } from "../args.js";
-import { listEntriesForDay, readDayDigest, writeDayDigest } from "@claude-lens/entries/fs";
+import { listEntriesForDay, readDayDigest } from "@claude-lens/entries/fs";
 import {
-  buildDeterministicDigest, generateDayDigest,
-  readSettings, appendSpend, monthToDateSpend,
+  buildDeterministicDigest,
+  readSettings,
+  runDayDigestPipeline,
 } from "@claude-lens/entries/node";
 import type { DayDigest, Entry } from "@claude-lens/entries";
 
@@ -17,12 +18,13 @@ function toLocalDay(ms: number): string {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function digest(args: string[]): Promise<void> {
-  if (args.includes("--help") || args.includes("-h") || args.length === 0) {
-    if (args[0] !== "day") { printHelp(); return; }
-  }
-
   if (args[0] === "day") {
     await day(args.slice(1));
+    return;
+  }
+
+  if (args.includes("--help") || args.includes("-h") || args.length === 0) {
+    printHelp();
     return;
   }
 
@@ -55,25 +57,46 @@ async function day(args: string[]): Promise<void> {
 
   const settings = readSettings();
   const aiOn = settings.ai_features.enabled && process.env.CCLENS_AI_DISABLED !== "1";
+  const todayLocalDay = toLocalDay(now);
 
-  let result: DayDigest;
+  // Fast path: past day + cached + !force + AI mode matches how it was cached.
+  // Use cached file directly. Otherwise delegate to the shared pipeline.
+  let result: DayDigest | null = null;
 
-  if (date === toLocalDay(now)) {
-    // Today: always built fresh; never persisted to disk
-    result = await generateOrDeterministic(date, entries, aiOn, settings);
-  } else {
-    // Past day: read cache unless --force
-    if (!force) {
-      const cached = readDayDigest(date);
-      if (cached) result = cached;
-      else {
-        result = await generateOrDeterministic(date, entries, aiOn, settings);
-        writeDayDigest(result);
-      }
+  if (!force && date !== todayLocalDay) {
+    const cached = readDayDigest(date);
+    if (cached) result = cached;
+  }
+
+  if (!result) {
+    if (!aiOn) {
+      // Deterministic-only path — no need for pipeline machinery.
+      result = buildDeterministicDigest(date, entries);
     } else {
-      result = await generateOrDeterministic(date, entries, aiOn, settings);
-      writeDayDigest(result);
+      // Full pipeline: enriches pending entries, runs synth, writes cache.
+      // Stream events to stderr so user sees progress.
+      const log = (msg: string) => { if (!json) process.stderr.write(`  ${msg}\n`); };
+      for await (const ev of runDayDigestPipeline(date, {
+        settings: settings.ai_features,
+        force,
+        todayLocalDay,
+        caller: "cli",
+      })) {
+        if (ev.type === "status") log(`[${ev.phase}] ${ev.text}`);
+        else if (ev.type === "entry") log(`  entry ${ev.index}/${ev.total} · ${ev.session_id.slice(0, 8)} · ${ev.status}${ev.cost_usd ? ` ($${ev.cost_usd.toFixed(4)})` : ""}`);
+        else if (ev.type === "saved") log(`saved to ${ev.path}`);
+        else if (ev.type === "digest") result = ev.digest;
+        else if (ev.type === "error") {
+          console.error(`error: ${ev.message}`);
+          process.exit(1);
+        }
+      }
     }
+  }
+
+  if (!result) {
+    console.error(`pipeline produced no digest for ${date}`);
+    process.exit(1);
   }
 
   if (json) {
@@ -81,30 +104,6 @@ async function day(args: string[]): Promise<void> {
   } else {
     prettyPrint(result);
   }
-}
-
-async function generateOrDeterministic(
-  date: string, entries: Entry[], aiOn: boolean,
-  settings: ReturnType<typeof readSettings>,
-): Promise<DayDigest> {
-  if (!aiOn) return buildDeterministicDigest(date, entries);
-
-  const budget = settings.ai_features.monthlyBudgetUsd ?? Infinity;
-  if (monthToDateSpend() >= budget) {
-    console.error(`budget cap reached — falling back to deterministic digest`);
-    return buildDeterministicDigest(date, entries);
-  }
-
-  const r = await generateDayDigest(date, entries, { model: settings.ai_features.model });
-  if (r.usage) {
-    appendSpend({
-      ts: new Date().toISOString(), caller: "cli",
-      model: r.digest.model ?? settings.ai_features.model,
-      input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens,
-      cost_usd: r.digest.cost_usd ?? 0, kind: "day_digest", ref: date,
-    });
-  }
-  return r.digest;
 }
 
 function prettyPrint(d: DayDigest): void {
@@ -128,8 +127,11 @@ Usage:
   fleetlens digest day --date X --force       Re-generate, overwrite cache
   fleetlens digest day --date X --json        JSON output for scripting
 
+AI-on path: enriches pending entries first, then synthesizes the day narrative.
+Progress streams to stderr unless --json.
+
 Exit codes:
   0 — success
-  1 — invalid date, or no entries for date
+  1 — invalid date, no entries, or pipeline error
 `);
 }
