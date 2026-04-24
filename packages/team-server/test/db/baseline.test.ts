@@ -101,4 +101,35 @@ describe("applyPreDrizzleBaselineIfNeeded", () => {
     );
     expect(rows[0].n).toBe(1);
   });
+
+  it("repairs a v0.4.2-style buggy baseline row (Date.now() instead of folderMillis)", async () => {
+    // Simulate a v0.4.2 deployment: schema exists, baseline row has Date.now() as created_at.
+    const sql = readFileSync(join(MIGRATIONS_DIR, "0000_initial.sql"), "utf8");
+    await client.query(sql);
+    await client.query(`CREATE SCHEMA IF NOT EXISTS drizzle`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+        id SERIAL PRIMARY KEY, hash TEXT NOT NULL, created_at BIGINT
+      )
+    `);
+    const buggyTimestamp = Date.now();
+    await client.query(
+      `INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ('old-hash', $1)`,
+      [buggyTimestamp],
+    );
+
+    // Run the new baseline — should repair in place.
+    await applyPreDrizzleBaselineIfNeeded(client);
+
+    const journal = JSON.parse(
+      readFileSync(join(MIGRATIONS_DIR, "meta/_journal.json"), "utf8"),
+    );
+    const folderMillis = journal.entries.find((e: { idx: number; when: number }) => e.idx === 0).when;
+
+    const { rows } = await client.query(
+      `SELECT id, created_at FROM drizzle.__drizzle_migrations ORDER BY id`,
+    );
+    expect(rows).toHaveLength(1);  // repaired in place, no duplicate
+    expect(Number(rows[0].created_at)).toBe(folderMillis);
+  });
 });
