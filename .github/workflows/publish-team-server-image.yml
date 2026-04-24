@@ -1,15 +1,23 @@
 name: Publish team-server image
 
+# NOTE on `paths:` + `tags:` interaction — GitHub Actions applies the paths
+# filter to BOTH branch and tag pushes under the same `push:` key. This only
+# works because `server-v*` tags are always placed on commits produced by
+# `npm version patch` in packages/team-server/, which always modify
+# packages/team-server/package.json — matching the paths filter. If a future
+# tag is pushed via `git tag server-vX.Y.Z <sha>` on a commit that doesn't
+# touch team-server paths, the workflow will be silently filtered out. See
+# docs/superpowers/specs/2026-04-22-team-edition-self-update-design.md.
 on:
   push:
+    branches: [master]
     paths:
       - "packages/team-server/**"
       - "packages/parser/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/publish-team-server-image.yml"
-  release:
-    types: [published]
+    tags: ["server-v*"]
   workflow_dispatch:
 
 jobs:
@@ -31,6 +39,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Read team-server version
+        id: tsver
+        run: |
+          v=$(jq -r .version packages/team-server/package.json)
+          if [ -z "$v" ] || [ "$v" = "null" ]; then
+            echo "::error::Could not read version from packages/team-server/package.json"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Assert tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        run: |
+          expected="${GITHUB_REF_NAME#server-v}"
+          actual="${{ steps.tsver.outputs.version }}"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $actual"
+            exit 1
+          fi
+
       - name: Compute tags
         id: tags
         run: |
@@ -39,9 +67,9 @@ jobs:
           if [ "${{ github.ref }}" = "refs/heads/master" ]; then
             TAGS="$TAGS,$IMAGE:latest"
           fi
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            TAGS="$TAGS,$IMAGE:${VERSION#v},$IMAGE:latest"
+          if [[ "${{ github.ref }}" == refs/tags/server-v* ]]; then
+            VERSION="${{ steps.tsver.outputs.version }}"
+            TAGS="$TAGS,$IMAGE:${VERSION},$IMAGE:latest"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
@@ -52,9 +80,43 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            APP_VERSION=${{ steps.tsver.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Fleetlens Team Edition server (Next.js + Postgres)
             org.opencontainers.image.licenses=MIT
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build migrations manifest
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const dir = "packages/team-server/src/db/migrations";
+            const files = fs.readdirSync(dir)
+              .filter(f => f.endsWith(".sql"))
+              .sort();
+            const migrations = files.map(filename => {
+              const sql = fs.readFileSync(path.join(dir, filename), "utf8");
+              const desc = (sql.match(/^--\s*description:\s*(.+)$/m) || [])[1] || "";
+              return { filename, description: desc.trim(), sql };
+            });
+            const out = {
+              version: "${{ steps.tsver.outputs.version }}",
+              migrations,
+            };
+            fs.writeFileSync("migrations-manifest.json", JSON.stringify(out, null, 2));
+          '
+
+      - name: Create GitHub Release with manifest
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "team-server ${{ github.ref_name }}" \
+            --generate-notes \
+            migrations-manifest.json
