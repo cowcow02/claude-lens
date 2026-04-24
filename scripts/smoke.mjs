@@ -219,6 +219,7 @@ async function main() {
   results.push(await hit("/?range=30d", "Dashboard (30D)"));
   results.push(await hit("/sessions", "Sessions list"));
   results.push(await hit("/projects", "Projects grid"));
+  results.push(await hit("/settings", "Settings"));
   if (sessionId) {
     results.push(await hit(`/sessions/${sessionId}`, "Session detail"));
   } else {
