@@ -30,6 +30,7 @@ export default async function UpdatesPage() {
         <nav className="shell-nav">
           <div className="shell-nav-label">Admin</div>
           <a href="/admin/updates" aria-current="true">Updates <span className="mono">01</span></a>
+          <a href="/admin/staff">Staff</a>
           <div className="shell-nav-label">Account</div>
           <div className="mono" style={{ fontSize: 11, color: "var(--mute)", padding: "4px 0 8px" }}>
             {session.user.email}
