@@ -17,16 +17,22 @@ export type LLMResponse = {
 // CallLLM takes a model alias + user-prompt body. No apiKey: the default
 // spawns the user's local `claude` CLI which uses their existing Claude Code
 // auth (same pattern as /api/insights and /api/ask).
+export type LLMProgress = { bytes: number; elapsedMs: number };
+
 export type CallLLM = (args: {
   model: string;
   userPrompt: string;
   reminder?: string;
+  /** Optional streaming-progress callback, fired at most once per additional KB of output. */
+  onProgress?: (info: LLMProgress) => void;
 }) => Promise<LLMResponse>;
 
 export type EnrichOptions = {
   model?: string;
   /** Test-only injection point. Default spawns `claude -p`. */
   callLLM?: CallLLM;
+  /** Optional char-count progress from the claude -p call. */
+  onProgress?: (info: LLMProgress) => void;
 };
 
 export type EnrichUsage = {
@@ -60,6 +66,7 @@ async function defaultCallLLM(args: {
   model: string;
   userPrompt: string;
   reminder?: string;
+  onProgress?: (info: LLMProgress) => void;
 }): Promise<LLMResponse> {
   return new Promise((resolve, reject) => {
     const claudeArgs = [
@@ -89,6 +96,8 @@ async function defaultCallLLM(args: {
     let outputTokens = 0;
     let modelUsed = args.model;
     let stderr = "";
+    const startMs = Date.now();
+    let lastReportedKb = -1;
 
     proc.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
@@ -104,6 +113,13 @@ async function defaultCallLLM(args: {
               for (const block of content) {
                 if (block.type === "text" && typeof block.text === "string") {
                   buffer += block.text;
+                  if (args.onProgress) {
+                    const kb = Math.floor(buffer.length / 1024);
+                    if (kb > lastReportedKb) {
+                      lastReportedKb = kb;
+                      args.onProgress({ bytes: buffer.length, elapsedMs: Date.now() - startMs });
+                    }
+                  }
                 }
               }
             }
@@ -185,7 +201,7 @@ export async function enrichEntry(entry: Entry, opts: EnrichOptions = {}): Promi
   let lastError = "";
 
   try {
-    const r1 = await callLLM({ model, userPrompt });
+    const r1 = await callLLM({ model, userPrompt, onProgress: opts.onProgress });
     anyCallReturned = true;
     totalInputTokens += r1.input_tokens;
     totalOutputTokens += r1.output_tokens;
@@ -204,6 +220,7 @@ export async function enrichEntry(entry: Entry, opts: EnrichOptions = {}): Promi
       model,
       userPrompt,
       reminder: "Your previous response was not valid JSON or did not match the required schema. Return ONLY the JSON object with the seven required fields — no prose, no code fence.",
+      onProgress: opts.onProgress,
     });
     totalInputTokens += r2.input_tokens;
     totalOutputTokens += r2.output_tokens;

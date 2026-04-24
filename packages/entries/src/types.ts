@@ -165,6 +165,16 @@ export type DigestEnvelope = {
   cost_usd: number | null;
 };
 
+/** Day-level outcome rollup (derived deterministically from per-entry outcomes).
+ *  Priority order: shipped > partial > blocked > exploratory > trivial > idle.
+ *  `idle` only if zero entries (shouldn't happen in a rendered digest). */
+export type DayOutcome = "shipped" | "partial" | "blocked" | "exploratory" | "trivial" | "idle";
+
+/** Day-level helpfulness rollup (mode of entry claude_helpfulness).
+ *  Tie-broken toward the worse signal (unhelpful beats neutral beats helpful beats essential)
+ *  so a weekly digest can spot regressions early. `null` if no entries are enriched. */
+export type DayHelpfulness = "essential" | "helpful" | "neutral" | "unhelpful" | null;
+
 export type DayDigest = DigestEnvelope & {
   scope: "day";
 
@@ -176,6 +186,10 @@ export type DayDigest = DigestEnvelope & {
   top_goal_categories: Array<{ category: string; minutes: number }>;
   concurrency_peak: number;
   agent_min: number;
+  /** Day-level outcome derived from per-entry outcomes. Phase 2.1 — feeds weekly aggregation. */
+  outcome_day: DayOutcome;
+  /** Day-level helpfulness signal — mode across enriched entries. Phase 2.1 — feeds weekly trajectory. */
+  helpfulness_day: DayHelpfulness;
 
   // LLM narrative (null when ai_features.enabled === false or synth failed)
   headline: string | null;

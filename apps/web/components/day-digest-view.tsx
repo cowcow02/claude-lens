@@ -1,14 +1,15 @@
 "use client";
 import { useState, useCallback } from "react";
 import { DayDigest as DayDigestRender } from "./day-digest";
-import type { DayDigest as DayDigestType } from "@claude-lens/entries";
+import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
 
 type Status = "idle" | "streaming" | "done" | "error";
 
 export function DayDigestView({
-  initial, date, aiEnabled,
+  initial, entries, date, aiEnabled,
 }: {
   initial: DayDigestType | null;
+  entries: Entry[];
   date: string;
   aiEnabled: boolean;
 }) {
@@ -41,7 +42,12 @@ export function DayDigestView({
         try {
           const ev = JSON.parse(dataLine.slice(6));
           if (ev.type === "status") setProgress(ev.text);
-          else if (ev.type === "entry") setProgress(`Enriching ${ev.index}/${ev.total}...`);
+          else if (ev.type === "entry") setProgress(`Enriching ${ev.index}/${ev.total}${ev.cost_usd ? ` · $${ev.cost_usd.toFixed(4)}` : ""}...`);
+          else if (ev.type === "progress") {
+            const sec = Math.round(ev.elapsed_ms / 1000);
+            const kb = (ev.bytes / 1024).toFixed(1);
+            setProgress(`Claude composing… ${ev.bytes.toLocaleString()} chars (${kb} KB · ${sec}s)`);
+          }
           else if (ev.type === "digest") { setDigest(ev.digest); setProgress("Rendering..."); }
           else if (ev.type === "saved") setProgress(`Saved.`);
           else if (ev.type === "error") { setStatus("error"); setProgress(ev.message); return; }
@@ -75,7 +81,7 @@ export function DayDigestView({
       </div>
 
       {digest ? (
-        <DayDigestRender digest={digest} aiEnabled={aiEnabled} />
+        <DayDigestRender digest={digest} entries={entries} aiEnabled={aiEnabled} />
       ) : (
         <div style={{ padding: 40, textAlign: "center", color: "var(--af-text-secondary)" }}>
           <p>No digest generated yet.</p>

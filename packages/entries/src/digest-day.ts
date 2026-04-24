@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
-import { CURRENT_DAY_DIGEST_SCHEMA_VERSION, type DayDigest, type Entry } from "./types.js";
+import {
+  CURRENT_DAY_DIGEST_SCHEMA_VERSION,
+  type DayDigest, type DayHelpfulness, type DayOutcome, type Entry,
+} from "./types.js";
 import {
   DIGEST_DAY_SYSTEM_PROMPT,
   DayDigestResponseSchema,
@@ -11,6 +14,39 @@ import { computeCostUsd } from "./enrich.js";
 function prettyProjectName(p: string): string {
   const parts = p.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? p;
+}
+
+/** Day-level outcome: any-of priority. Prevents a day with one shipped PR from
+ *  reading as "trivial" just because other sessions were warmups. */
+function rollupOutcomeDay(entries: Entry[]): DayOutcome {
+  if (entries.length === 0) return "idle";
+  const outcomes = new Set(entries.map(e => e.enrichment.outcome).filter(Boolean));
+  if (outcomes.has("shipped")) return "shipped";
+  if (outcomes.has("partial")) return "partial";
+  if (outcomes.has("blocked")) return "blocked";
+  if (outcomes.has("exploratory")) return "exploratory";
+  return "trivial";
+}
+
+/** Day-level helpfulness: mode across enriched entries, tiebreak toward worse
+ *  signal so regressions surface early in weekly aggregation. */
+function rollupHelpfulnessDay(entries: Entry[]): DayHelpfulness {
+  const counts = new Map<Exclude<DayHelpfulness, null>, number>();
+  for (const e of entries) {
+    const h = e.enrichment.claude_helpfulness;
+    if (!h) continue;
+    counts.set(h, (counts.get(h) ?? 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  // Worse-signal tiebreak order.
+  const severity: Array<Exclude<DayHelpfulness, null>> = ["unhelpful", "neutral", "helpful", "essential"];
+  let best: Exclude<DayHelpfulness, null> | null = null;
+  let bestCount = 0;
+  for (const level of severity) {
+    const c = counts.get(level) ?? 0;
+    if (c > bestCount) { best = level; bestCount = c; }
+  }
+  return best;
 }
 
 export function buildDeterministicDigest(
@@ -88,6 +124,8 @@ export function buildDeterministicDigest(
     top_goal_categories,
     concurrency_peak: opts.concurrencyPeak ?? 0,
     agent_min,
+    outcome_day: rollupOutcomeDay(entries),
+    helpfulness_day: rollupHelpfulnessDay(entries),
     headline: null,
     narrative: null,
     what_went_well: null,
@@ -102,6 +140,8 @@ export type GenerateOptions = {
   model?: string;
   callLLM?: CallLLM;
   concurrencyPeak?: number;
+  /** Optional char-count progress from the claude -p synth call. */
+  onProgress?: (info: { bytes: number; elapsedMs: number }) => void;
 };
 
 export type GenerateResult = {
@@ -115,6 +155,7 @@ async function defaultCallLLMDigest(args: {
   model: string;
   userPrompt: string;
   reminder?: string;
+  onProgress?: (info: { bytes: number; elapsedMs: number }) => void;
 }): Promise<LLMResponse> {
   return new Promise((resolve, reject) => {
     const claudeArgs = [
@@ -132,6 +173,8 @@ async function defaultCallLLMDigest(args: {
     proc.stdin.end();
 
     let buffer = "", inputTokens = 0, outputTokens = 0, modelUsed = args.model, stderr = "";
+    const startMs = Date.now();
+    let lastReportedKb = -1;
     proc.stdout.on("data", (chunk: Buffer) => {
       for (const line of chunk.toString("utf8").split("\n")) {
         const t = line.trim();
@@ -143,7 +186,16 @@ async function defaultCallLLMDigest(args: {
             const content = msg?.content as Array<Record<string, unknown>> | undefined;
             if (Array.isArray(content)) {
               for (const block of content) {
-                if (block.type === "text" && typeof block.text === "string") buffer += block.text;
+                if (block.type === "text" && typeof block.text === "string") {
+                  buffer += block.text;
+                  if (args.onProgress) {
+                    const kb = Math.floor(buffer.length / 1024);
+                    if (kb > lastReportedKb) {
+                      lastReportedKb = kb;
+                      args.onProgress({ bytes: buffer.length, elapsedMs: Date.now() - startMs });
+                    }
+                  }
+                }
               }
             }
             const mm = (msg as { model?: string } | undefined)?.model;
@@ -198,7 +250,7 @@ export async function generateDayDigest(
   let inT = 0, outT = 0, lastModel = model;
 
   try {
-    const r1 = await callLLM({ model, userPrompt });
+    const r1 = await callLLM({ model, userPrompt, onProgress: opts.onProgress });
     inT += r1.input_tokens; outT += r1.output_tokens; lastModel = r1.model;
     const v1 = parseAndValidate(r1.content);
     if (v1.ok) {
@@ -218,6 +270,7 @@ export async function generateDayDigest(
     const r2 = await callLLM({
       model, userPrompt,
       reminder: "Your previous response was not valid JSON or did not match the required schema. Return ONLY the JSON object with the five required fields — no prose, no code fence.",
+      onProgress: opts.onProgress,
     });
     inT += r2.input_tokens; outT += r2.output_tokens; lastModel = r2.model;
     const v2 = parseAndValidate(r2.content);

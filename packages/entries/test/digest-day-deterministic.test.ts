@@ -125,4 +125,48 @@ describe("buildDeterministicDigest", () => {
     const d = buildDeterministicDigest("2026-04-23", [mkEntry()], { concurrencyPeak: 5 });
     expect(d.concurrency_peak).toBe(5);
   });
+
+  it("outcome_day prioritizes shipped over everything else", () => {
+    const entries = [
+      mkEntry({ enrichment: { ...mkEntry().enrichment, status: "done", outcome: "trivial" } }),
+      mkEntry({ session_id: "s2", enrichment: { ...mkEntry().enrichment, status: "done", outcome: "shipped" } }),
+      mkEntry({ session_id: "s3", enrichment: { ...mkEntry().enrichment, status: "done", outcome: "blocked" } }),
+    ];
+    expect(buildDeterministicDigest("2026-04-23", entries).outcome_day).toBe("shipped");
+  });
+
+  it("outcome_day falls back to trivial when no substantive work", () => {
+    const entries = [
+      mkEntry({ enrichment: { ...mkEntry().enrichment, status: "done", outcome: "trivial" } }),
+      mkEntry({ session_id: "s2", enrichment: { ...mkEntry().enrichment, status: "done", outcome: "trivial" } }),
+    ];
+    expect(buildDeterministicDigest("2026-04-23", entries).outcome_day).toBe("trivial");
+  });
+
+  it("outcome_day is idle when entries list is empty", () => {
+    expect(buildDeterministicDigest("2026-04-23", []).outcome_day).toBe("idle");
+  });
+
+  it("helpfulness_day is null when no entries are enriched", () => {
+    const d = buildDeterministicDigest("2026-04-23", [mkEntry()]);
+    expect(d.helpfulness_day).toBeNull();
+  });
+
+  it("helpfulness_day returns the mode, tiebreaking toward worse signal", () => {
+    const entries = [
+      mkEntry({ enrichment: { ...mkEntry().enrichment, status: "done", claude_helpfulness: "helpful" } }),
+      mkEntry({ session_id: "s2", enrichment: { ...mkEntry().enrichment, status: "done", claude_helpfulness: "unhelpful" } }),
+    ];
+    // 1 vs 1: tie, tiebreak → "unhelpful" (worse signal).
+    expect(buildDeterministicDigest("2026-04-23", entries).helpfulness_day).toBe("unhelpful");
+  });
+
+  it("helpfulness_day picks majority when not tied", () => {
+    const entries = [
+      mkEntry({ enrichment: { ...mkEntry().enrichment, status: "done", claude_helpfulness: "helpful" } }),
+      mkEntry({ session_id: "s2", enrichment: { ...mkEntry().enrichment, status: "done", claude_helpfulness: "helpful" } }),
+      mkEntry({ session_id: "s3", enrichment: { ...mkEntry().enrichment, status: "done", claude_helpfulness: "unhelpful" } }),
+    ];
+    expect(buildDeterministicDigest("2026-04-23", entries).helpfulness_day).toBe("helpful");
+  });
 });

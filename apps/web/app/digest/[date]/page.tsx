@@ -37,15 +37,13 @@ export default async function DigestDayPage({
   const settings = readSettings();
   const aiEnabled = settings.ai_features.enabled;
 
+  const entries = listEntriesForDay(date);
   let initial: DayDigest | null = null;
   if (date !== today) {
     initial = readDayDigest(date);
   }
-  if (!initial) {
-    const entries = listEntriesForDay(date);
-    if (entries.length > 0) {
-      initial = buildDeterministicDigest(date, entries);
-    }
+  if (!initial && entries.length > 0) {
+    initial = buildDeterministicDigest(date, entries);
   }
 
   const prev = addDays(date, -1);
@@ -65,7 +63,7 @@ export default async function DigestDayPage({
           </Link>
         )}
       </nav>
-      <DayDigestView initial={initial} date={date} aiEnabled={aiEnabled} />
+      <DayDigestView initial={initial} entries={entries} date={date} aiEnabled={aiEnabled} />
     </div>
   );
 }

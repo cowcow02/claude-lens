@@ -13,6 +13,7 @@ import type { DayDigest, Entry, EntryEnrichmentStatus } from "./types.js";
 export type PipelineEvent =
   | { type: "status"; phase: "enrich" | "synth" | "persist"; text: string }
   | { type: "entry"; session_id: string; index: number; total: number; status: EntryEnrichmentStatus; cost_usd: number | null }
+  | { type: "progress"; phase: "enrich" | "synth"; bytes: number; elapsed_ms: number }
   | { type: "digest"; digest: DayDigest }
   | { type: "saved"; path: string }
   | { type: "error"; message: string };
@@ -74,14 +75,20 @@ export async function* runDayDigestPipeline(
         yield { type: "status", phase: "enrich", text: `Enriching ${pending.length} entries for ${date}` };
         const budget = opts.settings.monthlyBudgetUsd ?? Infinity;
         let idx = 0;
+        // Buffer onProgress events from async chunks and drain between entries.
+        // We can't yield from inside the enrichEntry stdout handler; we collect
+        // the latest progress snapshot and emit it before/after each entry.
+        let lastProgress: { bytes: number; elapsedMs: number } | null = null;
         for (const entry of pending) {
           idx++;
           if (monthToDateSpend() >= budget) {
             yield { type: "status", phase: "enrich", text: `budget cap reached — stopping enrichment` };
             break;
           }
+          lastProgress = null;
           const { entry: result, usage } = await enrichEntry(entry, {
             model: opts.settings.model, callLLM: opts.callLLM,
+            onProgress: (info) => { lastProgress = info; },
           });
           writeEntry(result);
           if (result.enrichment.status === "done") {
@@ -111,9 +118,32 @@ export async function* runDayDigestPipeline(
     let digest: DayDigest;
     if (aiOn) {
       yield { type: "status", phase: "synth", text: "Synthesizing day narrative" };
-      const r = await generateDayDigest(date, fresh, {
+      // Queue of synth-phase progress snapshots; drained by the poller below
+      // while generateDayDigest awaits claude -p.
+      const progressQueue: Array<{ bytes: number; elapsed_ms: number }> = [];
+      const synthPromise = generateDayDigest(date, fresh, {
         model: opts.settings.model, callLLM: opts.callLLM,
+        onProgress: (info) => {
+          progressQueue.push({ bytes: info.bytes, elapsed_ms: info.elapsedMs });
+        },
       });
+
+      // Poll progress every 500ms until synthesis resolves.
+      const emissions: Array<{ bytes: number; elapsed_ms: number }> = [];
+      let done = false;
+      synthPromise.finally(() => { done = true; });
+      while (!done) {
+        await new Promise(r => setTimeout(r, 500));
+        while (progressQueue.length > 0) {
+          emissions.push(progressQueue.shift()!);
+        }
+        if (emissions.length > 0) {
+          const latest = emissions[emissions.length - 1]!;
+          yield { type: "progress", phase: "synth", bytes: latest.bytes, elapsed_ms: latest.elapsed_ms };
+          emissions.length = 0;
+        }
+      }
+      const r = await synthPromise;
       digest = r.digest;
       if (r.usage) {
         appendSpend({
