@@ -68,6 +68,12 @@ export function listEntriesForSession(sessionId: string): Entry[] {
   return out;
 }
 
+export {
+  writeDayDigest, readDayDigest,
+  getTodayDigestFromCache, setTodayDigestInCache,
+  __setDigestsDirForTest, __clearTodayCacheForTest,
+} from "./digest-fs.js";
+
 export function listEntriesWithStatus(statuses: EntryEnrichmentStatus[]): Entry[] {
   const set = new Set(statuses);
   const out: Entry[] = [];
