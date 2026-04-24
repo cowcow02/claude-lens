@@ -3,6 +3,7 @@ import { readDayDigest, listEntriesForDay } from "@claude-lens/entries/fs";
 import { buildDeterministicDigest, readSettings } from "@claude-lens/entries/node";
 import type { DayDigest } from "@claude-lens/entries";
 import { yesterdayLocal, toLocalDay } from "@/lib/entries";
+import { AutoGenerateYesterday } from "./auto-generate-yesterday";
 
 function fmtDateShort(date: string): string {
   return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
@@ -55,8 +56,11 @@ export function YesterdayHero() {
     );
   }
 
-  let digest: DayDigest | null = readDayDigest(date);
-  if (!digest) digest = buildDeterministicDigest(date, entries);
+  const persisted = readDayDigest(date);
+  const digest: DayDigest = persisted ?? buildDeterministicDigest(date, entries);
+  // "Missing" = no persisted digest on disk and the deterministic fallback
+  // has no narrative. The auto-gen trigger looks at this to decide.
+  const narrativeMissing = aiEnabled && !fallback && digest.headline === null;
 
   const headline = digest.headline
     ?? `Worked ${Math.round(digest.agent_min)}m across ${digest.projects.length} project${digest.projects.length === 1 ? "" : "s"}${digest.shipped.length > 0 ? `; shipped ${digest.shipped.length} PR${digest.shipped.length === 1 ? "" : "s"}` : ""}.`;
@@ -68,10 +72,12 @@ export function YesterdayHero() {
     <div className="af-panel" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <div style={{
+          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
           fontSize: 11, color: "var(--af-text-tertiary)",
           textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600,
         }}>
-          {fallback ? "Last active" : "Yesterday"} · {fmtDateShort(date)}
+          <span>{fallback ? "Last active" : "Yesterday"} · {fmtDateShort(date)}</span>
+          <AutoGenerateYesterday yesterdayDate={date} missing={narrativeMissing} />
         </div>
         <h2 style={{ fontSize: 17, fontWeight: 600, margin: "8px 0 0", lineHeight: 1.35 }}>
           {truncate(headline, 180)}

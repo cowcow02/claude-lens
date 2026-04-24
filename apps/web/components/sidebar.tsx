@@ -15,6 +15,7 @@ import {
   Gauge,
   Lightbulb,
   Settings,
+  CalendarDays,
 } from "lucide-react";
 import { formatRelative, prettyProjectName } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -194,6 +195,13 @@ export function Sidebar({
           icon={<Gauge size={15} />}
         >
           Usage
+        </NavLink>
+        <NavLink
+          href="/digest"
+          active={pathname === "/digest" || pathname.startsWith("/digest/")}
+          icon={<CalendarDays size={15} />}
+        >
+          Digest
         </NavLink>
         <NavLink
           href="/insights"
