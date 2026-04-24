@@ -51,9 +51,9 @@
 - `packages/entries/test/settings-default-on.test.ts` — fresh install yields `enabled: true`; existing `allowed_projects` drops on round-trip.
 - `packages/cli/src/commands/digest.ts` — `fleetlens digest day` subcommand.
 - `packages/cli/test/digest.test.ts` — flag parsing, deterministic output, exit codes.
-- `apps/web/lib/entries.ts` — server-only entry reader + date utils (`yesterdayLocal`, `toLocalDay`).
-- `apps/web/lib/ai/digest-day-gen.ts` — thin web wrapper around `generateDayDigest`.
-- `apps/web/lib/ai/digest-day-pipeline.ts` — `runDayDigestPipeline` async generator (shared by route + CLI).
+- `apps/web/lib/entries.ts` — server-only entry reader + date utils (`yesterdayLocal`, `toLocalDay`, `isValidDate`).
+- `apps/web/lib/validate-settings.ts` — extracted Zod schema for PUT body (pure, unit-testable).
+- `packages/entries/src/digest-day-pipeline.ts` — `runDayDigestPipeline` async generator, exported via `@claude-lens/entries/node`. Chosen over `apps/web/lib/ai/` because the CLI also needs this code.
 - `apps/web/app/api/digest/day/[date]/route.ts` — GET (read cache) + POST (SSE stream).
 - `apps/web/app/digest/[date]/page.tsx` — server component renderer.
 - `apps/web/app/digest/[date]/loading.tsx` — skeleton.
@@ -119,7 +119,7 @@ Inside the `<nav>` block (after the `/insights` `NavLink`), add:
 - [ ] **Step 3: Dev-server spot-check**
 
 Run: `pnpm -F @claude-lens/web dev` (or reuse the currently-running server)
-Visit http://localhost:3000 and verify:
+Visit http://localhost:3321 and verify:
 - A gear-icon "Settings" link appears in the sidebar below "Insights"
 - Clicking it lands on `/settings`
 - The link styles as "active" when on `/settings`
@@ -171,57 +171,61 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ### Task 3: Zod validator on `PUT /api/settings`
 
 **Files:**
-- Modify: `apps/web/app/api/settings/route.ts`
-- Test: `apps/web/test/api-settings.test.ts` (NEW)
+- Create: `apps/web/lib/validate-settings.ts` (extracted schema, unit-testable)
+- Create test: `apps/web/lib/validate-settings.test.ts`
+- Modify: `apps/web/app/api/settings/route.ts` (consume the extracted schema)
 
-Replace the `as`-cast body-parse with Zod validation. Rejects malformed PUTs with a 400 + concrete error message.
+**Design note:** The schema is extracted to its own module so the unit test is pure — no Next request/response stubbing. The route wrapper stays thin.
 
-**Note on scope:** This task assumes `allowedProjects` is still in the settings type. Task 7 is the one that removes `allowedProjects`. Land tasks in order.
+**Shape note:** Task 3 writes the **Phase-2-final** schema — no `allowedProjects`. Task 7 then updates the AiFeaturesForm body shape and the `writeSettings` path to match. The intermediate commits (Tasks 4-6) don't touch settings, so the brief window where the Zod rejects Phase-1b-shape payloads doesn't matter — no UI is being exercised mid-batch.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `apps/web/test/api-settings.test.ts`:
+Create `apps/web/lib/validate-settings.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { PUT } from "../app/api/settings/route";
+import { SettingsUpdateSchema } from "./validate-settings";
 
-describe("PUT /api/settings", () => {
-  it("rejects malformed body with 400", async () => {
-    const req = new Request("http://localhost/api/settings", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ai_features: { enabled: "yes-please" } }),
-    });
-    const res = await PUT(req);
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.error).toBeDefined();
+describe("SettingsUpdateSchema", () => {
+  it("accepts a well-formed Phase-2 body", () => {
+    const body = {
+      ai_features: { enabled: true, model: "sonnet", monthlyBudgetUsd: null },
+    };
+    const r = SettingsUpdateSchema.safeParse(body);
+    expect(r.success).toBe(true);
   });
 
-  it("accepts a well-formed body", async () => {
-    const req = new Request("http://localhost/api/settings", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ai_features: { enabled: true, model: "sonnet", monthlyBudgetUsd: null, allowedProjects: [] },
-      }),
-    });
-    const res = await PUT(req);
-    expect(res.status).toBe(200);
+  it("rejects non-boolean enabled", () => {
+    const body = { ai_features: { enabled: "yes-please", model: "sonnet", monthlyBudgetUsd: null } };
+    expect(SettingsUpdateSchema.safeParse(body).success).toBe(false);
+  });
+
+  it("rejects negative budget", () => {
+    const body = { ai_features: { enabled: true, model: "sonnet", monthlyBudgetUsd: -5 } };
+    expect(SettingsUpdateSchema.safeParse(body).success).toBe(false);
+  });
+
+  it("accepts null budget (unset)", () => {
+    const body = { ai_features: { enabled: true, model: "sonnet", monthlyBudgetUsd: null } };
+    expect(SettingsUpdateSchema.safeParse(body).success).toBe(true);
+  });
+
+  it("rejects missing ai_features", () => {
+    expect(SettingsUpdateSchema.safeParse({}).success).toBe(false);
   });
 });
 ```
 
-Add `apps/web/test/` to vitest's include if not already covered. Check `apps/web/vitest.config.ts` — if missing, create with:
+If `apps/web/vitest.config.ts` exists, verify it covers `lib/**/*.test.ts` (it should). If the file is absent OR include globs miss `lib/`, minimally set:
 
 ```ts
 import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["test/**/*.test.ts"],
-    passWithNoTests: false,   // change from true once this test lands
+    include: ["{lib,test}/**/*.test.ts", "components/**/*.test.ts"],
+    passWithNoTests: false,
   },
 });
 ```
@@ -229,27 +233,36 @@ export default defineConfig({
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm -F @claude-lens/web test`
-Expected: both tests fail — the first because the route returns 200 for garbage input, or throws.
+Expected: `Cannot find module './validate-settings'`.
 
-- [ ] **Step 3: Write the validator**
+- [ ] **Step 3: Write the extracted schema**
 
-Edit `apps/web/app/api/settings/route.ts`:
+Create `apps/web/lib/validate-settings.ts`:
 
 ```ts
-import { NextResponse } from "next/server";
 import { z } from "zod";
-import { readSettings, writeSettings, monthToDateSpend } from "@claude-lens/entries/node";
 
-export const runtime = "nodejs";
-
-const SettingsUpdateSchema = z.object({
+export const SettingsUpdateSchema = z.object({
   ai_features: z.object({
     enabled: z.boolean(),
     model: z.string().min(1),
-    allowedProjects: z.array(z.string()),
     monthlyBudgetUsd: z.number().nonnegative().nullable(),
   }),
 });
+
+export type SettingsUpdate = z.infer<typeof SettingsUpdateSchema>;
+```
+
+- [ ] **Step 4: Update the route to consume the schema**
+
+Replace `apps/web/app/api/settings/route.ts` with:
+
+```ts
+import { NextResponse } from "next/server";
+import { readSettings, writeSettings, monthToDateSpend } from "@claude-lens/entries/node";
+import { SettingsUpdateSchema } from "@/lib/validate-settings";
+
+export const runtime = "nodejs";
 
 export async function GET() {
   return NextResponse.json({
@@ -277,16 +290,26 @@ export async function PUT(req: Request) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+Note: this temporarily breaks the existing `AiFeaturesForm` because the form sends `allowedProjects` which is no longer in the schema. Task 7 lands the matching form update. During Tasks 4-6, don't open /settings in the browser.
+
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `pnpm -F @claude-lens/web test`
-Expected: both tests pass.
+Expected: all 5 schema tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/app/api/settings/route.ts apps/web/test/api-settings.test.ts apps/web/vitest.config.ts
-git commit -m "feat(web/api): Zod-validate PUT /api/settings body
+git add apps/web/lib/validate-settings.ts apps/web/lib/validate-settings.test.ts \
+        apps/web/app/api/settings/route.ts apps/web/vitest.config.ts
+git commit -m "feat(web/api): Zod-validate PUT /api/settings via extracted schema
+
+Schema lives in apps/web/lib/validate-settings.ts so it's unit-testable
+without Next request/response stubbing. Route imports it and returns
+400 with concrete Zod issues on mismatch.
+
+Schema is already Phase-2-final (no allowedProjects) — Task 7 updates
+the form to match. No settings UI interaction between Tasks 3 and 7.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
@@ -318,8 +341,8 @@ async function handleSubmit(e: React.FormEvent) {
 
 - [ ] **Step 2: Manual verification**
 
-Visit `/settings`. Focus any input (e.g., budget). Press Enter.
-Expected: "Saved." appears below the button. No full-page reload (Default form submission is prevented by `e.preventDefault()`).
+With the dev server on http://localhost:3321, visit `/settings`. Focus any input (e.g., budget). Press Enter.
+Expected: "Saved." appears below the button. No full-page reload (default form submission is prevented by `e.preventDefault()`).
 
 - [ ] **Step 3: Commit**
 
@@ -663,19 +686,9 @@ Delete the `listKnownProjects` function (lines 86-99 in the current file). No ca
 
 Run `grep -r listKnownProjects packages/ apps/` to confirm no consumers.
 
-- [ ] **Step 6: Edit `apps/web/app/api/settings/route.ts` — drop `allowedProjects` from Zod**
+- [ ] **Step 6: (No-op — Zod schema already matches Phase-2 shape)**
 
-In the `SettingsUpdateSchema` from Task 3, remove `allowedProjects` from the inner object:
-
-```ts
-const SettingsUpdateSchema = z.object({
-  ai_features: z.object({
-    enabled: z.boolean(),
-    model: z.string().min(1),
-    monthlyBudgetUsd: z.number().nonnegative().nullable(),
-  }),
-});
-```
+Task 3 already committed the Phase-2-final `SettingsUpdateSchema` in `apps/web/lib/validate-settings.ts`. No changes needed here.
 
 - [ ] **Step 7: Edit `apps/web/app/settings/ai-features-form.tsx` — drop project-list UI**
 
@@ -789,7 +802,14 @@ pnpm -F @claude-lens/entries typecheck && pnpm -F @claude-lens/entries test
 pnpm -F @claude-lens/web typecheck && pnpm -F @claude-lens/web test
 ```
 
-Expected: all pass. The new `settings-default-on.test.ts` passes. The Phase 1b `queue.test.ts` may need updating — the `"no_allowed_projects"` expectation should be removed. Update that test inline if it fails.
+Expected: the new `settings-default-on.test.ts` passes.
+
+**The Phase 1b `queue.test.ts` WILL fail** on two assertions: (a) any test expecting `{skipped: "no_allowed_projects"}` (no longer a valid state); (b) tests constructing `AiFeaturesSettings` with `allowedProjects: [...]` (TypeScript rejects the extra key). Fix inline:
+
+1. Delete any test whose name/body references `no_allowed_projects`.
+2. Remove `allowedProjects: [...]` from every `AiFeaturesSettings` literal in that file.
+
+Re-run `pnpm -F @claude-lens/entries test` until green before committing this task.
 
 - [ ] **Step 10: Commit**
 
@@ -1337,7 +1357,11 @@ function prettyProjectName(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-export function buildDeterministicDigest(date: string, entries: Entry[]): DayDigest {
+export function buildDeterministicDigest(
+  date: string,
+  entries: Entry[],
+  opts: { concurrencyPeak?: number } = {},
+): DayDigest {
   const agent_min = entries.reduce((sum, e) => sum + e.numbers.active_min, 0);
 
   // Project aggregation
@@ -1411,7 +1435,7 @@ export function buildDeterministicDigest(date: string, entries: Entry[]): DayDig
     shipped,
     top_flags,
     top_goal_categories,
-    concurrency_peak: 0,  // populated later by the pipeline (see Task 16 — requires computeBurstsFromSessions from parser)
+    concurrency_peak: opts.concurrencyPeak ?? 0,
     agent_min,
     headline: null,
     narrative: null,
@@ -1422,26 +1446,7 @@ export function buildDeterministicDigest(date: string, entries: Entry[]): DayDig
 }
 ```
 
-**Note on `concurrency_peak`:** left at 0 here because it requires `SessionMeta` from `@claude-lens/parser`, which `packages/entries` does not depend on. The pipeline helper in Task 16 populates it via `aggregateConcurrency(computeBurstsFromSessions(sessionsForDay))` before writing. The deterministic digest served by CLI/route correctly shows `concurrency_peak: 0` until the pipeline fills it in — this is an acceptable tradeoff; the unit is "peak concurrent sessions for this day" which a single-package test fixture can't meaningfully construct anyway.
-
-Actually revise: add `concurrency_peak` as a caller-passed parameter so the pipeline can supply it and the CLI can compute it separately. Change the signature:
-
-```ts
-export function buildDeterministicDigest(
-  date: string,
-  entries: Entry[],
-  opts: { concurrencyPeak?: number } = {},
-): DayDigest {
-  // ... same body ...
-  return {
-    // ...
-    concurrency_peak: opts.concurrencyPeak ?? 0,
-    // ...
-  };
-}
-```
-
-Update the call in the test to ignore the opts param (default 0 matches).
+**Note on `concurrency_peak`:** defaults to 0 when no `opts.concurrencyPeak` is passed. The pipeline helper (Task 16) and `apps/web` callers that can reach `@claude-lens/parser` pass the peak value computed via `aggregateConcurrency(computeBurstsFromSessions(sessionsForDay))`. `packages/entries` itself has no parser dependency, so it cannot compute peak internally — that's the caller's job. CLI digests show `concurrency_peak: 0` until the CLI is wired to compute it (future task, out of scope for Phase 2).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1844,7 +1849,7 @@ Expected: module not found.
 Create `packages/entries/src/digest-fs.ts`:
 
 ```ts
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, chmodSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { DayDigest } from "./types.js";
@@ -1872,6 +1877,9 @@ export function writeDayDigest(digest: DayDigest): void {
   mkdirSync(dirname(final), { recursive: true });
   const tmp = `${final}.tmp`;
   writeFileSync(tmp, JSON.stringify(digest, null, 2), "utf8");
+  if (process.platform !== "win32") {
+    try { chmodSync(tmp, 0o600); } catch { /* best-effort */ }
+  }
   renameSync(tmp, final);
 }
 
@@ -1950,14 +1958,21 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 Create `packages/cli/test/digest.test.ts`:
 
 ```ts
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeAll, beforeEach } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 
 // Integration test: invoke the built CLI against a scratch entry store.
-// Relies on `pnpm -F fleetlens build` having been run before this test.
+// beforeAll ensures the CLI bundle is built; skip rebuild if already fresh.
+
+beforeAll(() => {
+  const distPath = "./packages/cli/dist/index.js";
+  if (!existsSync(distPath)) {
+    execSync("pnpm -F fleetlens build", { stdio: "inherit" });
+  }
+}, 60_000);
 
 describe("fleetlens digest day", () => {
   let entriesDir: string;
@@ -2688,7 +2703,14 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Create: `apps/web/app/api/digest/day/[date]/route.ts`
 - Create: `apps/web/lib/entries.ts` (server-only reader + date utils)
-- Create test: `apps/web/test/api-digest-day.test.ts`
+- Create: `apps/web/lib/inflight-coalesce.ts` (typed in-flight Map — extracted so it's unit-testable)
+- Create test: `apps/web/lib/inflight-coalesce.test.ts`
+- Route smoke coverage: `/digest/[yesterday]` (added in Task 24)
+
+**Design note on tests:** Next.js route handlers are awkward to unit-test without a running server — `NextResponse` expects the edge/node runtime stack. Rather than wiring that up, we:
+- Unit-test the **coalescing helper** (pure TypeScript, no Next surface).
+- Rely on `scripts/smoke.mjs` for the HTTP-level route behavior (Task 24 adds `/digest/[yesterday]`).
+- Drive the fused pipeline via `runDayDigestPipeline` integration tests in `@claude-lens/entries` (already covered by Tasks 14-16).
 
 - [ ] **Step 1: Create `apps/web/lib/entries.ts`**
 
@@ -2718,87 +2740,109 @@ export function isValidDate(s: string): boolean {
 }
 ```
 
-- [ ] **Step 2: Write the failing route test**
+- [ ] **Step 2: Write the failing test for `inflight-coalesce`**
 
-Create `apps/web/test/api-digest-day.test.ts`:
+The coalescing behavior is a pure-TypeScript concern — extract it so we can unit-test it without Next runtime.
+
+Create `apps/web/lib/inflight-coalesce.test.ts`:
 
 ```ts
-import { describe, expect, it, beforeEach } from "vitest";
-import { GET, POST } from "../app/api/digest/day/[date]/route";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { InflightCoalescer } from "./inflight-coalesce";
 
-describe("GET /api/digest/day/[date]", () => {
-  beforeEach(() => {
-    const d = mkdtempSync(join(tmpdir(), "dig-route-"));
-    process.env.CCLENS_ENTRIES_DIR = d;
-    process.env.CCLENS_AI_DISABLED = "1";
+describe("InflightCoalescer", () => {
+  it("second caller with same key awaits the first; worker runs once", async () => {
+    const c = new InflightCoalescer<string, string>();
+    let runs = 0;
+    const worker = async () => { runs++; await new Promise(r => setTimeout(r, 10)); return "ok"; };
+
+    const [a, b] = await Promise.all([
+      c.run("k1", worker),
+      c.run("k1", worker),
+    ]);
+    expect(a).toBe("ok");
+    expect(b).toBe("ok");
+    expect(runs).toBe(1);
   });
 
-  it("returns 400 for future date", async () => {
-    const far = "2999-01-01";
-    const req = new Request(`http://localhost/api/digest/day/${far}`);
-    const res = await GET(req, { params: Promise.resolve({ date: far }) });
-    expect(res.status).toBe(400);
+  it("different keys run independently", async () => {
+    const c = new InflightCoalescer<string, string>();
+    let runs = 0;
+    const worker = async () => { runs++; return "ok"; };
+    await Promise.all([c.run("k1", worker), c.run("k2", worker)]);
+    expect(runs).toBe(2);
   });
 
-  it("returns 400 for malformed date", async () => {
-    const req = new Request("http://localhost/api/digest/day/not-a-date");
-    const res = await GET(req, { params: Promise.resolve({ date: "not-a-date" }) });
-    expect(res.status).toBe(400);
+  it("drops entry after resolution so a subsequent same-key call re-runs", async () => {
+    const c = new InflightCoalescer<string, string>();
+    let runs = 0;
+    const worker = async () => { runs++; return "ok"; };
+    await c.run("k1", worker);
+    await c.run("k1", worker);
+    expect(runs).toBe(2);
   });
-});
 
-describe("POST /api/digest/day/[date]", () => {
-  it("streams SSE events for a deterministic past-day digest (AI off)", async () => {
-    // Fixture: one entry on 2026-01-02
-    const dir = mkdtempSync(join(tmpdir(), "dig-route-post-"));
-    process.env.CCLENS_ENTRIES_DIR = dir;
-    process.env.CCLENS_AI_DISABLED = "1";
-
-    const entry = {
-      version: 2, session_id: "s1", local_day: "2026-01-02",
-      project: "/x", start_iso: "2026-01-02T10:00:00Z", end_iso: "2026-01-02T11:00:00Z",
-      numbers: {
-        active_min: 60, turn_count: 10, tools_total: 20, subagent_calls: 0,
-        skill_calls: 0, task_ops: 0, interrupts: 0, tool_errors: 0,
-        consec_same_tool_max: 0, exit_plan_calls: 0, prs: 0, commits: 0, pushes: 0, tokens_total: 0,
-      },
-      flags: [], primary_model: null, model_mix: {}, first_user: "", final_agent: "",
-      pr_titles: [], top_tools: [], skills: {}, subagents: [],
-      satisfaction_signals: { happy: 0, satisfied: 0, dissatisfied: 0, frustrated: 0 },
-      user_input_sources: { human: 0, teammate: 0, skill_load: 0, slash_command: 0 },
-      enrichment: { status: "pending", generated_at: null, model: null, cost_usd: null, error: null,
-        brief_summary: null, underlying_goal: null, friction_detail: null, user_instructions: [],
-        outcome: null, claude_helpfulness: null, goal_categories: {}, retry_count: 0 },
-      generated_at: "2026-01-02T11:00:00Z", source_jsonl: "/", source_checkpoint: { byte_offset: 0, last_event_ts: null },
-    };
-    writeFileSync(join(dir, "s1__2026-01-02.json"), JSON.stringify(entry));
-
-    const req = new Request("http://localhost/api/digest/day/2026-01-02", { method: "POST" });
-    const res = await POST(req, { params: Promise.resolve({ date: "2026-01-02" }) });
-    expect(res.headers.get("content-type")).toContain("text/event-stream");
-    const text = await res.text();
-    expect(text).toContain('"type":"digest"');
-    expect(text).toContain('"2026-01-02"');
+  it("drops entry after rejection and propagates the error", async () => {
+    const c = new InflightCoalescer<string, string>();
+    const failing = async (): Promise<string> => { throw new Error("boom"); };
+    await expect(c.run("k1", failing)).rejects.toThrow("boom");
+    // Still able to run a new one with that key
+    const ok = await c.run("k1", async () => "ok");
+    expect(ok).toBe("ok");
   });
 });
 ```
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `pnpm -F @claude-lens/web test api-digest-day`
-Expected: module not found.
+Run: `pnpm -F @claude-lens/web test inflight-coalesce`
+Expected: `Cannot find module './inflight-coalesce'`.
 
-- [ ] **Step 4: Write the route**
+- [ ] **Step 4: Implement `inflight-coalesce.ts`**
+
+Create `apps/web/lib/inflight-coalesce.ts`:
+
+```ts
+/**
+ * Small typed coalescer. Multiple callers with the same key share one
+ * worker execution; the Map entry clears on both fulfilment and rejection
+ * so subsequent same-key calls restart the work.
+ */
+export class InflightCoalescer<K, V> {
+  private readonly map = new Map<K, Promise<V>>();
+
+  async run(key: K, worker: () => Promise<V>): Promise<V> {
+    const existing = this.map.get(key);
+    if (existing) return existing;
+    const p = worker();
+    this.map.set(key, p);
+    try {
+      return await p;
+    } finally {
+      this.map.delete(key);
+    }
+  }
+
+  inflight(key: K): boolean {
+    return this.map.has(key);
+  }
+}
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `pnpm -F @claude-lens/web test inflight-coalesce`
+Expected: all 4 tests pass.
+
+- [ ] **Step 6: Write the route (consumes the coalescer)**
 
 Create `apps/web/app/api/digest/day/[date]/route.ts`:
 
 ```ts
-import { runDayDigestPipeline, readSettings } from "@claude-lens/entries/node";
+import { runDayDigestPipeline, readSettings, getTodayDigestFromCache } from "@claude-lens/entries/node";
 import type { PipelineEvent } from "@claude-lens/entries/node";
 import { readDayDigest } from "@claude-lens/entries/fs";
+import { InflightCoalescer } from "@/lib/inflight-coalesce";
 import { isValidDate, todayLocal } from "@/lib/entries";
 
 export const runtime = "nodejs";
@@ -2806,9 +2850,9 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ date: string }> };
 
-// Concurrency coalescing: second caller for same (date, force) awaits the
-// first and receives the final digest as a single event.
-const inflight = new Map<string, Promise<void>>();
+// Keyed by `${date}|${force ? 1 : 0}`. force=1 requests never coalesce
+// with force=0 (different key), matching spec §S2.
+const coalescer = new InflightCoalescer<string, void>();
 
 export async function GET(_req: Request, ctx: Params) {
   const { date } = await ctx.params;
@@ -2816,7 +2860,8 @@ export async function GET(_req: Request, ctx: Params) {
   if (date > todayLocal()) return new Response(JSON.stringify({ error: "future date" }), { status: 400, headers: { "content-type": "application/json" } });
 
   if (date === todayLocal()) {
-    // TODO Phase 2.x — if in-memory cache has it, serve. Otherwise 204 + hint to POST.
+    const cached = getTodayDigestFromCache(date, Date.now());
+    if (cached) return new Response(JSON.stringify(cached), { status: 200, headers: { "content-type": "application/json" } });
     return new Response(JSON.stringify({ pending: true, today: true }), { status: 200, headers: { "content-type": "application/json" } });
   }
 
@@ -2852,25 +2897,15 @@ export async function POST(req: Request, ctx: Params) {
         }
       }
 
-      // Coalescing: a second caller for the same (date, force) pair waits
-      // on the in-flight promise and emits only the final digest event.
-      const existing = inflight.get(key);
-      if (existing) {
-        try {
-          await existing;
-          const d = readDayDigest(date);
-          if (d) send({ type: "digest", digest: d });
-        } catch (err) {
-          send({ type: "error", message: (err as Error).message });
-        }
-        send({ type: "status", phase: "persist", text: "coalesced with in-flight request" });
-        try { controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`)); } catch {}
-        finish();
-        return;
-      }
+      const alreadyInflight = coalescer.inflight(key);
 
-      const runPromise = (async () => {
-        try {
+      try {
+        await coalescer.run(key, async () => {
+          if (alreadyInflight) {
+            // This caller is coalescing onto an in-flight pipeline — the
+            // primary path below will finalize. Do nothing.
+            return;
+          }
           for await (const ev of runDayDigestPipeline(date, {
             settings: settings.ai_features,
             force,
@@ -2878,16 +2913,17 @@ export async function POST(req: Request, ctx: Params) {
           })) {
             send(ev);
           }
-        } catch (err) {
-          send({ type: "error", message: (err as Error).message });
-        }
-      })();
-      inflight.set(key, runPromise);
+        });
 
-      try {
-        await runPromise;
+        if (alreadyInflight) {
+          // Send the final digest to the coalesced caller so they get something.
+          const d = readDayDigest(date) ?? getTodayDigestFromCache(date, Date.now());
+          if (d) send({ type: "digest", digest: d });
+          send({ type: "status", phase: "persist", text: "coalesced with in-flight request" });
+        }
+      } catch (err) {
+        send({ type: "error", message: (err as Error).message });
       } finally {
-        inflight.delete(key);
         try { controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`)); } catch {}
         finish();
       }
@@ -2905,22 +2941,27 @@ export async function POST(req: Request, ctx: Params) {
 }
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 7: Typecheck**
 
-Run: `pnpm -F @claude-lens/web test api-digest-day`
-Expected: all pass.
+Run: `pnpm -F @claude-lens/web typecheck`
+Expected: clean. The route's behavior is covered by the smoke route added in Task 24 and the underlying pipeline unit tests from Tasks 14-16.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add apps/web/app/api/digest/day/[date]/route.ts apps/web/lib/entries.ts \
-        apps/web/test/api-digest-day.test.ts
+        apps/web/lib/inflight-coalesce.ts apps/web/lib/inflight-coalesce.test.ts
 git commit -m "feat(web/api): /api/digest/day/[date] GET + POST SSE
 
-- GET: read-only (cache or 'pending')
+- GET: read-only (today's TTL cache, past-day file cache, or pending)
 - POST: streams pipeline events (status/entry/digest/saved/done)
-- Coalesces concurrent POSTs by (date, force); force=1 never coalesces
-- Delegates to runDayDigestPipeline from @claude-lens/entries
+- InflightCoalescer dedupes concurrent same-key POSTs; force=1 uses a
+  separate key so it never coalesces with force=0 (matches spec §S2)
+- Delegates body to runDayDigestPipeline from @claude-lens/entries
+
+Route-level integration happens via scripts/smoke.mjs (Task 24) and
+the underlying runDayDigestPipeline tests — Next route handlers are
+awkward to unit-test without a running server.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
@@ -3422,7 +3463,12 @@ export function YesterdayHero() {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Typecheck**
+
+Run: `pnpm -F @claude-lens/web typecheck`
+Expected: clean.
+
+- [ ] **Step 3: Commit**
 
 ```bash
 git add apps/web/components/yesterday-hero.tsx
@@ -3498,7 +3544,12 @@ export function RecentDaysPanel() {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Typecheck**
+
+Run: `pnpm -F @claude-lens/web typecheck`
+Expected: clean.
+
+- [ ] **Step 3: Commit**
 
 ```bash
 git add apps/web/components/recent-days-panel.tsx
@@ -3570,6 +3621,35 @@ git commit -m "feat(web/home): YesterdayHero + RecentDaysPanel
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 23.5: `getTodayDigestFromCache` re-export
+
+**Files:**
+- Modify: `packages/entries/src/node.ts` (if `getTodayDigestFromCache` isn't already re-exported)
+
+- [ ] **Step 1: Ensure re-export**
+
+Open `packages/entries/src/node.ts`. Ensure:
+
+```ts
+export { getTodayDigestFromCache, setTodayDigestInCache } from "./digest-fs.js";
+```
+
+Task 12 committed this via the `./fs` subpath — the node-safe subpath should also re-export it so the web route can grab it from one place.
+
+- [ ] **Step 2: Typecheck + commit if changed**
+
+```bash
+pnpm -F @claude-lens/entries typecheck
+git add packages/entries/src/node.ts
+git commit -m "chore(entries/node): re-export today-digest cache helpers
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+```
+
+(If already committed in Task 12 as part of the ./fs subpath, this task is a no-op.)
 
 ---
 
