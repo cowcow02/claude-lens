@@ -39,7 +39,7 @@ This spec focuses on what master spec doesn't nail: the **SSE pipeline**, the **
 
 ## Amendments to master spec
 
-Two deliberate departures from `docs/superpowers/specs/2026-04-22-perception-layer-design.md`. Rationale documented here; master spec stays as the historical record.
+Four deliberate departures from `docs/superpowers/specs/2026-04-22-perception-layer-design.md`. Rationale documented here; master spec stays as the historical record.
 
 ### 1. `ai_features.enabled` defaults to `true`
 
@@ -57,7 +57,21 @@ Phase 1b gated enrichment per canonical project. Phase 2 removes this gate. One 
 
 Users who want to pause enrichment entirely flip the master toggle. If real-world usage later surfaces a need for per-project granularity (e.g. a shared client project with different rules), it can be added back as `excluded_projects: string[]` — additive, non-breaking.
 
-### 3. Concrete code impact
+### 3. `/api/digest/day/[date]` surface: GET read-only + POST SSE
+
+Master spec specified a GET-only route with `?generate=1` for synchronous generation and a 202-queued response for the default case. Phase 2 moves to **GET read-only + POST streams SSE**.
+
+**Why:** The fused enrichment+synth pipeline needs incremental progress events (one per entry) that don't fit a single HTTP response. SSE is already the idiomatic streaming pattern in this codebase (`/api/insights`), and forcing the client to poll a 202 introduces a state-machine on the client side that matches nothing else we ship. POST is the correct verb for "run a pipeline and produce a side-effect (cached digest file)."
+
+Phase 2's CLI also gains a `--force` flag that was unmentioned in master spec — mirror of `POST ?force=1`.
+
+### 4. `top_goal_categories` stores minutes, not counts
+
+Master spec defined `DayDigest.top_goal_categories: Array<{ category: string; count: number }>`. Phase 1b flipped `Entry.enrichment.goal_categories` values from counts to **minutes** (master spec ships this change inline via the 1b follow-up). The day-digest aggregation must therefore sum minutes, not counts.
+
+**New shape:** `top_goal_categories: Array<{ category: string; minutes: number }>` — top 5 by summed minutes. Field name explicitly carries the unit to prevent count-vs-minute confusion when the renderer reads it.
+
+### 5. Concrete code impact
 
 - `packages/entries/src/settings.ts`:
   - `AiFeaturesSettings.allowedProjects` field **removed**.
@@ -72,7 +86,7 @@ Users who want to pause enrichment entirely flip the master toggle. If real-worl
 - `apps/web/app/api/settings/route.ts`:
   - The Zod validator for PUT body drops `allowed_projects`. (Adding the Zod validator is itself one of the Phase 1b follow-ups — see §Phase 1b Follow-ups below.)
 
-### 4. Dogfood upgrade path
+### 6. Dogfood upgrade path
 
 The developer's live `~/.cclens/settings.json` contains `allowed_projects: ["/Users/cowcow02/Repo/claude-lens"]`. First `writeSettings()` after upgrade drops that key — no migration step needed. `enabled` stays whatever was already on disk (currently `true` from dogfood, which is the new default anyway).
 
@@ -104,17 +118,16 @@ export function buildDeterministicDigest(
 
 `buildDeterministicDigest` is a pure function — used when AI is off and by `generateDayDigest` as its first step before invoking the LLM. It populates everything in `DayDigest` except the five narrative fields.
 
-`generateDayDigest` flow:
+`generateDayDigest` is a **pure generator** — it does not write to disk or append spend. Persistence + spend-append are the pipeline helper's job (§S6). Flow:
 
 1. Call `buildDeterministicDigest(date, entries)` → base digest with narrative fields `null`.
-2. If `entries.length === 0` or all entries are `skipped_trivial`: return base digest unchanged.
+2. If `entries.length === 0` or all entries are `skipped_trivial`: return `{ digest: baseDigest, usage: null }`.
 3. Build the LLM prompt via `buildDigestUserPrompt(baseDigest, entries)`.
 4. Spawn `claude -p` with `DIGEST_SYSTEM_PROMPT` — same pattern as `enrichEntry`. See §Prompt design.
 5. Parse + validate via Zod.
-6. On success: return base digest with narrative fields populated. On parse failure: retry once with a "return valid JSON only" reminder. On second failure: return base digest with narrative fields `null` + a warning logged to stderr. The digest file is still written (with `null` narrative fields) so subsequent requests don't re-attempt indefinitely.
-7. Append a spend record with `kind: "day_digest"`, `ref: date`.
+6. On success: return `{ digest: baseDigestWithNarrative, usage }`. On parse failure: retry once with a "return valid JSON only" reminder. On second failure: return `{ digest: baseDigest, usage }` (narrative fields stay `null`) with `console.warn(...)` noting the failure. The returned `usage` reflects actual tokens consumed even on failure, so the pipeline can still spend-record them.
 
-`callLLM` is injectable for tests (same DI pattern as `enrichEntry`).
+`callLLM` is injectable for tests (same DI pattern as `enrichEntry`). The caller (always `runDayDigestPipeline`) owns atomic file writes and `appendSpend(...)`.
 
 ### S2. `/api/digest/day/[date]` route — SSE streaming
 
@@ -167,7 +180,7 @@ Pipeline stages, in order:
 4. **Persist.** For past days: write `~/.cclens/digests/day/{date}.json` atomically. For today: store in in-memory 10-min TTL cache, skip disk. Emit `saved` (past day) or no `saved` event (today).
 5. **Done.** Emit `digest` + `done`. Close stream.
 
-**Concurrency guard.** If two clients POST the same date simultaneously, the second request sees the first's in-flight work. Implementation: a `Map<string, Promise<DayDigest>>` keyed by date in the route module. Second caller `await`s the first's promise and streams the result as a single `digest` event (no intermediate `entry` events — cheaper than re-streaming). This avoids duplicate LLM work.
+**Concurrency guard.** If two clients POST the same `(date, force)` pair simultaneously, the second request sees the first's in-flight work. Implementation: a `Map<string, Promise<DayDigest>>` in the route module keyed by `${date}|${force ? 1 : 0}`. Second caller `await`s the first's promise and streams the result as a single `digest` event (no intermediate `entry` events — cheaper than re-streaming). A `force=1` POST arriving while a `force=0` request is in flight **does not coalesce** — the force request runs fresh under its own key. This is intentional: force is the user explicitly demanding a re-roll; coalescing would silently return the same content they're trying to replace.
 
 **AI-disabled POST.** If `ai_features.enabled === false`, POST skips the enrich + synth stages entirely and emits only a single `digest` event carrying `buildDeterministicDigest(date, entries)` + a `saved` event (for past days). Useful so the "Regenerate" button still works (it rewrites the deterministic-only digest after e.g. a new entry landed).
 
@@ -284,6 +297,8 @@ The two strongest narrative lines are chosen by truncation — take the first se
 - No narrative text — just the compact stat strip. Narrative discovery happens by clicking through.
 - For the current day (today), the row reads `"Today · Tue Apr 22   (live)"` and links to `/digest/{today}`.
 
+Grid: the existing bottom section changes from `grid-template-columns: 1fr 1.4fr` (two panels) to `grid-template-columns: minmax(260px, 1fr) minmax(260px, 1.4fr) minmax(260px, 1fr)` (three panels). This preserves the existing 1-to-1.4 ratio between Top projects and Recent sessions while giving Recent days the same compact ratio as Top projects. Responsive behavior: the grid still wraps on narrow viewports via the per-column `min` constraint. Conscious tradeoff vs `auto-fit, minmax(260px, 1fr)`: we keep the intentional widths at the cost of less graceful reflow. If dogfood reveals narrow-viewport pain, revisit with `auto-fit` in a follow-up.
+
 No "recent digest" cache or pre-fetching — the panel reads deterministic stats from Entries on disk (cheap — `listEntriesForDay` for each of 5 days ≈ 25 JSON reads).
 
 ### S5. `fleetlens digest day` CLI
@@ -334,9 +349,15 @@ export async function* runDayDigestPipeline(
 
 The web SSE route converts each yielded event to a `text/event-stream` frame. The CLI prints each event to stderr. Tests drive the generator directly, asserting yielded events in order.
 
-No new budget-guard: `runDayDigestPipeline` calls `monthToDateSpend()` the same way `runEnrichmentQueue` does, aborts mid-pipeline if the cap is breached. The daemon's background sweep and the foreground pipeline coordinate only via the append-only `llm-spend.jsonl` — no cross-process locks are added.
+No new budget-guard: `runDayDigestPipeline` calls `monthToDateSpend()` the same way `runEnrichmentQueue` does, aborts mid-pipeline if the cap is breached.
 
-**One interactive-priority hook:** `runDayDigestPipeline` writes `~/.cclens/llm-interactive.lock` with the current PID on start, removes on finish. The daemon's enrichment sweep checks for this file (fresh-mtime < 60s) and pauses for 30s before starting a new LLM call. This matches the master spec's documented interactive-priority mechanism — Phase 2 is where it actually gets implemented, since before Phase 2 there was no interactive LLM caller.
+**Race prevention between daemon and foreground.** Without a mitigation, daemon and foreground can both pick up the same Entry off-disk, both call `enrichEntry`, and both write the result — double work, double spend, potentially mismatched narratives. The fix is a **top-of-sweep lockout** in the daemon, not a per-entry lock:
+
+`runDayDigestPipeline` writes `~/.cclens/llm-interactive.lock` with its PID on start, removes on finish (and on error). `runEnrichmentQueue` (the daemon's sweep) checks for this lock **at the top of the function**, before listing entries. If the lock is present and its mtime is within 60s, the entire sweep returns `{skipped: "interactive_in_progress"}` and the daemon goes back to sleep for its next interval. Stale locks (older than 60s, or PID not alive) are treated as absent.
+
+This is a coarser guard than a per-entry lock but much simpler: the two worst-case outcomes it prevents (double-write of the same Entry; double-charged spend for the same work) are what matters. A sweep being skipped because the user is actively generating a digest is the correct tradeoff — the foreground request handles enrichment of that day's entries anyway, so the daemon has nothing urgent to do.
+
+`EnrichmentResult` gains one variant: `{skipped: "disabled" | "budget_cap_reached" | "interactive_in_progress"}`.
 
 ---
 
@@ -472,9 +493,9 @@ const SuggestionSchema = z.object({
 
 export const DayDigestResponseSchema = z.object({
   headline: z.string().min(1).max(160),
-  narrative: z.string().nullable(),
-  what_went_well: z.string().nullable(),
-  what_hit_friction: z.string().nullable(),
+  narrative: z.string().max(1200).nullable(),
+  what_went_well: z.string().max(400).nullable(),
+  what_hit_friction: z.string().max(400).nullable(),
   suggestion: SuggestionSchema.nullable(),
 }).passthrough();
 
@@ -556,7 +577,7 @@ apps/web/                                      ← pages + API + home cards + se
   lib/
     ai/digest-day-gen.ts                       NEW: generateDayDigest wrapper
     ai/digest-day-pipeline.ts                  NEW: runDayDigestPipeline generator
-    entries.ts                                 (if needed) server-only entry reader helper
+    entries.ts                                 NEW: server-only entry reader helper + date utils
 
 scripts/
   smoke.mjs                                    EDIT: add /settings + /digest/yesterday
@@ -595,6 +616,13 @@ scripts/
 - **Settings migration:** a `~/.cclens/settings.json` with `allowed_projects: ["/x"]` round-trips through `readSettings → writeSettings` and loses `allowed_projects` but retains `enabled` / `model` / `monthly_budget_usd`.
 - **Default-on:** a missing `~/.cclens/settings.json` (fresh install) yields `readSettings().ai_features.enabled === true`.
 
+### Pipeline / race tests
+
+- **Concurrent POST coalescing** (§S2): two simultaneous `POST /api/digest/day/X` with `force=0` invoke `runDayDigestPipeline` exactly once. Mock `callLLM` counter asserts one call, both clients receive the same digest.
+- **`force=1` bypass** (§S2): while a `force=0` POST is in flight, a `force=1` POST for the same date runs its own pipeline, invoking `callLLM` a second time.
+- **Daemon-vs-foreground lockout** (§S6): `runEnrichmentQueue` with a fresh `llm-interactive.lock` present returns `{skipped: "interactive_in_progress"}` without loading entries. Stale lock (mtime >60s) treated as absent.
+- **Yesterday hero "no activity" fallback** (§S4.A): with zero entries for yesterday but entries present for a prior day, the hero renders "You were last active …" pointing at the most recent active day's digest URL.
+
 ### Smoke (`scripts/smoke.mjs`)
 
 Add routes:
@@ -622,7 +650,7 @@ Before merging `feat/v2-perception-phase-2` → `feat/v2-perception-insights`:
 - **Live-Entry enrichment** (enriching today's in-flight entries) — master spec keeps enrichment on settled days only; Phase 2 doesn't change this.
 - **Hash-based staleness detection / auto-regen-on-read** — per §Staleness model.
 - **Streaming-progress CLI SSE** — the CLI uses stderr line prints instead. The web route uses SSE because that's the idiomatic streaming API in Next; the CLI already has a streaming channel (stderr).
-- **Home-page restructure** (removing metric cards, re-ordering sections beyond hero-above-DashboardView) — deferred, revisit after dogfood feedback.
+- **Home-page restructure** (removing metric cards, re-ordering the metric-card row, collapsing the Top projects panel into the Projects section of the hero, or any layout changes beyond hero-above-`DashboardView`) — deferred, revisit after dogfood feedback.
 - **Entry-aware surfaces on /timeline, /sessions, /calendar, /projects** — Phase 3.
 - **Local-model / Ollama enrichment fallback** — still not planned.
 - **Budget hard-enforce** (`enforce_hard_budget` flag) — still not planned.
@@ -656,6 +684,8 @@ None. Decisions in this spec:
 - Home layout: hero above `<DashboardView>` + Recent days as third panel in bottom row — **locked**. `<DashboardView>` stays unchanged; further restructure deferred.
 - `ai_features.enabled` default-true, `allowed_projects` removed — **locked**.
 - Day digest prompt: five-field output, second-person voice, null-allowed for `narrative` / `what_went_well` / `what_hit_friction` / `suggestion` — **locked**.
+- Daemon-vs-foreground race prevention via top-of-sweep `llm-interactive.lock` check — **locked**. No per-entry locks.
+- Concurrent-POST coalescing keyed by `(date, force)` pair; `force=1` never coalesces with `force=0` — **locked**.
 
 ---
 
