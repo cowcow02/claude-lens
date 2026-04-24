@@ -12,6 +12,8 @@ import {
 import { DashboardView } from "@/components/dashboard-view";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { LiveBadge } from "@/components/live-badge";
+import { YesterdayHero } from "@/components/yesterday-hero";
+import { RecentDaysPanel } from "@/components/recent-days-panel";
 import { cutoffMs, parseRange } from "@/lib/date-range";
 import { listSessions } from "@/lib/data";
 import { formatDuration, formatTokens, formatRelative, prettyProjectName } from "@/lib/format";
@@ -106,13 +108,15 @@ export default async function DashboardHome({
         <DateRangeFilter current={range} />
       </header>
 
+      <YesterdayHero />
+
       <DashboardView sessions={sessions} />
 
-      {/* Top projects + Recent sessions */}
+      {/* Top projects + Recent sessions + Recent days */}
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1.4fr",
+          gridTemplateColumns: "minmax(260px, 1fr) minmax(260px, 1.4fr) minmax(260px, 1fr)",
           gap: 16,
         }}
       >
@@ -301,6 +305,8 @@ export default async function DashboardHome({
             )}
           </div>
         </div>
+
+        <RecentDaysPanel />
       </section>
     </div>
   );
