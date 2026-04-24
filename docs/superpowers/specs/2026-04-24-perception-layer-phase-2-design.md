@@ -182,7 +182,7 @@ Pipeline stages, in order:
 
 **Concurrency guard.** If two clients POST the same `(date, force)` pair simultaneously, the second request sees the first's in-flight work. Implementation: a `Map<string, Promise<DayDigest>>` in the route module keyed by `${date}|${force ? 1 : 0}`. Second caller `await`s the first's promise and streams the result as a single `digest` event (no intermediate `entry` events — cheaper than re-streaming). A `force=1` POST arriving while a `force=0` request is in flight **does not coalesce** — the force request runs fresh under its own key. This is intentional: force is the user explicitly demanding a re-roll; coalescing would silently return the same content they're trying to replace.
 
-**AI-disabled POST.** If `ai_features.enabled === false`, POST skips the enrich + synth stages entirely and emits only a single `digest` event carrying `buildDeterministicDigest(date, entries)` + a `saved` event (for past days). Useful so the "Regenerate" button still works (it rewrites the deterministic-only digest after e.g. a new entry landed).
+**AI-disabled POST.** If `ai_features.enabled === false`, POST skips the enrich + synth stages entirely and emits only a single `digest` event carrying `buildDeterministicDigest(date, entries)` + a `saved` event (for past days). Useful so the "Regenerate" button still works (it rewrites the deterministic-only digest after e.g. a new entry landed). Coalescing still applies to the AI-off path (same `(date, force)` key); the work is cheap but the map guard avoids redundant file writes from concurrent clicks.
 
 #### Force regeneration
 
@@ -628,7 +628,7 @@ scripts/
 Add routes:
 
 - `/settings` → 200
-- `/digest/yesterday` → redirect or 200 (TBD: prefer a real `/digest/[date]` URL computed at smoke time, to avoid flakiness around midnight)
+- `/digest/[date]` where `date` is computed at smoke time as `yesterday` in the runner's local TZ (avoids midnight-boundary flakes). The smoke script's route list is built dynamically for this one entry. Expect 200 regardless of whether entries exist — the page renders the empty-day fallback.
 
 ### Manual dogfood
 
