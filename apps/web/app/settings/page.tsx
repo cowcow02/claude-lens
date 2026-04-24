@@ -1,9 +1,8 @@
-import { readSettings, monthToDateSpend } from "@claude-lens/entries/node";
+import { readSettings } from "@claude-lens/entries/node";
 import { AiFeaturesForm } from "./ai-features-form";
 
 export default function SettingsPage() {
   const s = readSettings();
-  const spend = monthToDateSpend();
   return (
     <main className="mx-auto max-w-2xl p-6 space-y-8">
       <h1 className="text-2xl font-semibold">Fleetlens Settings</h1>
@@ -14,14 +13,7 @@ export default function SettingsPage() {
           narratives by spawning your local <code>claude</code> CLI (uses your
           existing Claude Code auth — no API key required).
         </p>
-        <AiFeaturesForm
-          initial={{
-            enabled: s.ai_features.enabled,
-            model: s.ai_features.model,
-            monthlyBudgetUsd: s.ai_features.monthlyBudgetUsd,
-          }}
-          monthToDateSpend={spend}
-        />
+        <AiFeaturesForm initial={{ enabled: s.ai_features.enabled }} />
       </section>
     </main>
   );

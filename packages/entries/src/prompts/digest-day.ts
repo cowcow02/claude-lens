@@ -47,9 +47,11 @@ CRITICAL RULES:
 
 - Second-person ("you ..."), not third-person.
 - Copy the user's phrasings where useful; do not invent features or outcomes not in the input.
-- Do not mention a project unless it's in DAY FACTS.projects.
+- Do not mention a project unless it's in DAY FACTS.projects AND that project has a non-trivial entry (outcome != "trivial") in per_entry.
+- **Attribute every PR to its correct project using the per_entry list** — never join a PR title with a project from a different entry. If a project only has a trivial/warmup entry, do NOT describe any deliverable as happening in it.
 - Do not fabricate PR counts, commits, or timestamps.
 - If input is sparse (<= 2 entries or <= 10 active_min), err shorter — a one-line headline + null narrative is fine.
+- **A day where only trivial/warmup entries exist has no "shipped" work** — say so plainly; do not imply deliverables that didn't happen.
 
 RESPOND WITH ONLY VALID JSON (no prose, no code fence):
 
@@ -94,16 +96,31 @@ export function buildDigestUserPrompt(base: DayDigest, entries: Entry[]): string
     .map((s, i) => `${i + 1}. ${trunc(s, 240)}`)
     .join("\n");
 
+  // Build per-entry facet so LLM can correlate: project, active_min, outcome,
+  // pr_titles, flags, brief_summary. Prevents mis-attribution of PRs to
+  // worktrees where no work actually happened (e.g., trivial warmup entries).
+  const per_entry = entries.map(e => ({
+    project: prettyProject(e.project),
+    active_min: Math.round(e.numbers.active_min * 10) / 10,
+    outcome: e.enrichment.outcome ?? "pending",
+    pr_titles: e.pr_titles,
+    flags: e.flags,
+    brief_summary: e.enrichment.status === "done" ? e.enrichment.brief_summary : null,
+    friction_detail: e.enrichment.status === "done" ? e.enrichment.friction_detail : null,
+  }));
+
   const facts = {
     date: base.key,
     agent_min: base.agent_min,
     project_count: base.projects.length,
-    projects: base.projects.map(p => ({ name: p.display_name, share_pct: p.share_pct })),
-    shipped_count: base.shipped.length,
-    shipped_titles: base.shipped.map(s => s.title),
+    projects: base.projects.map(p => ({
+      name: p.display_name, share_pct: p.share_pct, entry_count: p.entry_count,
+    })),
+    shipped: base.shipped.map(s => ({ title: s.title, project: s.project })),
     concurrency_peak: base.concurrency_peak,
     top_flags: base.top_flags,
     top_goal_categories: base.top_goal_categories,
+    per_entry,
   };
 
   return `DAY FACTS:

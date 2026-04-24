@@ -25,6 +25,11 @@ export async function PUT(req: Request) {
       { status: 400 },
     );
   }
-  writeSettings({ ai_features: parsed.data.ai_features });
+  // Preserve other on-disk fields (model, monthlyBudgetUsd) — UI no longer edits
+  // them, but the settings module and queue still read them. Only enabled flips.
+  const current = readSettings();
+  writeSettings({
+    ai_features: { ...current.ai_features, enabled: parsed.data.ai_features.enabled },
+  });
   return NextResponse.json({ ok: true });
 }

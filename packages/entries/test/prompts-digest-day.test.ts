@@ -94,23 +94,27 @@ describe("DayDigestResponseSchema", () => {
 });
 
 describe("buildDigestUserPrompt", () => {
-  it("caps summaries at 12, frictions at 6, instructions at 10", () => {
+  it("caps summaries at 12, frictions at 6, instructions at 10 (ENTRY SUMMARIES / FRICTION LINES / USER INSTRUCTIONS sections)", () => {
     const entries: Entry[] = [];
     for (let i = 0; i < 20; i++) {
       entries.push(mkEntry({
         session_id: `s${i}`,
         enrichment: {
           ...mkEntry().enrichment,
-          brief_summary: `summary ${i}`,
-          friction_detail: `friction ${i}`,
-          user_instructions: [`instr ${i}-a`, `instr ${i}-b`],
+          brief_summary: `SSS${i}`,
+          friction_detail: `FFF${i}`,
+          user_instructions: [`III${i}-a`, `III${i}-b`],
         },
       }));
     }
     const prompt = buildDigestUserPrompt(mkBase(), entries);
-    const summaries = (prompt.match(/summary \d+/g) ?? []).length;
-    const frictions = (prompt.match(/^\d+\. friction /gm) ?? []).length;
-    const instructions = (prompt.match(/^\d+\. instr /gm) ?? []).length;
+    // Count only "- (repo, ..m) SSS<N>" lines in the ENTRY SUMMARIES section.
+    const summariesSection = prompt.split("ENTRY SUMMARIES")[1]?.split("FRICTION LINES")[0] ?? "";
+    const summaries = (summariesSection.match(/SSS\d+/g) ?? []).length;
+    const frictionsSection = prompt.split("FRICTION LINES")[1]?.split("USER INSTRUCTIONS")[0] ?? "";
+    const frictions = (frictionsSection.match(/FFF\d+/g) ?? []).length;
+    const instructionsSection = prompt.split("USER INSTRUCTIONS")[1] ?? "";
+    const instructions = (instructionsSection.match(/III\d+/g) ?? []).length;
     expect(summaries).toBeLessThanOrEqual(12);
     expect(frictions).toBeLessThanOrEqual(6);
     expect(instructions).toBeLessThanOrEqual(10);
