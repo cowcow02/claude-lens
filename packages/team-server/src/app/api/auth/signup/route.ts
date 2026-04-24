@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
   }
 
   let user;
-  let promotedToStaff = false;
+  let promotedToStaff;
   try {
     const created = await createFirstOrSubsequentUser(email, password, displayName, pool);
     user = created.user;
