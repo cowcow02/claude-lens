@@ -62,7 +62,24 @@ export async function* runDayDigestPipeline(
   try {
     // Stage 1: enrich
     if (aiOn) {
-      const pending = entries.filter(e => {
+      // Force rescue: entries permanently stuck at retry_count >= MAX_RETRY_COUNT
+      // get reset to pending+retry_count=0 so a force regen can try them again.
+      // Prior runs of these entries may have failed due to rate-limits that
+      // we now detect (and don't count) — but pre-fix entries are still stuck.
+      if (opts.force) {
+        for (const e of entries) {
+          if (e.enrichment.status === "error" && (e.enrichment.retry_count ?? 0) >= MAX_RETRY_COUNT) {
+            const rescued: Entry = {
+              ...e,
+              enrichment: { ...e.enrichment, status: "pending", retry_count: 0, error: null },
+            };
+            writeEntry(rescued);
+          }
+        }
+      }
+      // Re-read after any rescue writes so we pick up the now-pending entries.
+      const freshForEnrich = opts.force ? listEntriesForDay(date) as Entry[] : entries;
+      const pending = freshForEnrich.filter(e => {
         if (e.enrichment.status !== "pending" && e.enrichment.status !== "error") return false;
         if ((e.enrichment.retry_count ?? 0) >= MAX_RETRY_COUNT) return false;
         if (e.local_day === opts.todayLocalDay) return false;
