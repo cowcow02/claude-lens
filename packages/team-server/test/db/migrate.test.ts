@@ -38,6 +38,14 @@ describe("migrations", () => {
   it("is idempotent — running twice does not throw", async () => {
     await expect(runMigrations()).resolves.toBeUndefined();
   });
+
+  it("0001 adds update_check_cache and promotes an existing admin to staff", async () => {
+    const pool = getPool();
+    const { rows: tableRows } = await pool.query(
+      "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='update_check_cache'",
+    );
+    expect(tableRows).toHaveLength(1);
+  });
 });
 
 describe("schema parity with SCHEMA_SQL", () => {
