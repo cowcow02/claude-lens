@@ -5,3 +5,5 @@ export * from "./budget.js";
 export * from "./prompts/enrich.js";
 export * from "./queue.js";
 export * from "./settings.js";
+export * from "./digest-day.js";
+export * from "./prompts/digest-day.js";
