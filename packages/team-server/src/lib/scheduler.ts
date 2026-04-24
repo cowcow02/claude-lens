@@ -25,7 +25,7 @@ export function startScheduler(): void {
 
   setInterval(async () => {
     try {
-      const { checkNow } = await import("./self-update/service.js");
+      const { checkNow } = await import("./self-update/service");
       await checkNow();
     } catch (err) {
       console.warn("[scheduler] checkForUpdates failed:", err);
@@ -36,7 +36,7 @@ export function startScheduler(): void {
   // first status. Non-blocking — boot path proceeds regardless.
   setTimeout(async () => {
     try {
-      const { checkNow } = await import("./self-update/service.js");
+      const { checkNow } = await import("./self-update/service");
       await checkNow();
     } catch (err) {
       console.warn("[scheduler] initial checkForUpdates failed:", err);
