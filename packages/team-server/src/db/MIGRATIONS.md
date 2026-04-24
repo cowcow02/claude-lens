@@ -64,6 +64,42 @@ If the new migration drops a column the old code still writes to, the
 old revision errors on every write during the swap window. Expand/contract
 keeps every intermediate schema state backwards-compatible.
 
+## Upgrade-path data migration: staff promotion (0001)
+
+v0.5.0 introduces `requireStaff`-gated admin routes + first-signup auto-promotion
+(see `packages/team-server/src/lib/auth.ts:createFirstOrSubsequentUser`). Fresh
+installs bootstrap a staff user on first signup. But existing v0.4.x deployments
+have users with `is_staff=false` (column default) and no one to click "Apply
+Update" on upgrade.
+
+The 0001 migration (landing in Chunk 4 alongside the `update_check_cache` schema
+change) includes an idempotent data statement that promotes the earliest team
+admin — a reasonable proxy for "whoever installed this server" — to staff:
+
+```sql
+-- Promote the earliest team admin to staff on upgrade so v0.4.x deployments
+-- have at least one staff user after upgrading to v0.5.0. Idempotent: the
+-- NOT EXISTS clause makes this a no-op on fresh installs where first-signup
+-- already promoted someone.
+UPDATE user_accounts
+SET is_staff = true
+WHERE id IN (
+  SELECT m.user_account_id
+  FROM memberships m
+  JOIN teams t ON t.id = m.team_id
+  WHERE m.role = 'admin' AND m.revoked_at IS NULL
+  ORDER BY t.created_at ASC, m.joined_at ASC
+  LIMIT 1
+)
+AND NOT EXISTS (SELECT 1 FROM user_accounts WHERE is_staff = true);
+```
+
+The SQL is bundled with the `update_check_cache` schema change rather than living
+in its own data-only migration, because Drizzle's journal + snapshot format is
+awkward for migrations that don't change schema. See
+`docs/superpowers/specs/2026-04-22-team-edition-self-update-design.md` Section 5a
+for the full staff-management spec.
+
 ## Review checklist (for authors AND reviewers)
 
 - [ ] Does the generated `.sql` match the changes you expected, with no surprises?

@@ -6,6 +6,7 @@ import {
   requireSession,
   requireTeamMembership,
   requireAdmin,
+  requireStaff,
   type TeamContext,
 } from "../../src/lib/route-helpers.js";
 import { createUserAccount, createSession } from "../../src/lib/auth.js";
@@ -120,6 +121,35 @@ describe("requireTeamMembership", () => {
     const result = await requireTeamMembership(req, teamSlug, { bySlug: true });
     expect(result instanceof NextResponse).toBe(true);
     expect((result as NextResponse).status).toBe(401);
+  });
+});
+
+describe("requireStaff", () => {
+  it("returns 401 when no session cookie is present", async () => {
+    const req = makeNextReq("http://localhost/api/admin/updates");
+    const res = await requireStaff(req);
+    expect(res).toBeInstanceOf(NextResponse);
+    expect((res as NextResponse).status).toBe(401);
+  });
+
+  it("returns 403 when the session is valid but is_staff is false", async () => {
+    const u = await createUserAccount("non-staff@example.com", "pass1234", "U", {}, pool);
+    const { cookieToken } = await createSession(u.id, pool);
+    const req = makeNextReqWithCookie(cookieToken, "http://localhost/api/admin/updates");
+    const res = await requireStaff(req);
+    expect(res).toBeInstanceOf(NextResponse);
+    expect((res as NextResponse).status).toBe(403);
+  });
+
+  it("returns the SessionContext when is_staff is true", async () => {
+    const u = await createUserAccount("staff@example.com", "pass1234", "S", {}, pool);
+    await pool.query("UPDATE user_accounts SET is_staff = true WHERE id = $1", [u.id]);
+    const { cookieToken } = await createSession(u.id, pool);
+    const req = makeNextReqWithCookie(cookieToken, "http://localhost/api/admin/updates");
+    const res = await requireStaff(req);
+    expect(res).not.toBeInstanceOf(NextResponse);
+    const ctx = res as Awaited<ReturnType<typeof requireStaff>> & { user: { is_staff: boolean } };
+    expect(ctx.user.is_staff).toBe(true);
   });
 });
 

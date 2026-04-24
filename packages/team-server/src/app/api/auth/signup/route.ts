@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "../../../../db/pool";
-import { createUserAccount, createSession } from "../../../../lib/auth";
+import { createFirstOrSubsequentUser, createSession } from "../../../../lib/auth";
 import { createTeamWithAdmin } from "../../../../lib/teams";
 import { lookupInvite, redeemInvite } from "../../../../lib/members";
 import { instanceState, setConfig } from "../../../../lib/server-config";
@@ -65,8 +65,11 @@ export async function POST(req: NextRequest) {
   }
 
   let user;
+  let promotedToStaff;
   try {
-    user = await createUserAccount(email, password, displayName, { isStaff: isFirstUser }, pool);
+    const created = await createFirstOrSubsequentUser(email, password, displayName, pool);
+    user = created.user;
+    promotedToStaff = created.promotedToStaff;
   } catch (err) {
     if (err instanceof Error && /unique|duplicate/i.test(err.message)) {
       return NextResponse.json({ error: "An account with this email already exists" }, { status: 409 });
@@ -74,10 +77,13 @@ export async function POST(req: NextRequest) {
     throw err;
   }
 
+  // `promotedToStaff` is the authoritative first-user signal — it's decided
+  // inside the advisory-locked transaction. `isFirstUser` (from instanceState)
+  // is a pre-transaction hint, used only for gating + teamName validation.
   let landingSlug: string | null = null;
   let deviceToken: string | null = null;
 
-  if (isFirstUser) {
+  if (promotedToStaff) {
     const { team, membership } = await createTeamWithAdmin(teamName, user.id, pool);
     landingSlug = team.slug;
     deviceToken = membership.bearerToken;

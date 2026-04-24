@@ -148,3 +148,12 @@ export const serverConfig = pgTable("server_config", {
   value: text("value").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const updateCheckCache = pgTable("update_check_cache", {
+  key: text("key").primaryKey(),
+  currentVersion: text("current_version"),
+  latestVersion: text("latest_version"),
+  updateAvailable: boolean("update_available").notNull().default(false),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }).notNull().defaultNow(),
+  lastUpdateAttempt: jsonb("last_update_attempt"),
+});
