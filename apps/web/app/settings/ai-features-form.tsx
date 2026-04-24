@@ -24,7 +24,8 @@ export function AiFeaturesForm({
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
 
-  async function save() {
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
     setSaving(true);
     setSavedMsg(null);
     const res = await fetch("/api/settings", {
@@ -50,7 +51,7 @@ export function AiFeaturesForm({
   }
 
   return (
-    <div className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
         <span>Enable Entry enrichment</span>
@@ -109,13 +110,13 @@ export function AiFeaturesForm({
       </p>
 
       <button
-        onClick={save}
+        type="submit"
         disabled={saving}
         className="px-3 py-1 border rounded bg-black text-white disabled:opacity-60"
       >
         {saving ? "Saving…" : "Save"}
       </button>
       {savedMsg && <p className="text-sm">{savedMsg}</p>}
-    </div>
+    </form>
   );
 }
