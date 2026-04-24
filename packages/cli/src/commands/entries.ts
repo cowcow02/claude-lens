@@ -142,9 +142,16 @@ Usage:
   fleetlens entries --session UUID             All entries for a given session
   fleetlens entries --all                      All entries in the store
   fleetlens entries regenerate [--since D] [--force] [--json]
-                                               Re-run enrichment. --force resets
-                                               status+retry_count on matched non-trivial
-                                               Entries (skipped_trivial NOT reset).
+                                               Re-run enrichment. Without --force,
+                                               only processes Entries whose current
+                                               status is pending/error and whose
+                                               retry_count < 3.
+                                               --force resets status+retry_count on
+                                               matched done/error/pending Entries
+                                               (skipped_trivial NOT reset).
+                                               --since YYYY-MM-DD filters the
+                                               --force reset set; it has NO effect
+                                               without --force.
 
 Exit codes:
   0 — success (or no-op)
