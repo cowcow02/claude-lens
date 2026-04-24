@@ -10,11 +10,10 @@ import type { Entry } from "../src/types.js";
 import { pendingEnrichment } from "../src/types.js";
 
 // AiFeaturesSettings shape — inline to keep this test independent of settings.ts
-// helper functions (added in Task 9). The queue only reads these five fields.
+// helper functions. The queue only reads these four fields.
 type QueueSettings = {
   enabled: boolean;
   model: string;
-  allowedProjects: string[];
   monthlyBudgetUsd: number | null;
 };
 
@@ -63,18 +62,12 @@ describe("runEnrichmentQueue", () => {
   const baseSettings: QueueSettings = {
     enabled: true,
     model: "sonnet",
-    allowedProjects: ["/Users/test/foo"],
     monthlyBudgetUsd: null,
   };
 
   it("returns skipped:disabled when ai_features.enabled is false", async () => {
     const r = await runEnrichmentQueue({ ...baseSettings, enabled: false });
     expect(r).toEqual({ skipped: "disabled" });
-  });
-
-  it("returns skipped:no_allowed_projects when allowedProjects is empty", async () => {
-    const r = await runEnrichmentQueue({ ...baseSettings, allowedProjects: [] });
-    expect(r).toEqual({ skipped: "no_allowed_projects" });
   });
 
   it("enriches a pending Entry and writes the result + a spend record with real token counts", async () => {
@@ -133,15 +126,6 @@ describe("runEnrichmentQueue", () => {
       project: "/Users/test/foo",
       end_iso: new Date(now - 15 * 60 * 1000).toISOString(),
     });
-    writeEntry(entry);
-    const callLLM: CallLLM = vi.fn();
-    const r = await runEnrichmentQueue(baseSettings, { callLLM });
-    expect("enriched" in r ? r.enriched : 0).toBe(0);
-    expect(callLLM).not.toHaveBeenCalled();
-  });
-
-  it("skips Entries whose project is not in allowedProjects", async () => {
-    const entry = mkEntry({ local_day: "2026-04-20", project: "/Users/other/bar" });
     writeEntry(entry);
     const callLLM: CallLLM = vi.fn();
     const r = await runEnrichmentQueue(baseSettings, { callLLM });

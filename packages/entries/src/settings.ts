@@ -7,7 +7,6 @@ import { homedir } from "node:os";
 export type AiFeaturesSettings = {
   enabled: boolean;
   model: string;
-  allowedProjects: string[];
   monthlyBudgetUsd: number | null;
 };
 
@@ -17,9 +16,8 @@ export type Settings = {
 
 const DEFAULT_SETTINGS: Settings = {
   ai_features: {
-    enabled: false,
+    enabled: true,
     model: "sonnet",
-    allowedProjects: [],
     monthlyBudgetUsd: null,
   },
 };
@@ -37,12 +35,10 @@ export function __setSettingsPathForTest(path: string): void {
   settingsPathCached = path;
 }
 
-/** On-disk shape uses snake_case; in-memory shape uses camelCase. */
 type SettingsOnDisk = {
   ai_features: {
     enabled: boolean;
     model: string;
-    allowed_projects: string[];
     monthly_budget_usd: number | null;
   };
 };
@@ -52,7 +48,6 @@ function toDisk(s: Settings): SettingsOnDisk {
     ai_features: {
       enabled: s.ai_features.enabled,
       model: s.ai_features.model,
-      allowed_projects: s.ai_features.allowedProjects,
       monthly_budget_usd: s.ai_features.monthlyBudgetUsd,
     },
   };
@@ -64,7 +59,6 @@ function fromDisk(d: Partial<SettingsOnDisk>): Settings {
     ai_features: {
       enabled: af.enabled ?? DEFAULT_SETTINGS.ai_features.enabled,
       model: af.model ?? DEFAULT_SETTINGS.ai_features.model,
-      allowedProjects: af.allowed_projects ?? [],
       monthlyBudgetUsd: af.monthly_budget_usd ?? null,
     },
   };

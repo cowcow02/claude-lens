@@ -5,7 +5,7 @@ import type { AiFeaturesSettings } from "./settings.js";
 import type { Entry } from "./types.js";
 
 export type EnrichmentResult =
-  | { skipped: "disabled" | "no_allowed_projects" | "budget_cap_reached" }
+  | { skipped: "disabled" | "budget_cap_reached" }
   | { enriched: number; errors: number; skipped: number };
 
 export type EnrichmentQueueOptions = {
@@ -18,7 +18,6 @@ const THIRTY_MIN_MS = 30 * 60 * 1000;
 const MAX_RETRY_COUNT = 3;
 
 function toLocalDay(ms: number): string {
-  // Local-day in the reader's timezone, matching how buildEntries slices days.
   const d = new Date(ms);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -31,7 +30,6 @@ export async function runEnrichmentQueue(
   opts: EnrichmentQueueOptions = {},
 ): Promise<EnrichmentResult> {
   if (!settings.enabled) return { skipped: "disabled" };
-  if (settings.allowedProjects.length === 0) return { skipped: "no_allowed_projects" };
 
   const budget = settings.monthlyBudgetUsd ?? Infinity;
   if (monthToDateSpend() >= budget) return { skipped: "budget_cap_reached" };
@@ -41,7 +39,6 @@ export async function runEnrichmentQueue(
   const queue = listEntriesWithStatus(["pending", "error"])
     .filter(e => (e.enrichment.retry_count ?? 0) < MAX_RETRY_COUNT);
 
-  const allowed = new Set(settings.allowedProjects);
   const todayLocal = toLocalDay(now());
   let enriched = 0, errors = 0, skipped = 0;
 
@@ -49,10 +46,7 @@ export async function runEnrichmentQueue(
     if (entry.local_day === todayLocal) { skipped++; continue; }
     const endMs = Date.parse(entry.end_iso);
     if (!Number.isNaN(endMs) && now() - endMs < THIRTY_MIN_MS) { skipped++; continue; }
-    if (!allowed.has(entry.project)) { skipped++; continue; }
 
-    // Re-read spend each iteration — no in-memory cache. A long backfill that
-    // crosses the cap mid-run halts on the right Entry.
     if (monthToDateSpend() >= budget) break;
 
     try {
@@ -77,9 +71,6 @@ export async function runEnrichmentQueue(
         errors++;
       }
     } catch (err) {
-      // enrichEntry catches LLM/parse/schema failures internally and returns
-      // status="error". This branch only fires for framework-level failures
-      // (disk write, JSON stringification, object-literal programming errors).
       errors++;
       const failed: Entry = {
         ...entry,

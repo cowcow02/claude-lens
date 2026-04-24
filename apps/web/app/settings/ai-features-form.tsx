@@ -4,20 +4,17 @@ import { useState } from "react";
 type Initial = {
   enabled: boolean;
   model: string;
-  allowedProjects: string[];
   monthlyBudgetUsd: number | null;
 };
 
 export function AiFeaturesForm({
-  initial, projectCandidates, monthToDateSpend,
+  initial, monthToDateSpend,
 }: {
   initial: Initial;
-  projectCandidates: string[];
   monthToDateSpend: number;
 }) {
   const [enabled, setEnabled] = useState(initial.enabled);
   const [model, setModel] = useState(initial.model);
-  const [allowedProjects, setAllowedProjects] = useState<string[]>(initial.allowedProjects);
   const [budget, setBudget] = useState<string>(
     initial.monthlyBudgetUsd === null ? "" : String(initial.monthlyBudgetUsd),
   );
@@ -35,7 +32,6 @@ export function AiFeaturesForm({
         ai_features: {
           enabled,
           model,
-          allowedProjects,
           monthlyBudgetUsd: budget === "" ? null : Number(budget),
         },
       }),
@@ -44,17 +40,11 @@ export function AiFeaturesForm({
     setSavedMsg(res.ok ? "Saved." : `Error: ${res.status}`);
   }
 
-  function toggleProject(p: string) {
-    setAllowedProjects(prev =>
-      prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p],
-    );
-  }
-
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
-        <span>Enable Entry enrichment</span>
+        <span>Enable AI digests and enrichment</span>
       </label>
 
       <label className="block">
@@ -72,24 +62,6 @@ export function AiFeaturesForm({
           Passed to <code>claude -p --model</code>; uses your existing Claude Code auth.
         </span>
       </label>
-
-      <fieldset>
-        <legend className="text-sm text-gray-600">Projects to enrich</legend>
-        <div className="mt-1 space-y-1 max-h-48 overflow-auto border rounded p-2">
-          {projectCandidates.length === 0 ? (
-            <p className="text-xs text-gray-500">No projects detected yet — run the daemon at least once.</p>
-          ) : projectCandidates.map(p => (
-            <label key={p} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={allowedProjects.includes(p)}
-                onChange={() => toggleProject(p)}
-              />
-              <code className="text-xs">{p}</code>
-            </label>
-          ))}
-        </div>
-      </fieldset>
 
       <label className="block">
         <span className="text-sm text-gray-600">Monthly usage cap (USD reference) — blank = no cap</span>
