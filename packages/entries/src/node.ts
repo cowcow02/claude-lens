@@ -7,3 +7,4 @@ export * from "./queue.js";
 export * from "./settings.js";
 export * from "./digest-day.js";
 export * from "./prompts/digest-day.js";
+export * from "./pipeline-lock.js";

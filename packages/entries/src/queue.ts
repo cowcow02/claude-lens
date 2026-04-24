@@ -1,11 +1,12 @@
 import { listEntriesWithStatus, writeEntry } from "./fs.js";
 import { enrichEntry, type CallLLM } from "./enrich.js";
 import { appendSpend, monthToDateSpend } from "./budget.js";
+import { interactiveLockFresh } from "./pipeline-lock.js";
 import type { AiFeaturesSettings } from "./settings.js";
 import type { Entry } from "./types.js";
 
 export type EnrichmentResult =
-  | { skipped: "disabled" | "budget_cap_reached" }
+  | { skipped: "disabled" | "budget_cap_reached" | "interactive_in_progress" }
   | { enriched: number; errors: number; skipped: number };
 
 export type EnrichmentQueueOptions = {
@@ -31,10 +32,11 @@ export async function runEnrichmentQueue(
 ): Promise<EnrichmentResult> {
   if (!settings.enabled) return { skipped: "disabled" };
 
+  const now = opts.now ?? (() => Date.now());
+  if (interactiveLockFresh(now())) return { skipped: "interactive_in_progress" };
+
   const budget = settings.monthlyBudgetUsd ?? Infinity;
   if (monthToDateSpend() >= budget) return { skipped: "budget_cap_reached" };
-
-  const now = opts.now ?? (() => Date.now());
 
   const queue = listEntriesWithStatus(["pending", "error"])
     .filter(e => (e.enrichment.retry_count ?? 0) < MAX_RETRY_COUNT);

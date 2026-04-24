@@ -1,0 +1,50 @@
+import { writeFileSync, unlinkSync, existsSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
+const STALE_MS = 60 * 1000;
+
+let lockPathCached: string | null = null;
+
+function lockPath(): string {
+  if (lockPathCached) return lockPathCached;
+  lockPathCached = join(homedir(), ".cclens", "llm-interactive.lock");
+  return lockPathCached;
+}
+
+/** @internal Test-only. */
+export function __setInteractiveLockPathForTest(path: string): void {
+  lockPathCached = path;
+}
+
+export function writeInteractiveLock(): void {
+  writeFileSync(lockPath(), String(process.pid), "utf8");
+}
+
+export function removeInteractiveLock(): void {
+  try { unlinkSync(lockPath()); } catch { /* already gone */ }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function interactiveLockFresh(nowMs: number): boolean {
+  const p = lockPath();
+  if (!existsSync(p)) return false;
+  try {
+    const mtime = statSync(p).mtimeMs;
+    if (nowMs - mtime > STALE_MS) return false;
+    const pid = Number(readFileSync(p, "utf8").trim());
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    if (!pidAlive(pid)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
