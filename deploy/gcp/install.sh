@@ -21,7 +21,11 @@ SOURCE_IMAGE="${SOURCE_IMAGE:-ghcr.io/cowcow02/fleetlens-team-server:latest}"
 DB_TIER="${DB_TIER:-db-f1-micro}"
 DB_INSTANCE="${DB_INSTANCE:-fleetlens-db}"
 SERVICE="${SERVICE:-fleetlens-team-server}"
-AR_REPO="${AR_REPO:-fleetlens}"
+# Artifact Registry remote repo that mirrors GHCR on demand. Cloud Run pulls
+# from here; AR fetches from GHCR the first time a tag is requested, caches
+# locally, and serves subsequent pulls from cache. This lets the in-app
+# self-update flow succeed without a pre-staging step for every new release.
+AR_REMOTE_REPO="${AR_REMOTE_REPO:-fleetlens-ghcr}"
 ASSUME_YES="${ASSUME_YES:-0}"
 INSPECT_ONLY="${INSPECT_ONLY:-0}"
 PROBE_TIMEOUT="${PROBE_TIMEOUT:-10}"
@@ -70,7 +74,7 @@ plan() { printf "  %s%-12s%s %s\n" "$c" "$1" "$x" "$2"; }
 #—— Tooling ————————————————————————————————————————————————————————
 command -v gcloud  >/dev/null || die "gcloud CLI not found. Use Cloud Shell or install https://cloud.google.com/sdk."
 command -v openssl >/dev/null || die "openssl required for secret generation."
-command -v docker  >/dev/null || die "docker required to copy image from GHCR to Artifact Registry. Cloud Shell has it preinstalled."
+# Note: docker is no longer required — the AR remote repo mirrors GHCR on demand.
 
 ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
 [ -n "$ACCOUNT" ] || die "No active gcloud account. Run: gcloud auth login"
@@ -170,18 +174,23 @@ else
 fi
 probe_end "Checking billing status" "$BILLING_OK"
 
-# Derive final image path
+# Derive final image path. SOURCE_IMAGE is the GHCR reference
+# (e.g. ghcr.io/cowcow02/fleetlens-team-server:latest). For the remote-repo
+# pass-through model, Cloud Run pulls from AR using the upstream path
+# preserved (e.g. asia-southeast1-docker.pkg.dev/$PROJECT/fleetlens-ghcr/cowcow02/fleetlens-team-server:TAG).
 IMAGE_TAG="${SOURCE_IMAGE##*:}"
-IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REPO/team-server:$IMAGE_TAG"
+UPSTREAM_PATH="${SOURCE_IMAGE#*/}"   # strip leading registry host (e.g. ghcr.io/)
+UPSTREAM_PATH="${UPSTREAM_PATH%:*}"  # strip trailing :tag
+IMAGE="$REGION-docker.pkg.dev/$PROJECT/$AR_REMOTE_REPO/$UPSTREAM_PATH:$IMAGE_TAG"
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
 action_for() {
   g "$@" >/dev/null 2>&1 && echo "reuse" || echo "create"
 }
 
-probe_start "Probing Artifact Registry '$AR_REPO'"
-AR_ACTION="$(action_for artifacts repositories describe "$AR_REPO" --location "$REGION" --project "$PROJECT")"
-probe_end "Probing Artifact Registry '$AR_REPO'" "$AR_ACTION"
+probe_start "Probing Artifact Registry remote '$AR_REMOTE_REPO'"
+AR_ACTION="$(action_for artifacts repositories describe "$AR_REMOTE_REPO" --location "$REGION" --project "$PROJECT")"
+probe_end "Probing Artifact Registry remote '$AR_REMOTE_REPO'" "$AR_ACTION"
 
 probe_start "Probing Cloud SQL '$DB_INSTANCE'"
 SQL_ACTION="$(action_for sql instances describe "$DB_INSTANCE" --project "$PROJECT")"
@@ -226,16 +235,15 @@ else
   step_line 1 "enable" "Enable ${#APIS_TO_ENABLE[@]} of 8 GCP APIs:  $(IFS=, ; echo "${APIS_TO_ENABLE[*]}")"
 fi
 
-#— 2: Artifact Registry
+#— 2: Artifact Registry (remote repo mirroring GHCR)
 if [ "$AR_ACTION" = "reuse" ]; then
-  step_line 2 "reuse" "Artifact Registry repo '$AR_REPO'"
-  step_sub  "https://console.cloud.google.com/artifacts/docker/$PROJECT/$REGION/$AR_REPO"
+  step_line 2 "reuse" "Artifact Registry remote repo '$AR_REMOTE_REPO'"
+  step_sub  "https://console.cloud.google.com/artifacts/docker/$PROJECT/$REGION/$AR_REMOTE_REPO"
 else
-  step_line 2 "create" "Artifact Registry repo '$AR_REPO' in $REGION"
+  step_line 2 "create" "Artifact Registry remote repo '$AR_REMOTE_REPO' (mirrors https://ghcr.io)"
 fi
 
-#— 3: Docker image clone
-step_line 3 "copy" "Clone Docker image $SOURCE_IMAGE → Artifact Registry"
+#— 3: (removed) — remote repo mirrors GHCR on demand; no docker pull/push needed
 
 #— 4: Cloud SQL
 if [ "$SQL_ACTION" = "reuse" ]; then
@@ -314,31 +322,23 @@ step "Enabling required APIs (idempotent)"
 gcloud services enable "${REQUIRED_APIS[@]}" --project "$PROJECT" --quiet
 ok "APIs enabled"
 
-#—— 2. Artifact Registry + image copy —————————————————————————————
-step "Artifact Registry repo '$AR_REPO' in $REGION"
+#—— 2. Artifact Registry remote repo (mirrors GHCR on demand) ————————
+step "Artifact Registry remote repo '$AR_REMOTE_REPO' in $REGION"
 if [ "$AR_ACTION" = "reuse" ]; then
-  ok "Repository exists — reusing"
+  ok "Remote repository exists — reusing"
 else
-  gcloud artifacts repositories create "$AR_REPO" \
+  gcloud artifacts repositories create "$AR_REMOTE_REPO" \
     --repository-format=docker \
     --location "$REGION" \
-    --description="Fleetlens Team Edition container images" \
+    --mode=remote-repository \
+    --remote-docker-repo=https://ghcr.io \
+    --remote-repo-config-desc="GHCR mirror for fleetlens-team-server" \
+    --description="Fleetlens Team Edition — GHCR pass-through cache for self-update" \
     --project "$PROJECT" --quiet
-  ok "Repository created"
+  ok "Remote repository created — Cloud Run pulls from here; AR fetches from GHCR on demand"
 fi
 
-step "Copying image $SOURCE_IMAGE → $IMAGE"
-if gcloud artifacts docker images describe "$IMAGE" --project "$PROJECT" >/dev/null 2>&1; then
-  ok "Image already present in Artifact Registry — reusing"
-else
-  gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet >/dev/null
-  if ! docker pull --platform linux/amd64 "$SOURCE_IMAGE" --quiet 2>&1; then
-    die "Could not pull $SOURCE_IMAGE. If the tag does not exist on GHCR yet (common right after a new release), pin a known-good sha:  SOURCE_IMAGE=ghcr.io/cowcow02/fleetlens-team-server:<sha> ./install.sh"
-  fi
-  docker tag "$SOURCE_IMAGE" "$IMAGE"
-  docker push --quiet "$IMAGE"
-  ok "Image copied"
-fi
+info "No docker pull/push step — AR will fetch $IMAGE from upstream ghcr.io on first deploy."
 
 #—— 3. Cloud SQL instance + DB ——————————————————————————————————————
 step "Cloud SQL Postgres ($DB_INSTANCE, tier=$DB_TIER)"
