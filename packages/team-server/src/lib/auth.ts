@@ -20,6 +20,7 @@ export type Membership = {
 export type SessionContext = {
   user: UserAccount;
   sessionId: string;
+  isStaff: boolean;
   memberships: Membership[];
 };
 
@@ -92,6 +93,7 @@ export async function validateSession(cookieToken: string, pool: pg.Pool): Promi
   return {
     sessionId: row.sid,
     user: { id: row.id, email: row.email, display_name: row.display_name, is_staff: row.is_staff },
+    isStaff: row.is_staff,
     memberships: memberships.rows,
   };
 }
