@@ -50,6 +50,11 @@ async function main() {
       await entries(args.slice(1));
       break;
     }
+    case "digest": {
+      const { digest } = await import("./commands/digest.js");
+      await digest(args.slice(1));
+      break;
+    }
     case "daemon": {
       const { daemon } = await import("./commands/daemon.js");
       await daemon(args.slice(1));

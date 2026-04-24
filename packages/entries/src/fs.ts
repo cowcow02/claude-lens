@@ -7,7 +7,8 @@ let entriesDirCached: string | null = null;
 
 export function entriesDir(): string {
   if (entriesDirCached) return entriesDirCached;
-  entriesDirCached = join(homedir(), ".cclens", "entries");
+  const envOverride = process.env.CCLENS_ENTRIES_DIR;
+  entriesDirCached = envOverride ?? join(homedir(), ".cclens", "entries");
   return entriesDirCached;
 }
 
