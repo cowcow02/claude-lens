@@ -30,7 +30,10 @@ describe("startScheduler", () => {
     const setIntervalSpy = vi.spyOn(global, "setInterval");
     startScheduler();
     startScheduler();
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    // Two setInterval calls from a single startScheduler invocation
+    // (ingest-log prune + checkForUpdates); the second startScheduler
+    // returns early and must not schedule more.
+    expect(setIntervalSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 
@@ -75,6 +78,69 @@ describe("startScheduler", () => {
     const { startScheduler } = await import("../../src/lib/scheduler.js");
     startScheduler();
     expect(setIntervalSpy).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("runs checkNow on the hourly checkForUpdates tick", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+    }));
+    const checkNow = vi.fn().mockResolvedValue({
+      currentVersion: "0.4.2",
+      latestVersion: "0.5.0",
+      updateAvailable: true,
+      lastCheckedAt: new Date(),
+    });
+    vi.doMock("../../src/lib/self-update/service.js", () => ({ checkNow }));
+    vi.useFakeTimers();
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(checkNow).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("kicks off an initial checkNow ~5s after boot", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+    }));
+    const checkNow = vi.fn().mockResolvedValue({
+      currentVersion: "0.4.2",
+      latestVersion: null,
+      updateAvailable: false,
+      lastCheckedAt: new Date(),
+    });
+    vi.doMock("../../src/lib/self-update/service.js", () => ({ checkNow }));
+    vi.useFakeTimers();
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    expect(checkNow).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(checkNow).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("logs and swallows errors from checkForUpdates ticks", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+    }));
+    const checkNow = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.doMock("../../src/lib/self-update/service.js", () => ({ checkNow }));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("checkForUpdates failed"),
+      expect.any(Error),
+    );
     vi.useRealTimers();
   });
 });

@@ -22,4 +22,24 @@ export function startScheduler(): void {
       console.error(`[scheduler] prune failed: ${(err as Error).message}`);
     }
   }, 60 * 60 * 1000);
+
+  setInterval(async () => {
+    try {
+      const { checkNow } = await import("./self-update/service.js");
+      await checkNow();
+    } catch (err) {
+      console.warn("[scheduler] checkForUpdates failed:", err);
+    }
+  }, 60 * 60 * 1000);
+
+  // Kick off once shortly after boot so admins don't wait an hour for the
+  // first status. Non-blocking — boot path proceeds regardless.
+  setTimeout(async () => {
+    try {
+      const { checkNow } = await import("./self-update/service.js");
+      await checkNow();
+    } catch (err) {
+      console.warn("[scheduler] initial checkForUpdates failed:", err);
+    }
+  }, 5000);
 }
