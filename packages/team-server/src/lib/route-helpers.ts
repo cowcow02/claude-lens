@@ -53,6 +53,6 @@ export async function requireStaff(
 ): Promise<(SessionContext & { pool: pg.Pool }) | NextResponse> {
   const base = await requireSession(req);
   if (base instanceof NextResponse) return base;
-  if (!base.isStaff) return NextResponse.json({ error: "Staff only" }, { status: 403 });
+  if (!base.user.is_staff) return NextResponse.json({ error: "Staff only" }, { status: 403 });
   return base;
 }

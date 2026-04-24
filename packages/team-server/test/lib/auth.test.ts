@@ -99,19 +99,19 @@ describe("createSession + validateSession", () => {
     expect(ctx).toBeNull();
   });
 
-  it("returns isStaff=true for a staff user", async () => {
+  it("returns user.is_staff=true for a staff user", async () => {
     const u = await createUserAccount("staff-a@example.com", "pass1234", "Staff A", {}, pool);
     await pool.query("UPDATE user_accounts SET is_staff = true WHERE id = $1", [u.id]);
     const { cookieToken } = await createSession(u.id, pool);
     const ctx = await validateSession(cookieToken, pool);
-    expect(ctx?.isStaff).toBe(true);
+    expect(ctx?.user?.is_staff).toBe(true);
   });
 
-  it("returns isStaff=false for a non-staff user", async () => {
+  it("returns user.is_staff=false for a non-staff user", async () => {
     const u = await createUserAccount("staff-b@example.com", "pass1234", "Non Staff", {}, pool);
     const { cookieToken } = await createSession(u.id, pool);
     const ctx = await validateSession(cookieToken, pool);
-    expect(ctx?.isStaff).toBe(false);
+    expect(ctx?.user?.is_staff).toBe(false);
   });
 
   it("includes memberships in the context", async () => {

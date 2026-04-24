@@ -20,10 +20,15 @@ export type Membership = {
 export type SessionContext = {
   user: UserAccount;
   sessionId: string;
-  isStaff: boolean;
   memberships: Membership[];
 };
 
+/**
+ * Create a user account directly. For production signup, use
+ * createFirstOrSubsequentUser() — it wraps the staff check-and-insert in an
+ * advisory lock to prevent concurrent-signup races. The `opts.isStaff` flag
+ * here is for test-seeding established staff users, not bootstrap flows.
+ */
 export async function createUserAccount(
   email: string,
   password: string,
@@ -43,7 +48,7 @@ export async function createUserAccount(
 
 // Advisory lock key for first-signup serialization. Arbitrary 64-bit constant;
 // must match wherever else we want to coordinate with the first-staff check.
-const STAFF_BOOTSTRAP_LOCK = 0x6c5f7365_74737466n; // "ls_sttstf" ASCII-ish
+const STAFF_BOOTSTRAP_LOCK = 0x6c5f7365_74737466n; // "l_setstf" ASCII
 
 /**
  * Create a user account, auto-promoting to is_staff=true iff no staff exists yet.
@@ -131,7 +136,6 @@ export async function validateSession(cookieToken: string, pool: pg.Pool): Promi
   return {
     sessionId: row.sid,
     user: { id: row.id, email: row.email, display_name: row.display_name, is_staff: row.is_staff },
-    isStaff: row.is_staff,
     memberships: memberships.rows,
   };
 }

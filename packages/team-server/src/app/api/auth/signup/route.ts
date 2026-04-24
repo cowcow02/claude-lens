@@ -77,15 +77,13 @@ export async function POST(req: NextRequest) {
     throw err;
   }
 
-  // The authoritative "first user" signal is whether we just promoted this account
-  // to staff inside the atomic transaction. `isFirstUser` above (from instanceState)
-  // is a pre-transaction hint used only for gating + teamName validation.
-  const didBootstrap = promotedToStaff;
-
+  // `promotedToStaff` is the authoritative first-user signal — it's decided
+  // inside the advisory-locked transaction. `isFirstUser` (from instanceState)
+  // is a pre-transaction hint, used only for gating + teamName validation.
   let landingSlug: string | null = null;
   let deviceToken: string | null = null;
 
-  if (didBootstrap) {
+  if (promotedToStaff) {
     const { team, membership } = await createTeamWithAdmin(teamName, user.id, pool);
     landingSlug = team.slug;
     deviceToken = membership.bearerToken;

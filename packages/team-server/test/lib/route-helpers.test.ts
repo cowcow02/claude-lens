@@ -148,7 +148,8 @@ describe("requireStaff", () => {
     const req = makeNextReqWithCookie(cookieToken, "http://localhost/api/admin/updates");
     const res = await requireStaff(req);
     expect(res).not.toBeInstanceOf(NextResponse);
-    expect((res as Awaited<ReturnType<typeof requireStaff>> & { isStaff: boolean }).isStaff).toBe(true);
+    const ctx = res as Awaited<ReturnType<typeof requireStaff>> & { user: { is_staff: boolean } };
+    expect(ctx.user.is_staff).toBe(true);
   });
 });
 
