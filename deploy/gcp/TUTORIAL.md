@@ -64,7 +64,8 @@ All optional env overrides for `install.sh`:
 |---|---|---|
 | `PROJECT` | `gcloud config get-value project` | Target GCP project |
 | `REGION` | `gcloud config get-value run/region` | Cloud Run + Cloud SQL region |
-| `SOURCE_IMAGE` | `ghcr.io/cowcow02/fleetlens-team-server:latest` | GHCR image copied into your project's Artifact Registry on first install |
+| `SOURCE_IMAGE` | `ghcr.io/cowcow02/fleetlens-team-server:latest` | Upstream image reference. The installer creates an Artifact Registry remote repo that mirrors GHCR on demand — Cloud Run pulls from your project's AR, which fetches + caches from ghcr.io. No `docker` required locally. |
+| `AR_REMOTE_REPO` | `fleetlens-ghcr` | Name of the AR remote repo that mirrors GHCR |
 | `DB_TIER` | `db-f1-micro` | Cloud SQL machine size — bump to `db-custom-1-3840` for production |
 | `DB_INSTANCE` | `fleetlens-db` | Cloud SQL instance name |
 | `SERVICE` | `fleetlens-team-server` | Cloud Run service name |
@@ -83,7 +84,7 @@ Cloud Shell's `gcloud` is always current; locally make sure you're on **`gcloud 
 gcloud run services delete fleetlens-team-server --region $REGION --quiet
 gcloud sql instances delete fleetlens-db --quiet
 gcloud scheduler jobs delete fleetlens-prune --location $REGION --quiet
-gcloud artifacts repositories delete fleetlens --location $REGION --quiet
+gcloud artifacts repositories delete fleetlens-ghcr --location $REGION --quiet
 for s in fleetlens-database-url fleetlens-encryption-key fleetlens-scheduler-secret fleetlens-db-password; do
   gcloud secrets delete $s --quiet
 done
