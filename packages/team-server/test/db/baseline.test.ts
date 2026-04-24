@@ -57,8 +57,11 @@ describe("applyPreDrizzleBaselineIfNeeded", () => {
 
     await applyPreDrizzleBaselineIfNeeded(client);
 
-    // Verify the journal entry's created_at is >= the journal's recorded folderMillis
-    // for 0000. This is the invariant Drizzle's skip logic checks.
+    // Verify the journal entry's created_at is EXACTLY 0000's folderMillis.
+    // Drizzle's migrator picks the max created_at row, then only applies
+    // migrations whose folderMillis > that value. If baseline set created_at
+    // to Date.now() (which is what the pre-0001 code did) it would mask every
+    // future migration, not just 0000.
     const journal = JSON.parse(
       readFileSync(join(MIGRATIONS_DIR, "meta/_journal.json"), "utf8"),
     );
@@ -67,17 +70,23 @@ describe("applyPreDrizzleBaselineIfNeeded", () => {
       `SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY id`,
     );
     expect(rows).toHaveLength(1);
-    expect(Number(rows[0].created_at)).toBeGreaterThanOrEqual(folderMillis);
+    expect(Number(rows[0].created_at)).toBe(folderMillis);
 
     // Now run Drizzle's migrator. If the baseline is effective, it should NOT
     // attempt to re-run 0000_initial — which would error on duplicate CREATE TABLE.
-    // Canary row survives as further proof.
+    // Canary row survives as further proof. Subsequent migrations (0001+) must
+    // still apply because their folderMillis > 0000's folderMillis.
     await migrate(drizzle(client), { migrationsFolder: MIGRATIONS_DIR });
 
     const canary = await client.query(
       `SELECT email FROM user_accounts WHERE email = 'canary@example.com'`,
     );
     expect(canary.rowCount).toBe(1);
+
+    const { rows: tables } = await client.query(
+      "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='update_check_cache'",
+    );
+    expect(tables).toHaveLength(1);
   });
 
   it("is idempotent — calling twice does not insert duplicate rows", async () => {
