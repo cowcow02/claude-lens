@@ -93,8 +93,6 @@ describe("fs storage", () => {
   });
 });
 
-import { type EntryEnrichmentStatus } from "../src/types.js";
-
 describe("listEntriesWithStatus", () => {
   let tmp: string;
   beforeEach(() => {
