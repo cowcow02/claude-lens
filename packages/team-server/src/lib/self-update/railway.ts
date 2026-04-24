@@ -1,4 +1,4 @@
-import type { PlatformAdapter } from "./platform.js";
+import type { PlatformAdapter } from "./platform";
 
 const IMAGE_REPO = "ghcr.io/cowcow02/fleetlens-team-server";
 const RAILWAY_GQL = "https://backboard.railway.app/graphql/v2";

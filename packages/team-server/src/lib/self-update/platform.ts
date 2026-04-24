@@ -1,5 +1,5 @@
-import { GcpCloudRunAdapter } from "./gcp-cloud-run.js";
-import { RailwayAdapter } from "./railway.js";
+import { GcpCloudRunAdapter } from "./gcp-cloud-run";
+import { RailwayAdapter } from "./railway";
 
 export interface PlatformAdapter {
   readonly name: "gcp-cloud-run" | "railway";

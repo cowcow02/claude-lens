@@ -1,7 +1,7 @@
-import { getPool } from "../../db/pool.js";
-import { getLatestVersion } from "./version-detector.js";
-import { getChangelog, getMigrationsManifest, type MigrationInfo } from "./changelog-fetcher.js";
-import { getPlatformAdapter } from "./platform.js";
+import { getPool } from "../../db/pool";
+import { getLatestVersion } from "./version-detector";
+import { getChangelog, getMigrationsManifest, type MigrationInfo } from "./changelog-fetcher";
+import { getPlatformAdapter } from "./platform";
 
 export interface UpdateStatus {
   currentVersion: string;
