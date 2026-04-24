@@ -25,11 +25,15 @@ AR_REPO="${AR_REPO:-fleetlens}"
 ASSUME_YES="${ASSUME_YES:-0}"
 INSPECT_ONLY="${INSPECT_ONLY:-0}"
 PROBE_TIMEOUT="${PROBE_TIMEOUT:-10}"
-for arg in "$@"; do
-  case "$arg" in
-    --yes|-y)       ASSUME_YES=1 ;;
-    --inspect-only) INSPECT_ONLY=1; ASSUME_YES=1 ;;
+GRANT_STAFF_EMAIL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes|-y)        ASSUME_YES=1 ;;
+    --inspect-only)  INSPECT_ONLY=1; ASSUME_YES=1 ;;
+    --grant-staff)   shift; GRANT_STAFF_EMAIL="${1:-}"; [ -n "$GRANT_STAFF_EMAIL" ] || { echo "--grant-staff requires an email" >&2; exit 1; } ;;
+    --grant-staff=*) GRANT_STAFF_EMAIL="${1#--grant-staff=}" ;;
   esac
+  shift
 done
 
 # Bounded wait for gcloud probes. In preference order:
@@ -84,7 +88,7 @@ prompt_default() {
   printf '%s' "${input:-$current}"
 }
 
-if [ "$ASSUME_YES" != "1" ] && [ -t 0 ] && [ -r /dev/tty ]; then
+if [ -z "$GRANT_STAFF_EMAIL" ] && [ "$ASSUME_YES" != "1" ] && [ -t 0 ] && [ -r /dev/tty ]; then
   hdr "Pick your install targets (press Enter to keep the default)"
   PROJECT="$(prompt_default "Project"        "$PROJECT"       "any GCP project ID with billing linked")"
   REGION="$(prompt_default  "Region"         "$REGION"        "us-central1 · europe-west1 · asia-southeast1 · asia-east1")"
@@ -92,6 +96,29 @@ if [ "$ASSUME_YES" != "1" ] && [ -t 0 ] && [ -r /dev/tty ]; then
 fi
 
 [ -n "$PROJECT" ] || die "No project set. Run: gcloud config set project <id> (or pass PROJECT=<id>)."
+
+#—— --grant-staff recovery flag ————————————————————————————————————
+# Shell-access recovery path for sites that lose access to their sole staff
+# account. Requires the Cloud SQL instance + fleetlens-db-password secret to
+# already exist (i.e. a completed install). Pipes one UPDATE statement into
+# psql via `gcloud sql connect`, then exits — the main install does NOT run.
+if [ -n "$GRANT_STAFF_EMAIL" ]; then
+  command -v psql >/dev/null || die "psql required for --grant-staff. Install postgresql-client (Cloud Shell has it)."
+  hdr "Granting staff to $GRANT_STAFF_EMAIL"
+  info "Project: $PROJECT · Instance: $DB_INSTANCE"
+  DB_PASSWORD="$(gcloud secrets versions access latest --secret=fleetlens-db-password --project "$PROJECT" 2>/dev/null || true)"
+  [ -n "$DB_PASSWORD" ] || die "Could not read fleetlens-db-password secret — has install.sh completed against this project?"
+  # `gcloud sql connect` temporarily whitelists the caller's public IP and
+  # execs psql. PGPASSWORD lets it run non-interactively.
+  step "Running UPDATE user_accounts SET is_staff=true"
+  PGPASSWORD="$DB_PASSWORD" gcloud sql connect "$DB_INSTANCE" \
+    --user=fleetlens --database=fleetlens --project "$PROJECT" --quiet \
+    <<SQL
+UPDATE user_accounts SET is_staff = true WHERE email = '$GRANT_STAFF_EMAIL' RETURNING id, email;
+SQL
+  ok "Staff grant applied (row count above; 0 rows = no such email)"
+  exit 0
+fi
 
 #—— Preflight inspection (READ ONLY) ————————————————————————————————
 # Each probe prints a line the moment it starts and updates in place on
@@ -239,13 +266,16 @@ step_line 6 "set-up" "Database + user 'fleetlens' inside Cloud SQL"
 #— 7: IAM
 step_line 7 "grant" "IAM roles on $RUNTIME_SA"
 step_sub  "roles/secretmanager.secretAccessor (3 secrets)  ·  roles/cloudsql.client (project scope)"
+step_sub  "roles/run.developer (scoped to '$SERVICE' only — enables in-app self-update)"
 
 #— 8: Cloud Run
 if [ "$RUN_ACTION" = "reuse" ]; then
   step_line 8 "update" "Cloud Run service '$SERVICE'"
+  step_sub  "env: NODE_ENV · FLEETLENS_EXTERNAL_SCHEDULER · GCP_PROJECT_ID · GCP_REGION"
   step_sub  "https://console.cloud.google.com/run/detail/$REGION/$SERVICE/metrics?project=$PROJECT"
 else
   step_line 8 "create" "Cloud Run service '$SERVICE'  (1 vCPU · 512 MiB · min=0 max=3 · public HTTPS)"
+  step_sub  "env: NODE_ENV · FLEETLENS_EXTERNAL_SCHEDULER · GCP_PROJECT_ID · GCP_REGION"
 fi
 
 #— 9: Scheduler
@@ -400,12 +430,25 @@ gcloud run deploy "$SERVICE" \
   --max-instances 3 \
   --cpu 1 --memory 512Mi \
   --add-cloudsql-instances "$CONN_NAME" \
-  --set-env-vars "NODE_ENV=production,FLEETLENS_EXTERNAL_SCHEDULER=1" \
+  --set-env-vars "NODE_ENV=production,FLEETLENS_EXTERNAL_SCHEDULER=1,GCP_PROJECT_ID=$PROJECT,GCP_REGION=$REGION" \
   --set-secrets "DATABASE_URL=fleetlens-database-url:latest,FLEETLENS_ENCRYPTION_KEY=fleetlens-encryption-key:latest,FLEETLENS_SCHEDULER_SECRET=fleetlens-scheduler-secret:latest" \
   --quiet
 
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format='value(status.url)')"
 ok "Service live at $URL"
+
+#—— 7b. Self-update IAM: resource-scoped run.developer ——————————————
+# Lets the runtime SA call run.services.update on THIS service only (for the
+# in-app "Apply update" button). Not project-wide. Idempotent: re-adding an
+# existing binding is a no-op but gcloud exits non-zero on some edge cases,
+# so guard with `|| true`.
+step "Granting roles/run.developer on service (scoped, idempotent)"
+gcloud run services add-iam-policy-binding "$SERVICE" \
+  --region "$REGION" \
+  --member "serviceAccount:$RUNTIME_SA" \
+  --role roles/run.developer \
+  --project "$PROJECT" --quiet >/dev/null 2>&1 || true
+ok "run.developer bound on $SERVICE"
 
 #—— 8. Cloud Scheduler ———————————————————————————————————————————————
 step "Cloud Scheduler job (hourly ingest_log prune)"
