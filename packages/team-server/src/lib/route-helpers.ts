@@ -47,3 +47,12 @@ export function requireAdmin(ctx: TeamContext): NextResponse | null {
   if (ctx.membership.role !== "admin") return NextResponse.json({ error: "Admin only" }, { status: 403 });
   return null;
 }
+
+export async function requireStaff(
+  req: NextRequest,
+): Promise<(SessionContext & { pool: pg.Pool }) | NextResponse> {
+  const base = await requireSession(req);
+  if (base instanceof NextResponse) return base;
+  if (!base.isStaff) return NextResponse.json({ error: "Staff only" }, { status: 403 });
+  return base;
+}
