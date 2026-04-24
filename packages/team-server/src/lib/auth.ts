@@ -41,6 +41,44 @@ export async function createUserAccount(
   return res.rows[0];
 }
 
+// Advisory lock key for first-signup serialization. Arbitrary 64-bit constant;
+// must match wherever else we want to coordinate with the first-staff check.
+const STAFF_BOOTSTRAP_LOCK = 0x6c5f7365_74737466n; // "ls_sttstf" ASCII-ish
+
+/**
+ * Create a user account, auto-promoting to is_staff=true iff no staff exists yet.
+ * The staff-count check + insert run inside a single transaction with an advisory lock,
+ * so concurrent "first signups" produce exactly one is_staff=true account.
+ */
+export async function createFirstOrSubsequentUser(
+  email: string,
+  password: string,
+  displayName: string | null,
+  pool: pg.Pool,
+): Promise<{ user: UserAccount; promotedToStaff: boolean }> {
+  const hash = hashPassword(password);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock($1)", [STAFF_BOOTSTRAP_LOCK.toString()]);
+    const staffRes = await client.query("SELECT 1 FROM user_accounts WHERE is_staff = true LIMIT 1");
+    const promotedToStaff = staffRes.rowCount === 0;
+    const insertRes = await client.query(
+      `INSERT INTO user_accounts (email, password_hash, display_name, is_staff)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, email, display_name, is_staff`,
+      [email.toLowerCase().trim(), hash, displayName, promotedToStaff]
+    );
+    await client.query("COMMIT");
+    return { user: insertRes.rows[0], promotedToStaff };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function findUserByEmail(email: string, pool: pg.Pool): Promise<(UserAccount & { password_hash: string }) | null> {
   const res = await pool.query(
     `SELECT id, email, display_name, is_staff, password_hash FROM user_accounts WHERE email = $1`,
