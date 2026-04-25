@@ -18,11 +18,10 @@ describe("settings", () => {
     __setSettingsPathForTest(path);
   });
 
-  it("readSettings returns defaults when file does not exist", () => {
+  it("readSettings returns Phase-2 defaults when file does not exist", () => {
     const s = readSettings();
-    expect(s.ai_features.enabled).toBe(false);
+    expect(s.ai_features.enabled).toBe(true);
     expect(s.ai_features.model).toBe("sonnet");
-    expect(s.ai_features.allowedProjects).toEqual([]);
     expect(s.ai_features.monthlyBudgetUsd).toBeNull();
   });
 
@@ -31,7 +30,6 @@ describe("settings", () => {
       ai_features: {
         enabled: true,
         model: "sonnet",
-        allowedProjects: ["/Users/test/foo"],
         monthlyBudgetUsd: 5,
       },
     };
@@ -42,7 +40,6 @@ describe("settings", () => {
       ai_features: {
         enabled: true,
         model: "sonnet",
-        allowed_projects: ["/Users/test/foo"],
         monthly_budget_usd: 5,
       },
     });
@@ -55,9 +52,8 @@ describe("settings", () => {
   it("round-trips: writeSettings then readSettings returns the same shape", () => {
     const original: Settings = {
       ai_features: {
-        enabled: true,
+        enabled: false,
         model: "opus",
-        allowedProjects: ["/a", "/b"],
         monthlyBudgetUsd: 10.5,
       },
     };
@@ -65,9 +61,9 @@ describe("settings", () => {
     expect(readSettings()).toEqual(original);
   });
 
-  it("tolerates malformed JSON by returning defaults", () => {
+  it("tolerates malformed JSON by returning defaults (enabled=true per Phase 2)", () => {
     writeFileSync(path, "{not json");
     const s = readSettings();
-    expect(s.ai_features.enabled).toBe(false);
+    expect(s.ai_features.enabled).toBe(true);
   });
 });

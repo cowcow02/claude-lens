@@ -144,3 +144,57 @@ export function parseEntryKey(key: string): { session_id: string; local_day: str
   if (!m) return null;
   return { session_id: m[1]!, local_day: m[2]! };
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Day digest types (Phase 2)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Schema version for day digests. */
+export const CURRENT_DAY_DIGEST_SCHEMA_VERSION = 2 as const;
+
+export type DigestEnvelope = {
+  version: typeof CURRENT_DAY_DIGEST_SCHEMA_VERSION;
+  scope: "day" | "week" | "month" | "project" | "session";
+  /** Scope-specific identifier. For `day`, the local YYYY-MM-DD. */
+  key: string;
+  window: { start: string; end: string };
+  entry_refs: string[];
+  generated_at: string;
+  is_live: boolean;
+  model: string | null;
+  cost_usd: number | null;
+};
+
+/** Day-level outcome rollup (derived deterministically from per-entry outcomes).
+ *  Priority order: shipped > partial > blocked > exploratory > trivial > idle.
+ *  `idle` only if zero entries (shouldn't happen in a rendered digest). */
+export type DayOutcome = "shipped" | "partial" | "blocked" | "exploratory" | "trivial" | "idle";
+
+/** Day-level helpfulness rollup (mode of entry claude_helpfulness).
+ *  Tie-broken toward the worse signal (unhelpful beats neutral beats helpful beats essential)
+ *  so a weekly digest can spot regressions early. `null` if no entries are enriched. */
+export type DayHelpfulness = "essential" | "helpful" | "neutral" | "unhelpful" | null;
+
+export type DayDigest = DigestEnvelope & {
+  scope: "day";
+
+  // Deterministic aggregations (computed from Entries, not LLM output)
+  projects: Array<{ name: string; display_name: string; share_pct: number; entry_count: number }>;
+  shipped: Array<{ title: string; project: string; session_id: string }>;
+  top_flags: Array<{ flag: string; count: number }>;
+  /** Top 5 goal categories, values in MINUTES (matches Entry enrichment.goal_categories). */
+  top_goal_categories: Array<{ category: string; minutes: number }>;
+  concurrency_peak: number;
+  agent_min: number;
+  /** Day-level outcome derived from per-entry outcomes. Phase 2.1 — feeds weekly aggregation. */
+  outcome_day: DayOutcome;
+  /** Day-level helpfulness signal — mode across enriched entries. Phase 2.1 — feeds weekly trajectory. */
+  helpfulness_day: DayHelpfulness;
+
+  // LLM narrative (null when ai_features.enabled === false or synth failed)
+  headline: string | null;
+  narrative: string | null;
+  what_went_well: string | null;
+  what_hit_friction: string | null;
+  suggestion: { headline: string; body: string } | null;
+};

@@ -8,7 +8,6 @@ import {
   listEntriesForDay,
   listEntriesForSession,
   listEntriesWithStatus,
-  listKnownProjects,
   __setEntriesDirForTest,
 } from "../src/fs.js";
 import { CURRENT_ENTRY_SCHEMA_VERSION, pendingEnrichment, type Entry } from "../src/types.js";
@@ -93,8 +92,6 @@ describe("fs storage", () => {
   });
 });
 
-import { type EntryEnrichmentStatus } from "../src/types.js";
-
 describe("listEntriesWithStatus", () => {
   let tmp: string;
   beforeEach(() => {
@@ -130,22 +127,3 @@ describe("listEntriesWithStatus", () => {
   });
 });
 
-describe("listKnownProjects", () => {
-  let tmp: string;
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "entries-proj-"));
-    __setEntriesDirForTest(tmp);
-  });
-
-  it("returns sorted unique project values", () => {
-    const e1 = makeEntry("s1", "2026-04-01"); e1.project = "/b/foo";
-    const e2 = makeEntry("s2", "2026-04-02"); e2.project = "/a/bar";
-    const e3 = makeEntry("s3", "2026-04-03"); e3.project = "/a/bar";
-    writeEntry(e1); writeEntry(e2); writeEntry(e3);
-    expect(listKnownProjects()).toEqual(["/a/bar", "/b/foo"]);
-  });
-
-  it("returns empty array when no entries exist", () => {
-    expect(listKnownProjects()).toEqual([]);
-  });
-});

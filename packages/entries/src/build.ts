@@ -213,7 +213,7 @@ type DayAggregate = {
   activeMs: number;
 };
 
-function aggregateDay(dayEvents: SessionEvent[], sessionFallbackProject: string): DayAggregate {
+function aggregateDay(dayEvents: SessionEvent[], _sessionFallbackProject: string): DayAggregate {
   const prTitles: string[] = [];
   let commits = 0;
   let pushes = 0;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { readSettings, writeSettings, monthToDateSpend } from "@claude-lens/entries/node";
+import { SettingsUpdateSchema } from "@/lib/validate-settings";
 
 export const runtime = "nodejs";
 
@@ -11,21 +12,24 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
-  const body = await req.json() as {
-    ai_features: {
-      enabled: boolean;
-      model: string;
-      allowedProjects: string[];
-      monthlyBudgetUsd: number | null;
-    };
-  };
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+  const parsed = SettingsUpdateSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "schema validation failed", issues: parsed.error.issues },
+      { status: 400 },
+    );
+  }
+  // Preserve other on-disk fields (model, monthlyBudgetUsd) — UI no longer edits
+  // them, but the settings module and queue still read them. Only enabled flips.
+  const current = readSettings();
   writeSettings({
-    ai_features: {
-      enabled: body.ai_features.enabled,
-      model: body.ai_features.model,
-      allowedProjects: body.ai_features.allowedProjects,
-      monthlyBudgetUsd: body.ai_features.monthlyBudgetUsd,
-    },
+    ai_features: { ...current.ai_features, enabled: parsed.data.ai_features.enabled },
   });
   return NextResponse.json({ ok: true });
 }
