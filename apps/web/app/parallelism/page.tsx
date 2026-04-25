@@ -15,9 +15,10 @@ import {
   type GanttDay,
   type ParallelismBurst,
 } from "@claude-lens/parser";
-import { GanttChart } from "./gantt-chart";
+import { GanttChart, type SessionEntrySummary } from "./gantt-chart";
 import { DateNav, type DayInfo } from "./date-nav";
 import { toLocalDay } from "@claude-lens/parser";
+import { buildEntriesIndex } from "@/lib/entries-index";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,21 @@ export default async function TimelinePage({
 
   const gantt: GanttDay = buildGanttDay(details, date);
   const bursts: ParallelismBurst[] = computeParallelismBursts(gantt);
+
+  // Pull the entry for each Gantt session × this date, if it exists.
+  const entriesIndex = await buildEntriesIndex();
+  const sessionEntries: Record<string, SessionEntrySummary> = {};
+  for (const s of gantt.sessions) {
+    const list = entriesIndex.bySession.get(s.id) ?? [];
+    const e = list.find((e) => e.local_day === date);
+    if (!e) continue;
+    sessionEntries[s.id] = {
+      outcome: e.enrichment.outcome ?? null,
+      briefSummary: e.enrichment.brief_summary ?? null,
+      enrichmentStatus: e.enrichment.status,
+      localDay: e.local_day,
+    };
+  }
 
   // Per-day activity (reuses dailyActivity which gives us both session
   // count and airTimeMs bucketed by day).
@@ -161,7 +177,7 @@ export default async function TimelinePage({
             burstCount={bursts.length}
             crossProjectBursts={crossProjectBursts}
           />
-          <GanttChart gantt={gantt} bursts={bursts} />
+          <GanttChart gantt={gantt} bursts={bursts} sessionEntries={sessionEntries} />
         </>
       )}
     </div>

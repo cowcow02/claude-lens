@@ -8,7 +8,16 @@ import {
   type GanttSession,
   type ParallelismBurst,
 } from "@claude-lens/parser";
+import type { DayOutcome, EntryEnrichmentStatus } from "@claude-lens/entries";
 import { formatDuration, formatTokens, prettyProjectName } from "@/lib/format";
+import { OutcomePill, OUTCOME_STYLES } from "@/components/outcome-pill";
+
+export type SessionEntrySummary = {
+  outcome: DayOutcome | null;
+  briefSummary: string | null;
+  enrichmentStatus: EntryEnrichmentStatus;
+  localDay: string;
+};
 
 const ROW_HEIGHT = 30;
 const ROW_GAP = 3;
@@ -61,9 +70,11 @@ function fmtTime(ms: number): string {
 export function GanttChart({
   gantt,
   bursts = [],
+  sessionEntries = {},
 }: {
   gantt: GanttDay;
   bursts?: ParallelismBurst[];
+  sessionEntries?: Record<string, SessionEntrySummary>;
 }) {
   const [hover, setHover] = useState<{
     session: GanttSession;
@@ -632,6 +643,21 @@ export function GanttChart({
                         flexShrink: 0,
                       }}
                     />
+                    {(() => {
+                      const sum = sessionEntries[session.id];
+                      if (sum?.outcome) {
+                        return (
+                          <span
+                            title={OUTCOME_STYLES[sum.outcome]?.label ?? sum.outcome}
+                            style={{ fontSize: 11, lineHeight: 1, flexShrink: 0 }}
+                            aria-hidden
+                          >
+                            {OUTCOME_STYLES[sum.outcome]?.icon ?? ""}
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
                     <Link
                       href={`/sessions/${session.id}`}
                       style={{
@@ -809,8 +835,34 @@ export function GanttChart({
               lineHeight: 1.45,
             }}
           >
+            {(() => {
+              const sum = sessionEntries[hover.session.id];
+              if (!sum) return null;
+              if (sum.outcome) {
+                return (
+                  <div style={{ marginBottom: 6 }}>
+                    <OutcomePill outcome={sum.outcome} size="sm" />
+                  </div>
+                );
+              }
+              if (sum.enrichmentStatus !== "done" && sum.enrichmentStatus !== "skipped_trivial") {
+                return (
+                  <div style={{ marginBottom: 6 }}>
+                    <OutcomePill
+                      outcome={null}
+                      pending
+                      sessionId={hover.session.id}
+                      localDay={sum.localDay}
+                      size="sm"
+                    />
+                  </div>
+                );
+              }
+              return null;
+            })()}
             <div style={{ fontWeight: 600, marginBottom: 4 }}>
-              {stripXml(hover.session.firstUserPreview ?? "").slice(0, 100) ||
+              {sessionEntries[hover.session.id]?.briefSummary ||
+                stripXml(hover.session.firstUserPreview ?? "").slice(0, 100) ||
                 prettyProjectName(hover.session.projectName)}
             </div>
             <div
@@ -863,6 +915,7 @@ export function GanttChart({
         <BurstDetailModal
           burst={bursts[detailBurstIdx]!}
           gantt={gantt}
+          sessionEntries={sessionEntries}
           onClose={() => setDetailBurstIdx(null)}
           onShowInTimeline={() => {
             const idx = detailBurstIdx;
@@ -1110,11 +1163,13 @@ function ConcurrencyInfoModal({ onClose }: { onClose: () => void }) {
 function BurstDetailModal({
   burst,
   gantt,
+  sessionEntries,
   onClose,
   onShowInTimeline,
 }: {
   burst: ParallelismBurst;
   gantt: GanttDay;
+  sessionEntries: Record<string, SessionEntrySummary>;
   onClose: () => void;
   onShowInTimeline: () => void;
 }) {
@@ -1697,8 +1752,19 @@ function BurstDetailModal({
                         textAlign: "right",
                         whiteSpace: "nowrap",
                         flexShrink: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-end",
+                        gap: 4,
                       }}
                     >
+                      {(() => {
+                        const sum = sessionEntries[s.id];
+                        if (sum?.outcome) {
+                          return <OutcomePill outcome={sum.outcome} size="sm" label="text" />;
+                        }
+                        return null;
+                      })()}
                       <div style={{ color: "var(--af-text-secondary)" }}>
                         {formatDuration(activeMs)}{" "}
                         <span style={{ opacity: 0.6 }}>({activePct}%)</span>
