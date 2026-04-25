@@ -1,6 +1,16 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { readTeamConfig, writeTeamConfig, type TeamConfig } from "./config.js";
-import { buildIngestPayload, buildRollupsForRange, pushToTeamServer, type IngestPayload } from "./push.js";
+import {
+  buildIngestPayload,
+  buildRollupsForRange,
+  pushToTeamServer,
+  readLatestUsageSnapshotForWire,
+  type IngestPayload,
+} from "./push.js";
 import { enqueuePayload, dequeuePayloads } from "./queue.js";
+
+const USAGE_LOG = join(homedir(), ".cclens", "usage.jsonl");
 
 type LogFn = (level: "info" | "warn" | "error", message: string) => void;
 
@@ -36,8 +46,15 @@ export async function runTeamSync(log: LogFn = noopLog): Promise<SyncOutcome> {
     let queued = 0;
     let failedDay: string | undefined;
 
-    for (const rollup of rollups) {
-      const payload = buildIngestPayload(rollup);
+    // Snapshot represents *current* utilization, not historical days. Attach
+    // only to the most recent rollup so a multi-day backfill doesn't repeat
+    // the same captured_at across older days.
+    const usageSnapshot = readLatestUsageSnapshotForWire(USAGE_LOG) ?? undefined;
+
+    for (let i = 0; i < rollups.length; i++) {
+      const rollup = rollups[i]!;
+      const isLatest = i === rollups.length - 1;
+      const payload = buildIngestPayload(rollup, isLatest ? usageSnapshot : undefined);
       const result = await pushToTeamServer(config, payload);
       if (!result.ok) {
         log("warn", `team push failed on ${rollup.day} (${result.status}); queueing`);

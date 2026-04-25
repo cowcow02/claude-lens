@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dailyActivity, sessionDay, type DailyBucket, type SessionMeta } from "@claude-lens/parser";
+import { latestSnapshot } from "../usage/storage.js";
 import type { TeamConfig } from "./config.js";
 
 export type DailyRollup = {
@@ -16,11 +17,73 @@ export type DailyRollup = {
   };
 };
 
+export type WireUsageWindow = {
+  utilization: number | null;
+  resetsAt: string | null;
+};
+
+export type WireExtraUsage = {
+  isEnabled: boolean;
+  monthlyLimitUsd: number | null;
+  usedCreditsUsd: number | null;
+  utilization: number | null;
+};
+
+export type WireUsageSnapshot = {
+  capturedAt: string;
+  fiveHour: WireUsageWindow;
+  sevenDay: WireUsageWindow;
+  sevenDayOpus: WireUsageWindow | null;
+  sevenDaySonnet: WireUsageWindow | null;
+  sevenDayOauthApps: WireUsageWindow | null;
+  sevenDayCowork: WireUsageWindow | null;
+  extraUsage: WireExtraUsage | null;
+};
+
 export type IngestPayload = {
   ingestId: string;
   observedAt: string;
   dailyRollup: DailyRollup;
+  usageSnapshot?: WireUsageSnapshot;
 };
+
+// Server only cares about a freshly-captured snapshot. A stale one would
+// poison the rolling-window math even though Anthropic's window has already
+// rolled over.
+const SNAPSHOT_FRESHNESS_MS = 10 * 60 * 1000;
+
+export function readLatestUsageSnapshotForWire(
+  filePath: string,
+  nowMs: number = Date.now(),
+): WireUsageSnapshot | null {
+  const raw = latestSnapshot(filePath);
+  if (!raw) return null;
+  const capturedMs = Date.parse(raw.captured_at);
+  if (Number.isNaN(capturedMs)) return null;
+  if (nowMs - capturedMs > SNAPSHOT_FRESHNESS_MS) return null;
+
+  const toWire = (
+    w: { utilization: number | null; resets_at: string | null } | null,
+  ): WireUsageWindow | null => (w ? { utilization: w.utilization, resetsAt: w.resets_at } : null);
+
+  return {
+    capturedAt: raw.captured_at,
+    fiveHour: { utilization: raw.five_hour.utilization, resetsAt: raw.five_hour.resets_at },
+    sevenDay: { utilization: raw.seven_day.utilization, resetsAt: raw.seven_day.resets_at },
+    sevenDayOpus: toWire(raw.seven_day_opus),
+    sevenDaySonnet: toWire(raw.seven_day_sonnet),
+    sevenDayOauthApps: toWire(raw.seven_day_oauth_apps),
+    sevenDayCowork: toWire(raw.seven_day_cowork),
+    extraUsage: raw.extra_usage
+      ? {
+          isEnabled: raw.extra_usage.is_enabled,
+          monthlyLimitUsd: raw.extra_usage.monthly_limit,
+          usedCreditsUsd: raw.extra_usage.used_credits,
+          utilization: raw.extra_usage.utilization,
+        }
+      : null,
+  };
+}
 
 export function bucketToRollup(b: DailyBucket): DailyRollup {
   return {
@@ -56,11 +119,15 @@ export function buildRollupsForRange(sessions: SessionMeta[], sinceDay?: string)
     }));
 }
 
-export function buildIngestPayload(rollup: DailyRollup): IngestPayload {
+export function buildIngestPayload(
+  rollup: DailyRollup,
+  usageSnapshot?: WireUsageSnapshot,
+): IngestPayload {
   return {
     ingestId: randomUUID(),
     observedAt: new Date().toISOString(),
     dailyRollup: rollup,
+    ...(usageSnapshot ? { usageSnapshot } : {}),
   };
 }
 

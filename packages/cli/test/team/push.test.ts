@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { SessionMeta } from "@claude-lens/parser";
 import {
   bucketToRollup,
   buildRollupsForRange,
   buildIngestPayload,
   pushToTeamServer,
+  readLatestUsageSnapshotForWire,
 } from "../../src/team/push.js";
 import type { TeamConfig } from "../../src/team/config.js";
 
@@ -127,6 +131,122 @@ describe("buildIngestPayload", () => {
     const a = buildIngestPayload(rollup);
     const b = buildIngestPayload(rollup);
     expect(a.ingestId).not.toBe(b.ingestId);
+  });
+
+  it("attaches usageSnapshot when provided", () => {
+    const rollup = bucketToRollup({
+      date: "2026-04-16", sessions: 0, toolCalls: 0, turns: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      durationMs: 0, airTimeMs: 0, peakParallelism: 0,
+    });
+    const snapshot = {
+      capturedAt: "2026-04-16T10:00:00.000Z",
+      fiveHour: { utilization: 5, resetsAt: "2026-04-16T14:00:00.000Z" },
+      sevenDay: { utilization: 30, resetsAt: "2026-04-22T00:00:00.000Z" },
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      sevenDayOauthApps: null,
+      sevenDayCowork: null,
+      extraUsage: null,
+    };
+    const payload = buildIngestPayload(rollup, snapshot);
+    expect(payload.usageSnapshot).toEqual(snapshot);
+  });
+
+  it("omits usageSnapshot key when not provided", () => {
+    const rollup = bucketToRollup({
+      date: "2026-04-16", sessions: 0, toolCalls: 0, turns: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      durationMs: 0, airTimeMs: 0, peakParallelism: 0,
+    });
+    const payload = buildIngestPayload(rollup);
+    expect("usageSnapshot" in payload).toBe(false);
+  });
+});
+
+describe("readLatestUsageSnapshotForWire", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "fleetlens-usage-test-"));
+    path = join(dir, "usage.jsonl");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function snapshotLine(overrides: Record<string, unknown> = {}) {
+    return JSON.stringify({
+      captured_at: "2026-04-16T10:00:00.000Z",
+      five_hour: { utilization: 23.7, resets_at: "2026-04-16T14:00:00.000Z" },
+      seven_day: { utilization: 47.2, resets_at: "2026-04-22T00:00:00.000Z" },
+      seven_day_opus: { utilization: 61, resets_at: "2026-04-22T00:00:00.000Z" },
+      seven_day_sonnet: null,
+      seven_day_oauth_apps: null,
+      seven_day_cowork: null,
+      extra_usage: null,
+      ...overrides,
+    });
+  }
+
+  it("returns null when file does not exist", () => {
+    expect(readLatestUsageSnapshotForWire(join(dir, "nope.jsonl"))).toBeNull();
+  });
+
+  it("returns null when last entry is older than 10 minutes", () => {
+    writeFileSync(path, snapshotLine() + "\n");
+    const farFuture = Date.parse("2026-04-16T11:00:00.000Z"); // 1h after captured_at
+    expect(readLatestUsageSnapshotForWire(path, farFuture)).toBeNull();
+  });
+
+  it("converts snake_case to camelCase wire format", () => {
+    writeFileSync(path, snapshotLine() + "\n");
+    const now = Date.parse("2026-04-16T10:05:00.000Z"); // within 10min
+    const wire = readLatestUsageSnapshotForWire(path, now);
+    expect(wire).toEqual({
+      capturedAt: "2026-04-16T10:00:00.000Z",
+      fiveHour: { utilization: 23.7, resetsAt: "2026-04-16T14:00:00.000Z" },
+      sevenDay: { utilization: 47.2, resetsAt: "2026-04-22T00:00:00.000Z" },
+      sevenDayOpus: { utilization: 61, resetsAt: "2026-04-22T00:00:00.000Z" },
+      sevenDaySonnet: null,
+      sevenDayOauthApps: null,
+      sevenDayCowork: null,
+      extraUsage: null,
+    });
+  });
+
+  it("converts extra_usage block including dollar fields", () => {
+    writeFileSync(
+      path,
+      snapshotLine({
+        extra_usage: {
+          is_enabled: true,
+          monthly_limit: 50,
+          used_credits: 12.5,
+          utilization: 25,
+        },
+      }) + "\n",
+    );
+    const now = Date.parse("2026-04-16T10:05:00.000Z");
+    const wire = readLatestUsageSnapshotForWire(path, now);
+    expect(wire?.extraUsage).toEqual({
+      isEnabled: true,
+      monthlyLimitUsd: 50,
+      usedCreditsUsd: 12.5,
+      utilization: 25,
+    });
+  });
+
+  it("returns the LAST line when multiple snapshots are present", () => {
+    const lines = [
+      snapshotLine({ captured_at: "2026-04-16T09:55:00.000Z", seven_day: { utilization: 10, resets_at: null } }),
+      snapshotLine({ captured_at: "2026-04-16T10:00:00.000Z", seven_day: { utilization: 50, resets_at: null } }),
+    ];
+    writeFileSync(path, lines.join("\n") + "\n");
+    const now = Date.parse("2026-04-16T10:05:00.000Z");
+    expect(readLatestUsageSnapshotForWire(path, now)?.sevenDay.utilization).toBe(50);
   });
 });
 
