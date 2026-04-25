@@ -690,3 +690,178 @@ None. Decisions in this spec:
 ---
 
 **Next steps:** user sign-off on this spec → invoke `writing-plans` skill to produce the Phase 2 implementation plan → begin implementation via `subagent-driven-development`.
+
+---
+
+## v2.1 Amendments — landed during dogfood QA (2026-04-24 / -25)
+
+After the initial Phase 2 implementation landed, a round of dogfood QA on real
+session data surfaced eight refinements that ship together as v2.1. None of
+them changed the locked decisions in this spec; they fix bugs, simplify
+surfaces, and add the production-rollout guardrails the master spec didn't
+fully anticipate.
+
+### A1. Settings collapsed to one toggle
+
+The settings form now exposes only `enabled`. `model` and `monthlyBudgetUsd`
+remain in `AiFeaturesSettings` (the daemon and queue still read them — defaults
+to `sonnet` / no-cap), but the UI no longer surfaces them. Rationale:
+needless complication for users who just want the feature on or off; if a
+real need for model-switching arises later it's additive.
+
+Code: `apps/web/app/settings/ai-features-form.tsx`,
+`apps/web/app/settings/page.tsx`, `apps/web/app/api/settings/route.ts`,
+`apps/web/lib/validate-settings.ts`. PUT route preserves on-disk model/budget.
+
+### A2. Digest prompt attribution fix
+
+The original prompt sent `shipped_titles: string[]` (flat) plus
+`projects: [{name, share_pct}]`. The model had to guess which project a PR
+belonged to; on a day with one substantive project (`claude-lens`) and one
+warmup-only worktree (`jackrabbit-malpais`), the model attributed the PR to
+the wrong project.
+
+Fix: `buildDigestUserPrompt` now sends
+- `shipped: [{title, project}]` — explicit pairing
+- `per_entry: [{project, active_min, outcome, pr_titles, brief_summary, friction_detail}]`
+  for every entry, so the model can correlate deliverables to their actual sessions
+
+Prompt rules added:
+- "Attribute every PR to its correct project using the per_entry list — never
+  join a PR title with a project from a different entry."
+- "A day where only trivial/warmup entries exist has no shipped work — say so
+  plainly."
+
+### A3. Day-level rollups for weekly aggregation
+
+`DayDigest` gains two deterministic fields (no LLM):
+- `outcome_day: "shipped" | "partial" | "blocked" | "exploratory" | "trivial" | "idle"`
+  — priority rollup from per-entry outcomes. If any entry shipped, the day is
+  shipped; otherwise partial > blocked > exploratory > trivial > idle.
+- `helpfulness_day: "essential" | "helpful" | "neutral" | "unhelpful" | null`
+  — mode across enriched entries with worse-signal tiebreak (so a regression
+  shows up early in weekly views).
+
+Both are populated in `buildDeterministicDigest`. They feed Phase 4 weekly
+synthesis directly: 7 day digests + outcome_day + helpfulness_day = enough
+signal for trajectory and standout-day detection without re-reading entries.
+
+### A4. SSE char-counter streaming during synth
+
+The SSE pipeline previously emitted `status phase=synth` once and then sat
+silent for ~60-90 seconds while `claude -p` ran. Felt stuck.
+
+`CallLLM` interface gains an optional `onProgress(info: { bytes, elapsedMs })`
+callback. `defaultCallLLM` and `defaultCallLLMDigest` invoke it on each
+additional KB of buffered output. `runDayDigestPipeline` polls a progress
+queue every 500 ms during the synth `await`, emitting a new
+`{ type: "progress", phase: "synth", bytes, elapsed_ms }` event type to the
+SSE stream. `DayDigestView` renders it as
+*"Claude composing… 2,537 chars (2.5 KB · 14s)"*. Same pattern the existing
+`/api/insights` route uses.
+
+### A5. Day-digest UI restructure
+
+The presentational layout shifted from "panel-on-everything" to a top-down
+narrative reading order:
+1. Hero — date + outcome pill + headline + stats strip
+2. Bands — `✓ what_went_well` / `⚠ what_hit_friction` (no card chrome)
+3. Narrative paragraph (inline prose)
+4. Tomorrow — suggestion with accent left-border
+5. Work breakdown — project list with share-pct bars + PR count
+6. Shipped — flat ✓-prefixed PR list with project attribution
+7. Sessions — `brief_summary` is the primary label (UUID hidden); each row
+   shows time, project, duration, outcome pill, and links to `/sessions/[id]`
+8. Goal mix — compact footer with legend
+
+`DayDigest` component now takes `entries` as a prop (passed from the page) so
+the sessions section can show `brief_summary` without a separate fetch.
+
+### A6. Rate-limit detection + force-rescue (production safety)
+
+Two enrichment-lifecycle bugs surfaced during QA: when the daemon hit Claude's
+5h limit, every concurrent enrichment received the plaintext "You've hit..."
+body. The parser treated those as JSON parse failures and burned through all
+3 retries in 90 seconds, leaving entries permanently stuck.
+
+Fix 1: `parseAndValidate` heuristically detects rate-limit responses
+(`"you've hit"`, `"5-hour limit"`, `"weekly limit"`, etc.). On rate-limit:
+- Skip the immediate retry (it'll just hit the cap again)
+- Apply error with `status: pending` and **don't increment retry_count**
+- Next daemon sweep tries cleanly once the window has rolled over
+
+Fix 2: `runDayDigestPipeline` with `force=true` rescues entries permanently
+stuck at `retry_count >= MAX_RETRY_COUNT` — resets to `pending`/`retry_count: 0`
+before the enrich stage, giving the digest page's Regenerate button the
+ability to recover stuck days. Verified on 2026-04-21 where 6 of 9 entries
+were stuck post-rate-limit; force-regen rescued and enriched all 6.
+
+Spend tracker bug: `day_digest` records were always `cost_usd: $0.0000`
+because `generateDayDigest` left `digest.cost_usd: null`. Fixed by exporting
+`computeCostUsd` from `enrich.ts` and computing it inline on success.
+
+### A7. Daemon is deterministic-only
+
+The original daemon's 5-min sweep called `runEnrichmentQueue` after the
+parse-and-build step. On first install, an end user with months of historical
+sessions would silently incur dozens of LLM calls before clicking anything.
+
+`packages/cli/src/perception/worker.ts` no longer invokes
+`runEnrichmentQueue`. The sweep still builds Entry files (deterministic, zero
+cost) so the data is always fresh and ready for on-demand enrichment.
+Enrichment now happens only when the user explicitly requests a digest —
+either via the home page's auto-yesterday trigger (one day per local-day) or
+the digest/backfill UI.
+
+### A8. Auto-yesterday + backfill UI
+
+Two surfaces tie the user-initiated model together:
+
+- **`apps/web/components/auto-generate-yesterday.tsx`** — client component
+  inside the Yesterday hero. On first mount per local-day (gated by
+  `localStorage[cclens:autogen-yesterday:{date}]`), POSTs
+  `/api/digest/day/{yesterday}`, streams SSE progress into a small inline
+  pulse pill, reloads the page on done. User lands → gets yesterday's story
+  in ~60-90s without clicking.
+
+- **`apps/web/app/digest/page.tsx`** — new backfill index. Lists last 30
+  days with status pill (✓ generated / • pending / — empty), entry count,
+  agent_min, PR count, and a checkbox per row. `<BackfillList>` (client)
+  supports "Select pending", "Select all with entries", Clear, and
+  Generate/Force buttons. Runs selected dates sequentially through the same
+  SSE pipeline; a progress panel shows each job's phase + entry index/total
+  + synth char count + elapsed seconds.
+
+Sidebar gains a `CalendarDays "Digest"` link for direct multi-day access.
+
+### Net effect for end-user rollout
+
+| Action | Old behavior | New behavior |
+|---|---|---|
+| `fleetlens start` (first install) | Daemon backfilled all history → unbidden $5-30 of LLM spend, possible weekly-limit exhaustion | Daemon builds Entry files only ($0). Enrichment is user-initiated. |
+| Open `/` for the first time today | Yesterday hero shows deterministic template | Hero shows deterministic template + pulsing "Generating yesterday's digest…" pill auto-fires once. ~$0.10 cost. |
+| Open `/digest/2026-03-15` (older day) | Read cache or 404 | Read cache → fall through to deterministic template; user clicks Generate to trigger that one day. |
+| Want to backfill a week | Type 7 URLs | `/digest` → "Select all with entries" → Generate. Live progress for each. |
+
+No surprise bills. Every LLM call traces to a click. Progress is always visible.
+
+### Files touched in v2.1
+
+- `packages/entries/src/types.ts` — `DayOutcome`, `DayHelpfulness` types + extended `DayDigest`
+- `packages/entries/src/digest-day.ts` — rollups, computeCostUsd usage, `onProgress` plumbing
+- `packages/entries/src/digest-day-pipeline.ts` — force-rescue, progress polling, `caller` field
+- `packages/entries/src/enrich.ts` — `LLMProgress`, rate-limit detection, exported `computeCostUsd`
+- `packages/entries/src/prompts/digest-day.ts` — prompt fixes (per_entry, attribution rules)
+- `packages/cli/src/perception/worker.ts` — drops `runEnrichmentQueue` call
+- `packages/cli/src/commands/digest.ts` — wired to `runDayDigestPipeline`, `caller: "cli"`
+- `apps/web/app/digest/page.tsx` — new backfill index
+- `apps/web/components/backfill-list.tsx` — new multi-select + progress
+- `apps/web/components/auto-generate-yesterday.tsx` — new client trigger
+- `apps/web/components/day-digest.tsx` — visual restructure
+- `apps/web/components/day-digest-view.tsx` — entries prop, progress events
+- `apps/web/components/yesterday-hero.tsx` — auto-gen integration
+- `apps/web/components/recent-days-panel.tsx` — status pill + Backfill link
+- `apps/web/components/sidebar.tsx` — `Digest` nav link
+- `apps/web/app/settings/{page,ai-features-form}.tsx` — collapsed form
+- `apps/web/lib/validate-settings.ts` — schema simplified
+- `scripts/smoke.mjs` — `/digest`, `/digest/[yesterday]` routes
