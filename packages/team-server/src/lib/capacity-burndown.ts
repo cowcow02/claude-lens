@@ -1,4 +1,4 @@
-import { tierEntry, type PlanTierKey } from "./plan-tiers.js";
+import { tierEntry, type PlanTierKey } from "./plan-tiers";
 
 // One member's most recent snapshot, joined with their plan tier. Members on
 // `custom` tier are excluded by the caller (no dollar cap to compare against).

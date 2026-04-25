@@ -3,7 +3,7 @@ import {
   nextTierUp,
   type PlanTierEntry,
   type PlanTierKey,
-} from "./plan-tiers.js";
+} from "./plan-tiers";
 
 // Aggregated stats over the last 30 days for one member, derived from
 // membership_weekly_utilization. All percentages are 0-100. nulls represent

@@ -3,9 +3,9 @@ import {
   DEFAULT_OPTIMIZER_SETTINGS,
   type MemberStats,
   type OptimizerSettings,
-} from "./plan-optimizer.js";
-import type { MemberLatestSnapshot } from "./capacity-burndown.js";
-import type { PlanTierKey } from "./plan-tiers.js";
+} from "./plan-optimizer";
+import type { MemberLatestSnapshot } from "./capacity-burndown";
+import type { PlanTierKey } from "./plan-tiers";
 
 export type OptimizerMemberInput = {
   membershipId: string;
