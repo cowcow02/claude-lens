@@ -16,7 +16,7 @@ let pool: ReturnType<typeof getPool>;
 let teamId: string;
 let teamSlug: string;
 let adminCookie: string;
-let memberships = {
+const memberships = {
   alice: "",
   bob: "",
   carol: "",
