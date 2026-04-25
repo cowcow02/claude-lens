@@ -92,20 +92,14 @@ export async function* runDayDigestPipeline(
         yield { type: "status", phase: "enrich", text: `Enriching ${pending.length} entries for ${date}` };
         const budget = opts.settings.monthlyBudgetUsd ?? Infinity;
         let idx = 0;
-        // Buffer onProgress events from async chunks and drain between entries.
-        // We can't yield from inside the enrichEntry stdout handler; we collect
-        // the latest progress snapshot and emit it before/after each entry.
-        let lastProgress: { bytes: number; elapsedMs: number } | null = null;
         for (const entry of pending) {
           idx++;
           if (monthToDateSpend() >= budget) {
             yield { type: "status", phase: "enrich", text: `budget cap reached — stopping enrichment` };
             break;
           }
-          lastProgress = null;
           const { entry: result, usage } = await enrichEntry(entry, {
             model: opts.settings.model, callLLM: opts.callLLM,
-            onProgress: (info) => { lastProgress = info; },
           });
           writeEntry(result);
           if (result.enrichment.status === "done") {

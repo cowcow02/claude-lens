@@ -247,7 +247,11 @@ export async function generateDayDigest(
   const model = opts.model ?? DEFAULT_MODEL;
   const callLLM = opts.callLLM ?? defaultCallLLMDigest;
   const userPrompt = buildDigestUserPrompt(base, entries);
-  let inT = 0, outT = 0, lastModel = model;
+  let inT = 0, outT = 0;
+  // Initial value is the safety net for the throws-before-reassignment path,
+  // even though the catch branch doesn't end up reading lastModel today.
+  // eslint-disable-next-line no-useless-assignment
+  let lastModel: string = model;
 
   try {
     const r1 = await callLLM({ model, userPrompt, onProgress: opts.onProgress });

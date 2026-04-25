@@ -216,7 +216,11 @@ export async function enrichEntry(entry: Entry, opts: EnrichOptions = {}): Promi
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let anyCallReturned = false;
-  let lastModelId = model;
+  let lastModelId: string = model;
+  // Initial empty string is the safety net for the (unreachable today)
+  // path where neither the try body nor catch block runs assignment.
+  // Removing it would make TS complain about possibly-unassigned reads.
+  // eslint-disable-next-line no-useless-assignment
   let lastError = "";
   // Track whether every failure we've seen has been a rate-limit signature.
   // If both attempts hit rate limits, we DON'T increment retry_count —
