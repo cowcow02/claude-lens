@@ -3,7 +3,9 @@ import { redirect } from "next/navigation";
 import { getPool } from "../../../../../db/pool";
 import { validateSession } from "../../../../../lib/auth";
 import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
+import { loadMemberPlanSummary } from "../../../../../lib/plan-queries";
 import { MemberProfile } from "../../../../../components/member-profile";
+import { MemberPlanBlock } from "../../../../../components/member-plan-block";
 
 export default async function MemberPage({
   params,
@@ -39,7 +41,10 @@ export default async function MemberPage({
     );
   }
 
-  const rollups = await loadMemberRollups(member.team_id, id, 30, pool);
+  const [rollups, planSummary] = await Promise.all([
+    loadMemberRollups(member.team_id, id, 30, pool),
+    loadMemberPlanSummary(member.team_id, id, pool),
+  ]);
   const canSeeRoster = myMembership.role === "admin";
 
   return (
@@ -54,6 +59,7 @@ export default async function MemberPage({
         </div>
       )}
       <MemberProfile member={member} rollups={rollups} />
+      <MemberPlanBlock summary={planSummary} />
     </>
   );
 }

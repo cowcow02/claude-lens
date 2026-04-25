@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { MemberTierEditor } from "./member-tier-editor";
 
 type TeamRow = { id: string; name: string; slug: string; created_at: string };
 type MemberRow = {
@@ -9,6 +10,7 @@ type MemberRow = {
   display_name: string | null;
   role: string;
   revoked_at: string | null;
+  plan_tier: string;
 };
 
 export function SettingsPanel({ team, members, teamSlug }: { team: TeamRow; members: MemberRow[]; teamSlug: string }) {
@@ -94,6 +96,14 @@ export function SettingsPanel({ team, members, teamSlug }: { team: TeamRow; memb
             <p className="help-note">Expires in 7 days. The invitee creates their password on first click.</p>
           </div>
         )}
+      </section>
+
+      <section className="settings-section">
+        <div className="subsection-head">
+          <h2>Plan tiers</h2>
+          <span className="kicker">Used by the Plan view&rsquo;s optimizer + burndown</span>
+        </div>
+        <MemberTierEditor members={members.filter((m) => !m.revoked_at)} />
       </section>
 
       <section className="settings-section">

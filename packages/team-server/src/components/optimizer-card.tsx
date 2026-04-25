@@ -1,0 +1,147 @@
+import type { Recommendation } from "../lib/plan-optimizer";
+import { PLAN_TIERS, type PlanTierKey } from "../lib/plan-tiers";
+
+type Props = {
+  membershipId: string;
+  memberName: string;
+  memberEmail: string | null;
+  currentPlan: { key: string; label: string; weeklyLimitUsd: number };
+  usage: {
+    avgSevenDayPct: number;
+    worstSevenDayPeak: number;
+    worstFiveHourPeak: number;
+    worstOpusPeak: number;
+    totalDaysObserved: number;
+    lastSeen: string | null;
+  };
+  recommendation: Recommendation;
+};
+
+const ACTION_LABEL: Record<Recommendation["action"], string> = {
+  insufficient_data: "Collecting data",
+  review_manually: "Review manually",
+  top_up_needed: "Top up needed",
+  upgrade_urgent: "Upgrade urgent",
+  upgrade: "Upgrade suggested",
+  downgrade: "Downgrade",
+  stay: "Plan well-matched",
+};
+
+const ACTION_TONE: Record<Recommendation["action"], "warn" | "danger" | "info" | "good"> = {
+  insufficient_data: "info",
+  review_manually: "info",
+  top_up_needed: "danger",
+  upgrade_urgent: "danger",
+  upgrade: "warn",
+  downgrade: "good",
+  stay: "good",
+};
+
+export function OptimizerCard(props: Props) {
+  const { recommendation: r, usage, currentPlan, memberName, memberEmail } = props;
+  const tone = ACTION_TONE[r.action];
+  const targetTier = "targetTier" in r ? PLAN_TIERS[r.targetTier as PlanTierKey] : null;
+
+  return (
+    <div className="optimizer-card" style={cardStyle(tone)}>
+      <div className="optimizer-card-head">
+        <div>
+          <div className="optimizer-card-name">{memberName}</div>
+          {memberEmail && memberName !== memberEmail && (
+            <div className="optimizer-card-email mono">{memberEmail}</div>
+          )}
+        </div>
+        <div className="optimizer-card-tier mono">
+          {currentPlan.label}
+          {currentPlan.weeklyLimitUsd > 0 && (
+            <span style={{ color: "var(--mute)", marginLeft: 6 }}>
+              ${currentPlan.weeklyLimitUsd}/wk
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="optimizer-card-stats">
+        <Stat label="7d avg" value={`${usage.avgSevenDayPct.toFixed(0)}%`} />
+        <Stat label="7d peak" value={`${usage.worstSevenDayPeak.toFixed(0)}%`} />
+        <Stat label="5h peak" value={`${usage.worstFiveHourPeak.toFixed(0)}%`} />
+        <Stat
+          label="Days obs"
+          value={`${usage.totalDaysObserved} / 30`}
+        />
+      </div>
+
+      <div className="optimizer-card-action" style={recBadge(tone)}>
+        <span className="mono" style={{ letterSpacing: "0.1em", fontSize: 11 }}>
+          {ACTION_LABEL[r.action].toUpperCase()}
+        </span>
+        {"confidence" in r && (
+          <span className="mono" style={{ fontSize: 10, color: "var(--mute)", marginLeft: 8 }}>
+            · {r.confidence}
+          </span>
+        )}
+      </div>
+
+      <div className="optimizer-card-rationale">{r.rationale}</div>
+
+      {r.action === "downgrade" && (
+        <div className="optimizer-card-savings mono">
+          Saves ~${Math.round(r.estimatedSavingsUsd)}/month
+          {targetTier && (
+            <span style={{ color: "var(--mute)", marginLeft: 8 }}>
+              → {targetTier.label} (${targetTier.weeklyLimitUsd}/wk)
+            </span>
+          )}
+        </div>
+      )}
+      {(r.action === "upgrade" || r.action === "upgrade_urgent") && targetTier && (
+        <div className="optimizer-card-savings mono" style={{ color: "var(--ink)" }}>
+          → {targetTier.label} (${targetTier.weeklyLimitUsd}/wk)
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="optimizer-card-stat">
+      <div className="optimizer-card-stat-label">{label}</div>
+      <div className="optimizer-card-stat-value mono">{value}</div>
+    </div>
+  );
+}
+
+function cardStyle(tone: "warn" | "danger" | "info" | "good"): React.CSSProperties {
+  return {
+    background: "var(--paper)",
+    border: "1px solid var(--rule)",
+    borderLeft: `3px solid ${toneColor(tone)}`,
+    padding: "16px 18px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  };
+}
+
+function recBadge(tone: "warn" | "danger" | "info" | "good"): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    color: toneColor(tone),
+    fontWeight: 600,
+  };
+}
+
+function toneColor(tone: "warn" | "danger" | "info" | "good"): string {
+  switch (tone) {
+    case "danger":
+      return "#a93b2c";
+    case "warn":
+      return "#b58400";
+    case "good":
+      return "#2c6e49";
+    case "info":
+      return "var(--mute)";
+  }
+}

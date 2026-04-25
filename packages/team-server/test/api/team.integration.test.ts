@@ -7,7 +7,7 @@ import { POST as invitesPOST } from "../../src/app/api/team/invites/route.js";
 import { POST as joinPOST } from "../../src/app/api/team/join/route.js";
 import { POST as leavePOST } from "../../src/app/api/team/leave/route.js";
 import { GET as whoamiGET } from "../../src/app/api/team/whoami/route.js";
-import { GET as memberGET, DELETE as memberDELETE } from "../../src/app/api/team/members/[id]/route.js";
+import { GET as memberGET, DELETE as memberDELETE, PATCH as memberPATCH } from "../../src/app/api/team/members/[id]/route.js";
 import { GET as settingsGET, PUT as settingsPUT } from "../../src/app/api/team/settings/route.js";
 import { createUserAccount, createSession } from "../../src/lib/auth.js";
 import { createTeamWithAdmin } from "../../src/lib/teams.js";
@@ -464,6 +464,106 @@ describe("PUT /api/team/settings", () => {
     );
     const res = await settingsPUT(req);
     expect(res.status).toBe(403);
+  });
+
+  it("admin can update planOptimizer settings (merges into jsonb)", async () => {
+    const req = makeAuthedReq(
+      `http://localhost/api/team/settings?team=${teamSlug}`,
+      adminCookieToken,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          planOptimizer: {
+            minDaysRequired: 21,
+            upgradeIfAvgAbove: 75,
+            urgentUpgradeIfMaxAbove: 95,
+            downgradeIfAvgBelow: 35,
+            downgradeIfMaxBelow: 60,
+          },
+        }),
+      }
+    );
+    const res = await settingsPUT(req);
+    expect(res.status).toBe(200);
+    const settingsRow = await pool.query<{ settings: any }>(
+      "SELECT settings FROM teams WHERE slug = $1",
+      [teamSlug],
+    );
+    expect(settingsRow.rows[0].settings.planOptimizer.upgradeIfAvgAbove).toBe(75);
+  });
+});
+
+describe("PATCH /api/team/members/[id]", () => {
+  it("admin can change a member's plan_tier", async () => {
+    const req = makeAuthedReq(
+      `http://localhost/api/team/members/${memberMembershipId}`,
+      adminCookieToken,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planTier: "pro" }),
+      },
+    );
+    const res = await memberPATCH(req, { params: Promise.resolve({ id: memberMembershipId }) });
+    expect(res.status).toBe(200);
+    const row = await pool.query<{ plan_tier: string }>(
+      "SELECT plan_tier FROM memberships WHERE id = $1",
+      [memberMembershipId],
+    );
+    expect(row.rows[0].plan_tier).toBe("pro");
+
+    // Resets it back so other tests are unaffected.
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max' WHERE id = $1", [memberMembershipId]);
+  });
+
+  it("rejects unknown plan_tier with 400", async () => {
+    const req = makeAuthedReq(
+      `http://localhost/api/team/members/${memberMembershipId}`,
+      adminCookieToken,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planTier: "enterprise" }),
+      },
+    );
+    const res = await memberPATCH(req, { params: Promise.resolve({ id: memberMembershipId }) });
+    expect(res.status).toBe(400);
+  });
+
+  it("non-admin cannot PATCH (403)", async () => {
+    const req = makeAuthedReq(
+      `http://localhost/api/team/members/${memberMembershipId}`,
+      memberCookieToken,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planTier: "pro" }),
+      },
+    );
+    const res = await memberPATCH(req, { params: Promise.resolve({ id: memberMembershipId }) });
+    expect(res.status).toBe(403);
+  });
+
+  it("writes a members.plan_tier_changed event row", async () => {
+    const before = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM events WHERE action = 'members.plan_tier_changed'",
+    );
+    const req = makeAuthedReq(
+      `http://localhost/api/team/members/${memberMembershipId}`,
+      adminCookieToken,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planTier: "pro-max-20x" }),
+      },
+    );
+    await memberPATCH(req, { params: Promise.resolve({ id: memberMembershipId }) });
+    const after = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM events WHERE action = 'members.plan_tier_changed'",
+    );
+    expect(Number(after.rows[0].count)).toBe(Number(before.rows[0].count) + 1);
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max' WHERE id = $1", [memberMembershipId]);
   });
 });
 

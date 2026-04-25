@@ -57,7 +57,8 @@ export default async function TeamLayout({
           ) : (
             <a href={`/team/${slug}/members/${myMembership.id}`}>My profile <span className="mono">01</span></a>
           )}
-          {isAdmin && <a href={`/team/${slug}/settings`}>Settings <span className="mono">02</span></a>}
+          {isAdmin && <a href={`/team/${slug}/plan`}>Plan <span className="mono">02</span></a>}
+          {isAdmin && <a href={`/team/${slug}/settings`}>Settings <span className="mono">03</span></a>}
           {state.allowMultipleTeams && <a href="/teams/new">+ New team</a>}
           <div className="shell-nav-label">Account</div>
           <div className="mono" style={{ fontSize: 11, color: "var(--mute)", padding: "4px 0 8px" }}>

@@ -34,7 +34,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
   }
 
   const members = await pool.query(
-    `SELECT m.id, u.email, u.display_name, m.role, m.joined_at, m.last_seen_at, m.revoked_at
+    `SELECT m.id, u.email, u.display_name, m.role, m.joined_at, m.last_seen_at, m.revoked_at, m.plan_tier
      FROM memberships m JOIN user_accounts u ON u.id = m.user_account_id
      WHERE m.team_id = $1 ORDER BY m.joined_at`,
     [team.id]
