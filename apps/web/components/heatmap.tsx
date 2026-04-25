@@ -1,7 +1,16 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import type { DailyBucket } from "@claude-lens/parser";
+import type { DayOutcome, DayHelpfulness } from "@claude-lens/entries";
+import { OUTCOME_STYLES } from "./outcome-pill";
+
+export type DaySummary = {
+  outcome: DayOutcome | null;
+  headline: string | null;
+  helpfulness: DayHelpfulness;
+};
 
 /**
  * GitHub-style contribution heatmap.
@@ -14,12 +23,15 @@ export function Heatmap({
   valueKey = "sessions",
   cellSize = 13,
   cellGap = 3,
+  daySummaries,
 }: {
   buckets: DailyBucket[];
   valueKey?: "sessions" | "toolCalls" | "turns";
   cellSize?: number;
   cellGap?: number;
+  daySummaries?: Map<string, DaySummary>;
 }) {
+  const router = useRouter();
   const [hover, setHover] = useState<{ bucket: DailyBucket; x: number; y: number } | null>(null);
 
   const { weeks, max } = useMemo(() => {
@@ -117,6 +129,9 @@ export function Heatmap({
                     });
                   }}
                   onMouseLeave={() => setHover(null)}
+                  onClick={() => {
+                    if (val > 0) router.push(`/digest/${bucket.date}`);
+                  }}
                   // Use `style.fill` not the `fill` attribute — React does
                   // not expand CSS custom properties (var(--…)) inside the
                   // SVG presentation attribute, but it does resolve them in
@@ -178,12 +193,74 @@ export function Heatmap({
             boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
           }}
         >
-          <div style={{ fontWeight: 600 }}>{hover.bucket.date}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            <span style={{ fontWeight: 600 }}>{hover.bucket.date}</span>
+            {(() => {
+              const sum = daySummaries?.get(hover.bucket.date);
+              if (!sum?.outcome) return null;
+              const variant = OUTCOME_STYLES[sum.outcome];
+              return (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 3,
+                    padding: "1px 6px",
+                    borderRadius: 99,
+                    fontSize: 9,
+                    fontWeight: 600,
+                    background: variant.bg,
+                    color: variant.fg,
+                  }}
+                >
+                  {variant.icon} {variant.label}
+                </span>
+              );
+            })()}
+          </div>
+          {(() => {
+            const sum = daySummaries?.get(hover.bucket.date);
+            if (sum?.headline) {
+              return (
+                <div
+                  style={{
+                    color: "var(--af-text)",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    marginBottom: 2,
+                    maxWidth: 280,
+                    whiteSpace: "normal",
+                    lineHeight: 1.35,
+                  }}
+                >
+                  &ldquo;{sum.headline}&rdquo;
+                </div>
+              );
+            }
+            return null;
+          })()}
           <div style={{ color: "var(--af-text-secondary)" }}>
             {hover.bucket.sessions} session{hover.bucket.sessions === 1 ? "" : "s"}
             {hover.bucket.toolCalls > 0 && ` · ${hover.bucket.toolCalls} tool calls`}
             {hover.bucket.peakParallelism > 1 && ` · peak ×${hover.bucket.peakParallelism}`}
           </div>
+          {(() => {
+            const sum = daySummaries?.get(hover.bucket.date);
+            if (sum?.helpfulness) {
+              return (
+                <div
+                  style={{
+                    color: "var(--af-text-tertiary)",
+                    fontSize: 10,
+                    marginTop: 2,
+                  }}
+                >
+                  Claude: {sum.helpfulness}
+                </div>
+              );
+            }
+            return null;
+          })()}
         </div>
       )}
     </div>
