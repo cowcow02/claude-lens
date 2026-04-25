@@ -1,5 +1,30 @@
 import { z } from "zod";
 
+const UsageWindowSchema = z.object({
+  utilization: z.number().nullable(),
+  resetsAt: z.string().datetime().nullable(),
+}).passthrough();
+
+const ExtraUsageSchema = z.object({
+  isEnabled: z.boolean(),
+  monthlyLimitUsd: z.number().nullable(),
+  usedCreditsUsd: z.number().nullable(),
+  utilization: z.number().nullable(),
+}).passthrough();
+
+export const UsageSnapshotSchema = z.object({
+  capturedAt: z.string().datetime(),
+  fiveHour: UsageWindowSchema,
+  sevenDay: UsageWindowSchema,
+  sevenDayOpus: UsageWindowSchema.nullable(),
+  sevenDaySonnet: UsageWindowSchema.nullable(),
+  sevenDayOauthApps: UsageWindowSchema.nullable(),
+  sevenDayCowork: UsageWindowSchema.nullable(),
+  extraUsage: ExtraUsageSchema.nullable(),
+}).passthrough();
+
+export type UsageSnapshot = z.infer<typeof UsageSnapshotSchema>;
+
 export const IngestPayload = z.object({
   ingestId: z.string(),
   observedAt: z.string().datetime(),
@@ -16,6 +41,7 @@ export const IngestPayload = z.object({
       cacheWrite: z.number().int().nonnegative(),
     }).passthrough(),
   }).passthrough(),
+  usageSnapshot: UsageSnapshotSchema.optional(),
 }).passthrough();
 
 export const ClaimPayload = z.object({

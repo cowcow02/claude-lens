@@ -42,6 +42,34 @@ export async function processIngest(
     `, [teamId, membershipId, r.day, r.agentTimeMs, r.sessions, r.toolCalls, r.turns,
         r.tokens.input, r.tokens.output, r.tokens.cacheRead, r.tokens.cacheWrite]);
 
+    if (payload.usageSnapshot) {
+      const u = payload.usageSnapshot;
+      await client.query(`
+        INSERT INTO plan_utilization (
+          team_id, membership_id, captured_at,
+          five_hour_utilization, five_hour_resets_at,
+          seven_day_utilization, seven_day_resets_at,
+          seven_day_opus_utilization, seven_day_sonnet_utilization,
+          seven_day_oauth_apps_utilization, seven_day_cowork_utilization,
+          extra_usage_enabled, extra_usage_monthly_limit_usd,
+          extra_usage_used_credits_usd, extra_usage_utilization
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ON CONFLICT (team_id, membership_id, captured_at) DO NOTHING
+      `, [
+        teamId, membershipId, u.capturedAt,
+        u.fiveHour.utilization, u.fiveHour.resetsAt,
+        u.sevenDay.utilization, u.sevenDay.resetsAt,
+        u.sevenDayOpus?.utilization ?? null,
+        u.sevenDaySonnet?.utilization ?? null,
+        u.sevenDayOauthApps?.utilization ?? null,
+        u.sevenDayCowork?.utilization ?? null,
+        u.extraUsage?.isEnabled ?? false,
+        u.extraUsage?.monthlyLimitUsd ?? null,
+        u.extraUsage?.usedCreditsUsd ?? null,
+        u.extraUsage?.utilization ?? null,
+      ]);
+    }
+
     await client.query("UPDATE memberships SET last_seen_at = now() WHERE id = $1", [membershipId]);
     await client.query("COMMIT");
   } catch (err) {

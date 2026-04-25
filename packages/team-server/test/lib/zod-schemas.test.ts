@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { IngestPayload, ClaimPayload, InvitePayload, JoinPayload } from "../../src/lib/zod-schemas.js";
+import {
+  IngestPayload,
+  ClaimPayload,
+  InvitePayload,
+  JoinPayload,
+  UsageSnapshotSchema,
+} from "../../src/lib/zod-schemas.js";
 
 const validIngest = {
   ingestId: "abc123",
@@ -91,5 +97,55 @@ describe("JoinPayload", () => {
     expect(() =>
       JoinPayload.parse({ inviteToken: "tok123" })
     ).not.toThrow();
+  });
+});
+
+describe("UsageSnapshotSchema", () => {
+  const validSnapshot = {
+    capturedAt: "2026-04-22T10:30:00.000Z",
+    fiveHour: { utilization: 23.7, resetsAt: "2026-04-22T14:00:00.000Z" },
+    sevenDay: { utilization: 47.2, resetsAt: "2026-04-26T00:00:00.000Z" },
+    sevenDayOpus: null,
+    sevenDaySonnet: null,
+    sevenDayOauthApps: null,
+    sevenDayCowork: null,
+    extraUsage: null,
+  };
+
+  it("passes with the minimal-non-null shape", () => {
+    expect(() => UsageSnapshotSchema.parse(validSnapshot)).not.toThrow();
+  });
+
+  it("accepts null utilization on a window", () => {
+    expect(() =>
+      UsageSnapshotSchema.parse({
+        ...validSnapshot,
+        fiveHour: { utilization: null, resetsAt: null },
+      }),
+    ).not.toThrow();
+  });
+
+  it("preserves unknown fields on extraUsage (passthrough)", () => {
+    const result = UsageSnapshotSchema.parse({
+      ...validSnapshot,
+      extraUsage: {
+        isEnabled: true,
+        monthlyLimitUsd: 50,
+        usedCreditsUsd: 10,
+        utilization: 20,
+        futureField: "v2",
+      },
+    });
+    expect((result.extraUsage as any).futureField).toBe("v2");
+  });
+
+  it("rejects when fiveHour window is missing", () => {
+    const { fiveHour: _omit, ...rest } = validSnapshot;
+    expect(() => UsageSnapshotSchema.parse(rest)).toThrow();
+  });
+
+  it("IngestPayload accepts an optional usageSnapshot", () => {
+    const withSnapshot = { ...validIngest, usageSnapshot: validSnapshot };
+    expect(() => IngestPayload.parse(withSnapshot)).not.toThrow();
   });
 });

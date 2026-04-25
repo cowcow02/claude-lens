@@ -136,4 +136,102 @@ describe("processIngest", () => {
       processIngest({ ingestId: "x", observedAt: new Date().toISOString() }, membershipId, teamId, pool)
     ).rejects.toThrow();
   });
+
+  it("inserts plan_utilization row when usageSnapshot present", async () => {
+    const capturedAt = new Date("2026-04-22T10:30:00Z").toISOString();
+    const payload = makePayload({
+      usageSnapshot: {
+        capturedAt,
+        fiveHour: { utilization: 23.7, resetsAt: "2026-04-22T14:00:00Z" },
+        sevenDay: { utilization: 47.2, resetsAt: "2026-04-26T00:00:00Z" },
+        sevenDayOpus: { utilization: 61.0, resetsAt: "2026-04-26T00:00:00Z" },
+        sevenDaySonnet: { utilization: 31.4, resetsAt: "2026-04-26T00:00:00Z" },
+        sevenDayOauthApps: null,
+        sevenDayCowork: null,
+        extraUsage: null,
+      },
+    });
+    await processIngest(payload, membershipId, teamId, pool);
+
+    const { rows } = await pool.query(
+      `SELECT seven_day_utilization, seven_day_opus_utilization, extra_usage_enabled
+       FROM plan_utilization WHERE team_id=$1 AND membership_id=$2 AND captured_at=$3`,
+      [teamId, membershipId, capturedAt]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].seven_day_utilization).toBeCloseTo(47.2, 4);
+    expect(rows[0].seven_day_opus_utilization).toBeCloseTo(61.0, 4);
+    expect(rows[0].extra_usage_enabled).toBe(false);
+  });
+
+  it("skips plan_utilization insert when usageSnapshot absent", async () => {
+    const before = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id = $1",
+      [membershipId]
+    );
+    await processIngest(makePayload(), membershipId, teamId, pool);
+    const after = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id = $1",
+      [membershipId]
+    );
+    expect(after.rows[0].count).toBe(before.rows[0].count);
+  });
+
+  it("plan_utilization is idempotent on (team, membership, captured_at)", async () => {
+    const capturedAt = new Date("2026-04-23T08:00:00Z").toISOString();
+    const snapshot = {
+      capturedAt,
+      fiveHour: { utilization: 10, resetsAt: "2026-04-23T13:00:00Z" },
+      sevenDay: { utilization: 20, resetsAt: "2026-04-27T00:00:00Z" },
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      sevenDayOauthApps: null,
+      sevenDayCowork: null,
+      extraUsage: null,
+    };
+    // Two distinct ingestIds, same captured_at: only one plan_utilization row.
+    await processIngest(makePayload({ usageSnapshot: snapshot }), membershipId, teamId, pool);
+    await processIngest(makePayload({ usageSnapshot: snapshot }), membershipId, teamId, pool);
+
+    const { rows } = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id=$1 AND captured_at=$2",
+      [membershipId, capturedAt]
+    );
+    expect(rows[0].count).toBe("1");
+  });
+
+  it("captures extra_usage credits when present", async () => {
+    const capturedAt = new Date("2026-04-24T12:00:00Z").toISOString();
+    await processIngest(
+      makePayload({
+        usageSnapshot: {
+          capturedAt,
+          fiveHour: { utilization: 15, resetsAt: "2026-04-24T17:00:00Z" },
+          sevenDay: { utilization: 88, resetsAt: "2026-04-28T00:00:00Z" },
+          sevenDayOpus: null,
+          sevenDaySonnet: null,
+          sevenDayOauthApps: null,
+          sevenDayCowork: null,
+          extraUsage: {
+            isEnabled: true,
+            monthlyLimitUsd: 50,
+            usedCreditsUsd: 12.5,
+            utilization: 25,
+          },
+        },
+      }),
+      membershipId,
+      teamId,
+      pool,
+    );
+
+    const { rows } = await pool.query(
+      `SELECT extra_usage_enabled, extra_usage_monthly_limit_usd, extra_usage_used_credits_usd
+       FROM plan_utilization WHERE captured_at = $1`,
+      [capturedAt],
+    );
+    expect(rows[0].extra_usage_enabled).toBe(true);
+    expect(rows[0].extra_usage_monthly_limit_usd).toBeCloseTo(50, 4);
+    expect(rows[0].extra_usage_used_credits_usd).toBeCloseTo(12.5, 4);
+  });
 });
