@@ -30,8 +30,47 @@ describe("migrations", () => {
       "events",
       "ingest_log",
       "server_config",
+      "plan_utilization",
     ]) {
       expect(tables).toContain(expected);
+    }
+  });
+
+  it("0002 creates plan_utilization table, plan_tier column, and weekly mat view", async () => {
+    const pool = getPool();
+
+    const cols = await pool.query<{ column_name: string; column_default: string | null }>(
+      `SELECT column_name, column_default
+       FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'memberships' AND column_name = 'plan_tier'`,
+    );
+    expect(cols.rowCount).toBe(1);
+    expect(cols.rows[0].column_default).toMatch(/'pro-max'/);
+
+    const view = await pool.query(
+      `SELECT 1 FROM pg_matviews
+       WHERE schemaname = 'public' AND matviewname = 'membership_weekly_utilization'`,
+    );
+    expect(view.rowCount).toBe(1);
+
+    // Plan tier CHECK rejects invalid values.
+    const user = await pool.query<{ id: string }>(
+      `INSERT INTO user_accounts (email, password_hash) VALUES ('plan-tier-test@example.com','x') RETURNING id`,
+    );
+    const team = await pool.query<{ id: string }>(
+      `INSERT INTO teams (slug, name) VALUES ('plan-tier-test','Plan Tier') RETURNING id`,
+    );
+    try {
+      await expect(
+        pool.query(
+          `INSERT INTO memberships (user_account_id, team_id, role, plan_tier)
+           VALUES ($1, $2, 'admin', 'enterprise')`,
+          [user.rows[0].id, team.rows[0].id],
+        ),
+      ).rejects.toThrow(/check constraint|memberships_plan_tier_check/i);
+    } finally {
+      await pool.query(`DELETE FROM teams WHERE id = $1`, [team.rows[0].id]);
+      await pool.query(`DELETE FROM user_accounts WHERE id = $1`, [user.rows[0].id]);
     }
   });
 
@@ -79,6 +118,7 @@ describe("schema parity with SCHEMA_SQL", () => {
       "joined_at",
       "last_seen_at",
       "revoked_at",
+      "plan_tier",
     ]);
     const roleCol = memberships.find((c) => c.column_name === "role")!;
     expect(roleCol.is_nullable).toBe("NO");

@@ -9,6 +9,7 @@ import {
   bigint,
   bigserial,
   jsonb,
+  real,
   index,
   uniqueIndex,
   check,
@@ -50,9 +51,14 @@ export const memberships = pgTable(
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    planTier: text("plan_tier").notNull().default("pro-max"),
   },
   (t) => ({
     roleCheck: check("memberships_role_check", sql`${t.role} IN ('admin','member')`),
+    planTierCheck: check(
+      "memberships_plan_tier_check",
+      sql`${t.planTier} IN ('pro','pro-max','pro-max-20x','custom')`,
+    ),
     uniqUserTeam: uniqueIndex("memberships_user_account_id_team_id_key").on(t.userAccountId, t.teamId),
     teamActive: index("idx_memberships_team_active").on(t.teamId).where(sql`${t.revokedAt} IS NULL`),
     bearer: index("idx_memberships_bearer").on(t.bearerTokenHash).where(sql`${t.bearerTokenHash} IS NOT NULL`),
@@ -157,3 +163,43 @@ export const updateCheckCache = pgTable("update_check_cache", {
   lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }).notNull().defaultNow(),
   lastUpdateAttempt: jsonb("last_update_attempt"),
 });
+
+export const planUtilization = pgTable(
+  "plan_utilization",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id")
+      .notNull()
+      .references(() => memberships.id, { onDelete: "cascade" }),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+    fiveHourUtilization: real("five_hour_utilization"),
+    fiveHourResetsAt: timestamp("five_hour_resets_at", { withTimezone: true }),
+    sevenDayUtilization: real("seven_day_utilization"),
+    sevenDayResetsAt: timestamp("seven_day_resets_at", { withTimezone: true }),
+    sevenDayOpusUtilization: real("seven_day_opus_utilization"),
+    sevenDaySonnetUtilization: real("seven_day_sonnet_utilization"),
+    sevenDayOauthAppsUtilization: real("seven_day_oauth_apps_utilization"),
+    sevenDayCoworkUtilization: real("seven_day_cowork_utilization"),
+    extraUsageEnabled: boolean("extra_usage_enabled").notNull().default(false),
+    extraUsageMonthlyLimitUsd: real("extra_usage_monthly_limit_usd"),
+    extraUsageUsedCreditsUsd: real("extra_usage_used_credits_usd"),
+    extraUsageUtilization: real("extra_usage_utilization"),
+  },
+  (t) => ({
+    uniqSnapshot: uniqueIndex("plan_utilization_snapshot_key").on(
+      t.teamId,
+      t.membershipId,
+      t.capturedAt,
+    ),
+    teamCaptured: index("idx_plan_utilization_team_captured").on(
+      t.teamId,
+      sql`${t.capturedAt} DESC`,
+    ),
+    teamMemberCaptured: index("idx_plan_utilization_team_member_captured").on(
+      t.teamId,
+      t.membershipId,
+      sql`${t.capturedAt} DESC`,
+    ),
+  }),
+);
