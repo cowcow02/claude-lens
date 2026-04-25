@@ -1,13 +1,5 @@
-import type { DayDigest as DayDigestType, DayOutcome, Entry } from "@claude-lens/entries";
-
-const OUTCOME_STYLES: Record<DayOutcome, { bg: string; fg: string; label: string; icon: string }> = {
-  shipped:     { bg: "rgba(72, 187, 120, 0.12)", fg: "#48bb78", label: "Shipped",     icon: "🚀" },
-  partial:     { bg: "rgba(66, 153, 225, 0.12)", fg: "#4299e1", label: "Partial",     icon: "🔨" },
-  blocked:     { bg: "rgba(245, 101, 101, 0.12)", fg: "#f56565", label: "Blocked",     icon: "🚧" },
-  exploratory: { bg: "rgba(160, 174, 192, 0.12)", fg: "#a0aec0", label: "Exploratory", icon: "🧭" },
-  trivial:     { bg: "rgba(203, 213, 224, 0.12)", fg: "#a0aec0", label: "Warmup",      icon: "💤" },
-  idle:        { bg: "rgba(203, 213, 224, 0.12)", fg: "#a0aec0", label: "Idle",        icon: "—"  },
-};
+import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
+import { OutcomePill } from "./outcome-pill";
 
 export function DayDigest({
   digest, entries, aiEnabled,
@@ -19,7 +11,6 @@ export function DayDigest({
   const fmtDate = new Date(`${digest.key}T12:00:00`).toLocaleDateString("en-US", {
     weekday: "long", month: "short", day: "numeric", year: "numeric",
   });
-  const outcome = OUTCOME_STYLES[digest.outcome_day] ?? OUTCOME_STYLES.idle;
   const hrs = digest.agent_min / 60;
   const timeStr = hrs >= 1 ? `${hrs.toFixed(1)}h` : `${Math.round(digest.agent_min)}m`;
 
@@ -37,12 +28,7 @@ export function DayDigest({
           fontSize: 12, color: "var(--af-text-tertiary)", fontWeight: 500,
         }}>
           <span>{fmtDate}</span>
-          <span style={{
-            padding: "2px 8px", borderRadius: 99, fontSize: 10, fontWeight: 600,
-            background: outcome.bg, color: outcome.fg,
-          }}>
-            {outcome.icon} {outcome.label}
-          </span>
+          <OutcomePill outcome={digest.outcome_day} size="lg" />
         </div>
         {digest.headline ? (
           <h1 style={{
@@ -241,14 +227,7 @@ function SessionRow({ entry }: { entry: Entry }) {
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--af-text-tertiary)", width: 40, textAlign: "right" }}>
           {durMin}m
         </span>
-        {outcome && (
-          <span style={{
-            fontSize: 10, padding: "1px 7px", borderRadius: 99, fontWeight: 600,
-            background: outcomeBadge(outcome).bg, color: outcomeBadge(outcome).fg,
-          }}>
-            {outcome}
-          </span>
-        )}
+        {outcome && <OutcomePill outcome={outcome} size="sm" label="text" />}
       </div>
       {summary && (
         <div style={{
@@ -260,16 +239,6 @@ function SessionRow({ entry }: { entry: Entry }) {
       )}
     </a>
   );
-}
-
-function outcomeBadge(o: string): { bg: string; fg: string } {
-  switch (o) {
-    case "shipped":     return { bg: "rgba(72, 187, 120, 0.12)", fg: "#48bb78" };
-    case "partial":     return { bg: "rgba(66, 153, 225, 0.12)", fg: "#4299e1" };
-    case "blocked":     return { bg: "rgba(245, 101, 101, 0.12)", fg: "#f56565" };
-    case "exploratory": return { bg: "rgba(160, 174, 192, 0.12)", fg: "#a0aec0" };
-    default:            return { bg: "rgba(203, 213, 224, 0.12)", fg: "#a0aec0" };
-  }
 }
 
 const GOAL_COLORS: Record<string, string> = {
