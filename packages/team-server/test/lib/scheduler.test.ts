@@ -30,10 +30,10 @@ describe("startScheduler", () => {
     const setIntervalSpy = vi.spyOn(global, "setInterval");
     startScheduler();
     startScheduler();
-    // Two setInterval calls from a single startScheduler invocation
-    // (ingest-log prune + checkForUpdates); the second startScheduler
-    // returns early and must not schedule more.
-    expect(setIntervalSpy).toHaveBeenCalledTimes(2);
+    // Four setInterval calls from a single startScheduler invocation
+    // (ingest-log prune + checkForUpdates + mat view refresh + plan_utilization
+    // prune); the second startScheduler returns early and must not schedule more.
+    expect(setIntervalSpy).toHaveBeenCalledTimes(4);
     vi.useRealTimers();
   });
 
@@ -124,6 +124,38 @@ describe("startScheduler", () => {
     vi.useRealTimers();
   });
 
+  it("refreshes the mat view on the hourly tick", async () => {
+    const mockQuery = vi.fn().mockResolvedValue({ rowCount: 0 });
+    vi.doMock("../../src/db/pool.js", () => ({ getPool: () => ({ query: mockQuery }) }));
+    vi.useFakeTimers();
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    const refreshCall = mockQuery.mock.calls.find((c) =>
+      String(c[0]).includes("REFRESH MATERIALIZED VIEW CONCURRENTLY"),
+    );
+    expect(refreshCall).toBeDefined();
+    vi.useRealTimers();
+  });
+
+  it("prunes plan_utilization on the 24h tick", async () => {
+    const mockQuery = vi.fn().mockResolvedValue({ rowCount: 3 });
+    vi.doMock("../../src/db/pool.js", () => ({ getPool: () => ({ query: mockQuery }) }));
+    vi.useFakeTimers();
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+    const pruneCall = mockQuery.mock.calls.find((c) =>
+      String(c[0]).includes("DELETE FROM plan_utilization"),
+    );
+    expect(pruneCall).toBeDefined();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("pruned 3 plan_utilization rows"),
+    );
+    vi.useRealTimers();
+  });
+
   it("logs and swallows errors from checkForUpdates ticks", async () => {
     vi.doMock("../../src/db/pool.js", () => ({
       getPool: () => ({
@@ -169,5 +201,53 @@ describe("pruneIngestLog", () => {
     }));
     const { pruneIngestLog } = await import("../../src/lib/scheduler.js");
     await expect(pruneIngestLog()).resolves.toBe(0);
+  });
+});
+
+describe("refreshMembershipWeeklyUtilization", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("issues REFRESH MATERIALIZED VIEW CONCURRENTLY against the right view", async () => {
+    const mockQuery = vi.fn().mockResolvedValue({ rowCount: 0 });
+    vi.doMock("../../src/db/pool.js", () => ({ getPool: () => ({ query: mockQuery }) }));
+    const { refreshMembershipWeeklyUtilization } = await import(
+      "../../src/lib/scheduler.js"
+    );
+    await refreshMembershipWeeklyUtilization();
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /REFRESH MATERIALIZED VIEW CONCURRENTLY membership_weekly_utilization/,
+      ),
+    );
+  });
+});
+
+describe("prunePlanUtilization", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("respects per-team retention_days via JOIN to teams", async () => {
+    const mockQuery = vi.fn().mockResolvedValue({ rowCount: 42 });
+    vi.doMock("../../src/db/pool.js", () => ({ getPool: () => ({ query: mockQuery }) }));
+    const { prunePlanUtilization } = await import("../../src/lib/scheduler.js");
+    await expect(prunePlanUtilization()).resolves.toBe(42);
+
+    const sql = mockQuery.mock.calls[0][0];
+    expect(sql).toMatch(/DELETE FROM plan_utilization/);
+    expect(sql).toMatch(/USING teams/);
+    expect(sql).toMatch(/make_interval\(days =>\s*t\.retention_days\)/);
+  });
+
+  it("returns 0 when rowCount is null", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({ query: vi.fn().mockResolvedValue({ rowCount: null }) }),
+    }));
+    const { prunePlanUtilization } = await import("../../src/lib/scheduler.js");
+    await expect(prunePlanUtilization()).resolves.toBe(0);
   });
 });
