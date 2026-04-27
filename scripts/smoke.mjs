@@ -220,11 +220,11 @@ async function main() {
   results.push(await hit("/sessions", "Sessions list"));
   results.push(await hit("/projects", "Projects grid"));
   results.push(await hit("/settings", "Settings"));
-  results.push(await hit("/digest", "Digest backfill index"));
+  results.push(await hit("/day", "Day index"));
   // Compute yesterday in the runner's local TZ so the route isn't flaky around midnight.
   const _y = new Date(Date.now() - 86_400_000);
   const yesterday = `${_y.getFullYear()}-${String(_y.getMonth() + 1).padStart(2, "0")}-${String(_y.getDate()).padStart(2, "0")}`;
-  results.push(await hit(`/digest/${yesterday}`, "Digest (yesterday)"));
+  results.push(await hit(`/day/${yesterday}`, "Day view (yesterday)"));
   if (sessionId) {
     results.push(await hit(`/sessions/${sessionId}`, "Session detail"));
   } else {
