@@ -37,24 +37,9 @@ export function TodayHero({ todayDate, hasEntries }: { todayDate: string; hasEnt
     return () => { cancelled = true; clearInterval(id); };
   }, [todayDate, hasEntries]);
 
-  if (!hasEntries) {
-    return (
-      <div
-        className="af-panel"
-        style={{
-          padding: "12px 18px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-        }}
-      >
-        <span style={{ fontSize: 13, color: "var(--af-text-secondary)" }}>
-          No activity yet today. Sessions you run will land in tonight's digest.
-        </span>
-      </div>
-    );
-  }
+  // Empty today — don't claim screen real estate. Once a session runs,
+  // /api/events fires, the layout re-renders, and the hero appears.
+  if (!hasEntries) return null;
 
   const trigger = async () => {
     setPhase("running");
