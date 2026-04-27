@@ -9,7 +9,7 @@ export type SpendRecord = {
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
-  kind: "entry_enrich" | "day_digest";
+  kind: "entry_enrich" | "day_digest" | "week_digest" | "month_digest";
   ref: string;
 };
 

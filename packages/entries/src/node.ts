@@ -9,4 +9,16 @@ export * from "./digest-day.js";
 export * from "./prompts/digest-day.js";
 export * from "./pipeline-lock.js";
 export * from "./digest-day-pipeline.js";
-export { readDayDigest, writeDayDigest, getTodayDigestFromCache, setTodayDigestInCache } from "./digest-fs.js";
+export * from "./digest-week.js";
+export * from "./digest-month.js";
+export * from "./prompts/digest-week.js";
+export * from "./prompts/digest-month.js";
+export * from "./digest-week-pipeline.js";
+export * from "./digest-month-pipeline.js";
+export {
+  readDayDigest, writeDayDigest, getTodayDigestFromCache, setTodayDigestInCache,
+  readWeekDigest, writeWeekDigest, listWeekDigestKeys,
+  getCurrentWeekDigestFromCache, setCurrentWeekDigestInCache,
+  readMonthDigest, writeMonthDigest, listMonthDigestKeys,
+  getCurrentMonthDigestFromCache, setCurrentMonthDigestInCache,
+} from "./digest-fs.js";

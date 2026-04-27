@@ -146,19 +146,24 @@ export function parseEntryKey(key: string): { session_id: string; local_day: str
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Day digest types (Phase 2)
+// Digest types (Phase 2: day; Phase 4: week + month)
 // ─────────────────────────────────────────────────────────────────────────
 
 /** Schema version for day digests. */
 export const CURRENT_DAY_DIGEST_SCHEMA_VERSION = 2 as const;
+/** Schema version for week digests (Phase 4). */
+export const CURRENT_WEEK_DIGEST_SCHEMA_VERSION = 2 as const;
+/** Schema version for month digests (Phase 4). */
+export const CURRENT_MONTH_DIGEST_SCHEMA_VERSION = 2 as const;
 
+/** Scope-agnostic envelope. Each scope-specific type owns its leaf-reference array
+ *  (DayDigest.entry_refs, WeekDigest.day_refs, MonthDigest.week_refs). */
 export type DigestEnvelope = {
-  version: typeof CURRENT_DAY_DIGEST_SCHEMA_VERSION;
+  version: 2;
   scope: "day" | "week" | "month" | "project" | "session";
-  /** Scope-specific identifier. For `day`, the local YYYY-MM-DD. */
+  /** Scope-specific identifier. day: YYYY-MM-DD; week: ISO Monday YYYY-MM-DD; month: YYYY-MM. */
   key: string;
   window: { start: string; end: string };
-  entry_refs: string[];
   generated_at: string;
   is_live: boolean;
   model: string | null;
@@ -177,6 +182,8 @@ export type DayHelpfulness = "essential" | "helpful" | "neutral" | "unhelpful" |
 
 export type DayDigest = DigestEnvelope & {
   scope: "day";
+  /** "{session_id}__{YYYY-MM-DD}" keys of contributing entries. */
+  entry_refs: string[];
 
   // Deterministic aggregations (computed from Entries, not LLM output)
   projects: Array<{ name: string; display_name: string; share_pct: number; entry_count: number }>;
@@ -196,5 +203,80 @@ export type DayDigest = DigestEnvelope & {
   narrative: string | null;
   what_went_well: string | null;
   what_hit_friction: string | null;
+  suggestion: { headline: string; body: string } | null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Week digest (Phase 4) — synthesizes 7 day digests into a weekly story.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type WeekDigest = DigestEnvelope & {
+  scope: "week";
+  /** ISO Monday in server local TZ, e.g. "2026-04-20" — same value as envelope.key. */
+  day_refs: string[];
+
+  // ── Deterministic aggregations (computed from day digests) ──
+  agent_min_total: number;
+  projects: Array<{
+    name: string;
+    display_name: string;
+    agent_min: number;
+    share_pct: number;
+    shipped_count: number;
+  }>;
+  shipped: Array<{ title: string; project: string; date: string; session_id: string }>;
+  /** Counts of days bucketed by their day-level outcome. Days with no entries are absent. */
+  outcome_mix: Partial<Record<DayOutcome, number>>;
+  /** 7 entries Mon→Sun. null where no enriched data exists for that day. */
+  helpfulness_sparkline: DayHelpfulness[];
+  top_flags: Array<{ flag: string; count: number }>;
+  top_goal_categories: Array<{ category: string; minutes: number }>;
+  /** The day during the week with the highest concurrency_peak. null if all days had peak 0. */
+  concurrency_peak_day: { date: string; peak: number } | null;
+
+  // ── LLM narrative (null when ai_features.enabled === false or synth failed) ──
+  headline: string | null;
+  /** One short line per day with data. Days with zero entries are omitted (not "idle"). */
+  trajectory: Array<{ date: string; line: string }> | null;
+  /** 1–2 days that defined the week. */
+  standout_days: Array<{ date: string; why: string }> | null;
+  /** 2–3 sentences clustering recurring friction across days. Empty string allowed if no friction. */
+  friction_themes: string | null;
+  suggestion: { headline: string; body: string } | null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Month digest (Phase 4) — synthesizes 4–5 week digests into a monthly story.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type MonthDigest = DigestEnvelope & {
+  scope: "month";
+  /** "YYYY-MM" — same as envelope.key. */
+  week_refs: string[];
+
+  // ── Deterministic aggregations (computed from week digests) ──
+  agent_min_total: number;
+  projects: Array<{
+    name: string;
+    display_name: string;
+    agent_min: number;
+    share_pct: number;
+    shipped_count: number;
+  }>;
+  shipped: Array<{ title: string; project: string; date: string; session_id: string }>;
+  outcome_mix: Partial<Record<DayOutcome, number>>;
+  /** One entry per ISO week-Monday in the month. May be 4 or 5 entries. */
+  helpfulness_by_week: Array<{ week_start: string; helpfulness: DayHelpfulness }>;
+  top_flags: Array<{ flag: string; count: number }>;
+  top_goal_categories: Array<{ category: string; minutes: number }>;
+  concurrency_peak_week: { week_start: string; peak: number } | null;
+
+  // ── LLM narrative ──
+  headline: string | null;
+  /** One line per week (4 or 5 entries). */
+  trajectory: Array<{ week_start: string; line: string }> | null;
+  /** 1–2 weeks that defined the month. */
+  standout_weeks: Array<{ week_start: string; why: string }> | null;
+  friction_themes: string | null;
   suggestion: { headline: string; body: string } | null;
 };

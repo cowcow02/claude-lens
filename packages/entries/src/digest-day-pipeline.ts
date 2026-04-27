@@ -8,13 +8,18 @@ import { generateDayDigest, buildDeterministicDigest } from "./digest-day.js";
 import { appendSpend, monthToDateSpend } from "./budget.js";
 import { writeInteractiveLock, removeInteractiveLock } from "./pipeline-lock.js";
 import type { AiFeaturesSettings } from "./settings.js";
-import type { DayDigest, Entry, EntryEnrichmentStatus } from "./types.js";
+import type { DayDigest, Entry, EntryEnrichmentStatus, MonthDigest, WeekDigest } from "./types.js";
 
+/** Shared event union across day/week/month pipelines.
+ *  - day pipeline: emits status + entry + progress + digest + saved + error
+ *  - week pipeline: also emits `dependency` (per missing day digest it generates) and the synth-phase status uses `phase: "load_dependencies"` while it walks the dependency graph
+ *  - month pipeline: same as week, but dependencies are weeks not days */
 export type PipelineEvent =
-  | { type: "status"; phase: "enrich" | "synth" | "persist"; text: string }
+  | { type: "status"; phase: "enrich" | "synth" | "persist" | "load_dependencies"; text: string }
   | { type: "entry"; session_id: string; index: number; total: number; status: EntryEnrichmentStatus; cost_usd: number | null }
+  | { type: "dependency"; kind: "day" | "week"; key: string; status: "cached" | "generated" | "failed" }
   | { type: "progress"; phase: "enrich" | "synth"; bytes: number; elapsed_ms: number }
-  | { type: "digest"; digest: DayDigest }
+  | { type: "digest"; digest: DayDigest | WeekDigest | MonthDigest }
   | { type: "saved"; path: string }
   | { type: "error"; message: string };
 

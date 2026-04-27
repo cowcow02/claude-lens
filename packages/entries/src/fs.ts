@@ -72,6 +72,10 @@ export function listEntriesForSession(sessionId: string): Entry[] {
 export {
   writeDayDigest, readDayDigest,
   getTodayDigestFromCache, setTodayDigestInCache,
+  writeWeekDigest, readWeekDigest, listWeekDigestKeys,
+  getCurrentWeekDigestFromCache, setCurrentWeekDigestInCache,
+  writeMonthDigest, readMonthDigest, listMonthDigestKeys,
+  getCurrentMonthDigestFromCache, setCurrentMonthDigestInCache,
   __setDigestsDirForTest, __clearTodayCacheForTest,
 } from "./digest-fs.js";
 
