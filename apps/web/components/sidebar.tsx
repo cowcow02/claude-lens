@@ -183,11 +183,17 @@ export function Sidebar({
           Projects
         </NavLink>
         <NavLink
-          href="/parallelism"
-          active={pathname === "/parallelism"}
-          icon={<GitBranch size={15} />}
+          href="/day"
+          active={
+            pathname === "/day" ||
+            pathname.startsWith("/day/") ||
+            pathname === "/digest" ||
+            pathname.startsWith("/digest/") ||
+            pathname === "/parallelism"
+          }
+          icon={<CalendarDays size={15} />}
         >
-          Timeline
+          Day
         </NavLink>
         <NavLink
           href="/usage"
@@ -195,13 +201,6 @@ export function Sidebar({
           icon={<Gauge size={15} />}
         >
           Usage
-        </NavLink>
-        <NavLink
-          href="/digest"
-          active={pathname === "/digest" || pathname.startsWith("/digest/")}
-          icon={<CalendarDays size={15} />}
-        >
-          Digest
         </NavLink>
         <NavLink
           href="/insights"
