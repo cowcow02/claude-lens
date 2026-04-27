@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
 import { OutcomePill } from "./outcome-pill";
+import { GoalBar } from "./goal-bar";
 
 export function DayDigest({
   digest, entries, aiEnabled, actions,
@@ -295,38 +296,3 @@ function SessionRow({ entry }: { entry: Entry }) {
   );
 }
 
-const GOAL_COLORS: Record<string, string> = {
-  build: "var(--af-accent)", plan: "#9f7aea", debug: "#ed8936",
-  review: "#4299e1", refactor: "#38b2ac", test: "#48bb78",
-  release: "#ed64a6", research: "#a0aec0", steer: "#f6ad55",
-  meta: "#718096", warmup_minimal: "#cbd5e0",
-};
-
-function GoalBar({ goals, total }: { goals: { category: string; minutes: number }[]; total: number }) {
-  if (total === 0) return <p style={{ fontSize: 12, color: "var(--af-text-tertiary)" }}>No goal data.</p>;
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 2, height: 12, borderRadius: 3, overflow: "hidden" }}>
-        {goals.map(g => {
-          const pct = (g.minutes / total) * 100;
-          return (
-            <div key={g.category}
-              style={{
-                width: `${pct}%`, background: GOAL_COLORS[g.category] ?? "#888",
-              }}
-              title={`${g.category}: ${Math.round(g.minutes)}m (${pct.toFixed(0)}%)`}
-            />
-          );
-        })}
-      </div>
-      <div style={{ display: "flex", gap: 14, marginTop: 8, flexWrap: "wrap", fontSize: 11, color: "var(--af-text-tertiary)" }}>
-        {goals.map(g => (
-          <span key={g.category} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: GOAL_COLORS[g.category] ?? "#888" }} />
-            {g.category}  {Math.round(g.minutes)}m
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}

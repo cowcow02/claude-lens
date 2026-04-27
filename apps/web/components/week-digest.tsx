@@ -6,6 +6,7 @@ import { Check, Copy } from "lucide-react";
 import type { WeekDigest as WeekDigestType, DayHelpfulness } from "@claude-lens/entries";
 import { OutcomePill } from "./outcome-pill";
 import { renderWithFlagChips } from "./flag-chip";
+import { GoalBar } from "./goal-bar";
 
 const HELP_COLORS: Record<NonNullable<DayHelpfulness>, string> = {
   essential: "#48bb78",
@@ -92,6 +93,12 @@ export function WeekDigest({
       <DaysActiveBars digest={digest} />
 
       <HoursOfDayStrip hours={digest.hours_distribution} />
+
+      {digest.top_goal_categories.length > 0 && (
+        <Section title="Goal mix" anchor="goals">
+          <GoalBar goals={digest.top_goal_categories} total={digest.agent_min_total} />
+        </Section>
+      )}
 
       {digest.standout_days && digest.standout_days.length > 0 && (
         <Section title="Standout days" anchor="standout">
