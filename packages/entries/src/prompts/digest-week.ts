@@ -110,6 +110,11 @@ INPUT shape:
 - shipped: all PRs shipped this week, each { title, project, date }.
 - top_flags, top_goal_categories.
 - concurrency_peak_day: { date, peak } or null.
+- interaction_modes: HOW THE USER ACTUALLY DROVE AGENTS THIS WEEK. Foundation for the whole narrative — every other section should anchor here. Shape:
+    - orchestration: { subagent_calls, task_ops, days_with_subagents/7, top_types[]: { type, count } }
+    - skill_use: { skill_calls, days_with_skills/7, top_skills[]: { skill, count } }
+    - plan_gating: { exit_plan_calls, days_with_plan/7 }
+    - turn_shape: { tools_per_turn, interrupts, long_autonomous_days/7, label: "rapid"|"mixed"|"batch" }
 - day_summaries: per-day { date, day_name, headline, what_went_well, what_hit_friction, suggestion, agent_min, outcome_day, helpfulness_day, top_flags }. Each entry's text fields are verbatim from that day's digest — quote them, don't paraphrase.
 
 OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence. Schema:
@@ -213,6 +218,23 @@ The reader is a working developer, not someone who reads parser internals. Write
 
 6. **Headlines describe outcomes + concrete work.** A good headline names what shipped, what stalled, what surprised. A bad headline names a flag count.
 
+NARRATIVE FLOW (the report's spine):
+
+The reader needs to understand HOW they worked before any pattern/friction/suggestion is meaningful. Build the report as a single argument:
+
+  [1] interaction_modes establishes the working mode (already shown to the reader in the "How you worked" cards above your prose). You don't need to redescribe these — but every downstream claim MUST be grounded in them.
+  [2] key_pattern is your one-sentence characterization of how they drove agents — name the dominant axis from interaction_modes (e.g. "Orchestration-heavy week with batch turns" / "Skill-driven, rapid back-and-forth on every shipping day" / "Plan-gated only on the architectural day"). Don't restate counts the cards already show; name the SHAPE.
+  [3] standout_days + trajectory recap WHAT happened given that mode.
+  [4] recurring_themes + outcome_correlations call out cross-day signals — and where possible, frame them as consequences of the mode ("the days you skipped Plan Mode were also the days that needed mid-run redirection").
+  [5] friction_categories names what hurt — but only friction the user actually hit, not flag patterns. (Flag patterns belong in recurring_themes with source: flag_pattern.)
+  [6] suggestions ONLY land if they tie to a specific interaction_modes axis. A "use Hooks" suggestion to a user already at high orchestration + 0 skill use lands differently than the same suggestion to a solo + heavy-skill user. State the anchor explicitly in why_for_you / why / detail — e.g. "given you orchestrate 5/7 days but skip Plan Mode, …". If you can't tie a suggestion to a specific axis, drop it.
+
+ANCHORING RULES (enforce while writing):
+
+  - Every suggestions.*[].why and suggestions.*[].why_for_you and suggestions.*[].detail MUST reference at least one of: a specific date, a specific interaction_modes count (e.g. "5/7 days with subagents"), or a named flag pattern.
+  - features_to_try SKIPS recommendations the user already exhibits at high level. Don't suggest "Custom Skills" if skill_use.skill_calls > 0; don't suggest "Subagents" if orchestration.subagent_calls > 0; don't suggest "Plan Mode" if plan_gating.exit_plan_calls > 0. Reach for the gap, not the strength.
+  - on_the_horizon describes a FUTURE workflow that fits the user's current mode — don't propose subagent-orchestration to a solo worker without acknowledging the shift required.
+
 CRITICAL RULES:
 
 1. **Quote, don't paraphrase.** Every friction example MUST be a verbatim substring of the named day's \`what_hit_friction\` (or \`headline\` / \`first_user\` / \`final_agent\` if the friction was diagnostic). Do not summarize friction in your own words inside examples.
@@ -298,6 +320,7 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
     top_flags: base.top_flags,
     top_goal_categories: base.top_goal_categories,
     concurrency_peak_day: base.concurrency_peak_day,
+    interaction_modes: base.interaction_modes,
     day_summaries,
     flag_glossary: glossary,
   };

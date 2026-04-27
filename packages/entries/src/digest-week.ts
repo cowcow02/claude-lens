@@ -1,6 +1,7 @@
 import {
   CURRENT_WEEK_DIGEST_SCHEMA_VERSION,
-  type DayDigest, type DayHelpfulness, type DayOutcome, type Entry, type WeekDigest,
+  type DayDigest, type DayHelpfulness, type DayOutcome, type Entry,
+  type WeekDigest, type WeekInteractionModes,
 } from "./types.js";
 import {
   DIGEST_WEEK_SYSTEM_PROMPT,
@@ -33,6 +34,93 @@ function toLocalDateString(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** Aggregate per-Entry interaction signals into a week-level snapshot.
+ *  Treats `subagents`, `skills`, `numbers.subagent_calls/skill_calls/task_ops/
+ *  exit_plan_calls/interrupts/turn_count/tools_total`, and the `long_autonomous`
+ *  flag as the load-bearing inputs. Day-bucketing uses `local_day` for the
+ *  "days_with_*" denominators. */
+export function computeInteractionModes(entries: Entry[]): WeekInteractionModes {
+  const subagentCallsByDay = new Map<string, number>();
+  const skillCallsByDay = new Map<string, number>();
+  const planCallsByDay = new Map<string, number>();
+  const longAutonomousDays = new Set<string>();
+
+  let subagent_calls = 0, task_ops = 0, skill_calls = 0;
+  let exit_plan_calls = 0, interrupts = 0;
+  let tools_total = 0, turn_count = 0;
+
+  const subagentTypes = new Map<string, number>();
+  const skillNames = new Map<string, number>();
+
+  for (const e of entries) {
+    const day = e.local_day;
+    subagent_calls += e.numbers.subagent_calls;
+    skill_calls += e.numbers.skill_calls;
+    task_ops += e.numbers.task_ops;
+    exit_plan_calls += e.numbers.exit_plan_calls;
+    interrupts += e.numbers.interrupts;
+    tools_total += e.numbers.tools_total;
+    turn_count += e.numbers.turn_count;
+
+    if (e.numbers.subagent_calls > 0) {
+      subagentCallsByDay.set(day, (subagentCallsByDay.get(day) ?? 0) + e.numbers.subagent_calls);
+    }
+    if (e.numbers.skill_calls > 0) {
+      skillCallsByDay.set(day, (skillCallsByDay.get(day) ?? 0) + e.numbers.skill_calls);
+    }
+    if (e.numbers.exit_plan_calls > 0 || e.flags.includes("plan_used")) {
+      planCallsByDay.set(day, (planCallsByDay.get(day) ?? 0) + e.numbers.exit_plan_calls);
+    }
+    if (e.flags.includes("long_autonomous")) longAutonomousDays.add(day);
+
+    for (const sa of e.subagents) {
+      subagentTypes.set(sa.type, (subagentTypes.get(sa.type) ?? 0) + 1);
+    }
+    for (const [skill, count] of Object.entries(e.skills)) {
+      skillNames.set(skill, (skillNames.get(skill) ?? 0) + count);
+    }
+  }
+
+  const top_types = [...subagentTypes.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([type, count]) => ({ type, count }));
+  const top_skills = [...skillNames.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([skill, count]) => ({ skill, count }));
+
+  const tools_per_turn = turn_count > 0 ? tools_total / turn_count : 0;
+  // 5 / 15 thresholds calibrated to feel right on observed dogfood weeks: a
+  // 5-tool turn is a focused single task, 15+ is a clearly batched run.
+  const label: WeekInteractionModes["turn_shape"]["label"] =
+    tools_per_turn < 5 ? "rapid" : tools_per_turn < 15 ? "mixed" : "batch";
+
+  return {
+    orchestration: {
+      subagent_calls,
+      task_ops,
+      days_with_subagents: subagentCallsByDay.size,
+      top_types,
+    },
+    skill_use: {
+      skill_calls,
+      days_with_skills: skillCallsByDay.size,
+      top_skills,
+    },
+    plan_gating: {
+      exit_plan_calls,
+      days_with_plan: planCallsByDay.size,
+    },
+    turn_shape: {
+      tools_per_turn: Math.round(tools_per_turn * 10) / 10,
+      interrupts,
+      long_autonomous_days: longAutonomousDays.size,
+      label,
+    },
+  };
 }
 
 export type BuildDeterministicWeekOptions = {
@@ -172,6 +260,8 @@ export function buildDeterministicWeekDigest(
     }
   }
 
+  const interaction_modes = entries.length > 0 ? computeInteractionModes(entries) : null;
+
   const sunday = dates[6]!;
   const window = { start: `${monday}T00:00:00`, end: `${sunday}T23:59:59` };
 
@@ -197,6 +287,7 @@ export function buildDeterministicWeekDigest(
     busiest_day,
     longest_run,
     hours_distribution,
+    interaction_modes,
     headline: null,
     key_pattern: null,
     trajectory: null,

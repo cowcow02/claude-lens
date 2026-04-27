@@ -117,6 +117,10 @@ export function WeekDigest({
 
       <DaysActiveBars digest={digest} />
 
+      {digest.interaction_modes && (
+        <InteractionModesSection modes={digest.interaction_modes} />
+      )}
+
       {digest.top_goal_categories.length > 0 && (
         <Section title="Goal mix" anchor="goals">
           <GoalBar goals={digest.top_goal_categories} total={digest.agent_min_total} />
@@ -328,6 +332,141 @@ function DaysActiveBars({ digest }: { digest: WeekDigestType }) {
         );
       })}
     </section>
+  );
+}
+
+function InteractionModesSection({ modes }: { modes: NonNullable<WeekDigestType["interaction_modes"]> }) {
+  const orchestrationLevel = bandFromDays(modes.orchestration.days_with_subagents);
+  const skillLevel = bandFromDays(modes.skill_use.days_with_skills);
+  const planLevel = bandFromDays(modes.plan_gating.days_with_plan);
+
+  return (
+    <Section title="How you worked" anchor="interaction">
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+        gap: 10,
+      }}>
+        <ModeCard
+          label="Orchestration"
+          level={orchestrationLevel}
+          headline={
+            modes.orchestration.subagent_calls === 0
+              ? "Solo · no subagents"
+              : `${modes.orchestration.subagent_calls} dispatch${modes.orchestration.subagent_calls === 1 ? "" : "es"} · ${modes.orchestration.days_with_subagents}/7 days`
+          }
+          detail={
+            modes.orchestration.top_types.length > 0
+              ? modes.orchestration.top_types.map(t => `${t.type} ×${t.count}`).join(" · ")
+              : null
+          }
+          extra={modes.orchestration.task_ops > 0 ? `${modes.orchestration.task_ops} TodoWrite ops` : null}
+        />
+        <ModeCard
+          label="Skill-driven"
+          level={skillLevel}
+          headline={
+            modes.skill_use.skill_calls === 0
+              ? "No slash commands / skills loaded"
+              : `${modes.skill_use.skill_calls} skill load${modes.skill_use.skill_calls === 1 ? "" : "s"} · ${modes.skill_use.days_with_skills}/7 days`
+          }
+          detail={
+            modes.skill_use.top_skills.length > 0
+              ? modes.skill_use.top_skills.map(s => `${s.skill} ×${s.count}`).join(" · ")
+              : null
+          }
+        />
+        <ModeCard
+          label="Plan-gated"
+          level={planLevel}
+          headline={
+            modes.plan_gating.exit_plan_calls === 0 && modes.plan_gating.days_with_plan === 0
+              ? "Plan Mode unused"
+              : `${modes.plan_gating.exit_plan_calls} ExitPlan · ${modes.plan_gating.days_with_plan}/7 days`
+          }
+          detail={null}
+        />
+        <ModeCard
+          label="Turn shape"
+          level={modes.turn_shape.label}
+          headline={`${modes.turn_shape.tools_per_turn.toFixed(1)} tools/turn · ${modes.turn_shape.label}`}
+          detail={
+            modes.turn_shape.long_autonomous_days > 0
+              ? `${modes.turn_shape.long_autonomous_days} long-autonomous day${modes.turn_shape.long_autonomous_days === 1 ? "" : "s"}`
+              : null
+          }
+          extra={modes.turn_shape.interrupts > 0 ? `${modes.turn_shape.interrupts} user interrupt${modes.turn_shape.interrupts === 1 ? "" : "s"}` : null}
+        />
+      </div>
+    </Section>
+  );
+}
+
+type ModeLevel = "none" | "light" | "moderate" | "high" | "rapid" | "mixed" | "batch";
+
+const MODE_TONE: Record<ModeLevel, string> = {
+  none: "#a0aec0",
+  light: "#4299e1",
+  moderate: "#48bb78",
+  high: "#b794f4",
+  rapid: "#4299e1",
+  mixed: "#48bb78",
+  batch: "#b794f4",
+};
+
+function bandFromDays(days: number): "none" | "light" | "moderate" | "high" {
+  if (days === 0) return "none";
+  if (days <= 2) return "light";
+  if (days <= 4) return "moderate";
+  return "high";
+}
+
+function ModeCard({
+  label, level, headline, detail, extra,
+}: {
+  label: string;
+  level: ModeLevel;
+  headline: string;
+  detail: string | null;
+  extra?: string | null;
+}) {
+  const tone = MODE_TONE[level];
+  return (
+    <div style={{
+      padding: "12px 14px", borderRadius: 8,
+      background: "var(--af-surface)",
+      border: `1px solid color-mix(in srgb, ${tone} 22%, var(--af-border-subtle))`,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <span style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+          textTransform: "uppercase", color: "var(--af-text-tertiary)",
+        }}>{label}</span>
+        <span style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+          textTransform: "uppercase", color: tone,
+          padding: "1px 7px", borderRadius: 999,
+          background: `color-mix(in srgb, ${tone} 14%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${tone} 28%, transparent)`,
+        }}>{level}</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--af-text)", marginBottom: detail || extra ? 4 : 0, lineHeight: 1.4 }}>
+        {headline}
+      </div>
+      {detail && (
+        <div style={{
+          fontSize: 10.5, color: "var(--af-text-secondary)",
+          fontFamily: "var(--font-mono)", lineHeight: 1.5, marginBottom: extra ? 2 : 0,
+        }}>
+          {detail}
+        </div>
+      )}
+      {extra && (
+        <div style={{ fontSize: 10, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
+          {extra}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -272,6 +272,51 @@ export type WeekHorizonOpportunity = {
   friction_category_addressed: string;
 };
 
+/** Deterministic snapshot of how the user drove agents this week. Anchors the
+ *  narrative — every other section (patterns, friction, suggestions) is
+ *  expected to reference one of these axes rather than float free.
+ *
+ *  Fully computed from per-Entry data (subagents/skills/numbers/flags). Null
+ *  on the deterministic-only path when entries weren't loaded. */
+export type WeekInteractionModes = {
+  /** Subagent dispatching + TodoWrite usage. Captures whether the user
+   *  orchestrates Claude or drives single-agent. */
+  orchestration: {
+    subagent_calls: number;
+    task_ops: number;
+    /** Days with at least one subagent dispatch (0–7). */
+    days_with_subagents: number;
+    /** Top subagent types invoked, ordered by count, capped at 5. */
+    top_types: Array<{ type: string; count: number }>;
+  };
+  /** Skill / slash-command driven workflows. */
+  skill_use: {
+    skill_calls: number;
+    /** Days with at least one skill load (0–7). */
+    days_with_skills: number;
+    /** Top skills loaded, ordered by count, capped at 5. */
+    top_skills: Array<{ skill: string; count: number }>;
+  };
+  /** Plan Mode discipline — exit_plan tool calls + days with the plan_used flag. */
+  plan_gating: {
+    exit_plan_calls: number;
+    /** Days with at least one exit_plan or plan_used flag (0–7). */
+    days_with_plan: number;
+  };
+  /** Turn shape — rapid back-and-forth vs big-batch autonomous turns. */
+  turn_shape: {
+    /** Total tool calls divided by total turns across the week. Higher = more
+     *  tools per turn = bigger autonomous batches. */
+    tools_per_turn: number;
+    /** Total user interrupts across the week. */
+    interrupts: number;
+    /** Days where the long_autonomous flag fired (0–7). */
+    long_autonomous_days: number;
+    /** Bucket label for quick UI rendering. */
+    label: "rapid" | "mixed" | "batch";
+  };
+};
+
 /** A signal that appeared on multiple days. Surfaces patterns the per-day
  *  digests already named — the week digest's job is to count + frame. */
 export type WeekRecurringTheme = {
@@ -342,6 +387,11 @@ export type WeekDigest = DigestEnvelope & {
   /** Minutes of activity per hour-of-day (0–23) summed across the week, in server local TZ.
    *  Each entry's active_min is attributed to its start_iso hour bucket. Length always 24. */
   hours_distribution: number[];
+
+  /** How the user actually drove agents this week. Computed from per-Entry data;
+   *  null on the deterministic-only path when entries weren't loaded.
+   *  Anchors the narrative — patterns/friction/suggestions all reference these axes. */
+  interaction_modes: WeekInteractionModes | null;
 
   // ── LLM narrative (null when ai_features.enabled === false or synth failed) ──
 
