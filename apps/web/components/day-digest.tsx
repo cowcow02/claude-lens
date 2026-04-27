@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
 import { OutcomePill } from "./outcome-pill";
 
@@ -8,6 +12,7 @@ export function DayDigest({
   entries: Entry[];
   aiEnabled: boolean;
 }) {
+  const [showDetails, setShowDetails] = useState(false);
   const fmtDate = new Date(`${digest.key}T12:00:00`).toLocaleDateString("en-US", {
     weekday: "long", month: "short", day: "numeric", year: "numeric",
   });
@@ -78,6 +83,34 @@ export function DayDigest({
           {digest.narrative}
         </section>
       )}
+
+      {/* Show-more toggle: by default we keep the page short — only headline,
+          bands, narrative are visible. Suggestion + work breakdown + shipped +
+          sessions + goal-mix collapse behind this button so the timeline section
+          below stays close to the fold. */}
+      <div style={{ marginBottom: 18 }}>
+        <button
+          type="button"
+          onClick={() => setShowDetails((v) => !v)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "5px 10px",
+            background: "transparent",
+            border: "1px solid var(--af-border-subtle)",
+            borderRadius: 6,
+            fontSize: 11,
+            color: "var(--af-text-secondary)",
+            cursor: "pointer",
+          }}
+        >
+          {showDetails ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          {showDetails ? "Hide details" : "Show more details"}
+        </button>
+      </div>
+
+      {showDetails && (<>
 
       {/* Suggestion */}
       {digest.suggestion && (
@@ -166,6 +199,8 @@ export function DayDigest({
           <GoalBar goals={digest.top_goal_categories} total={digest.agent_min} />
         </section>
       )}
+
+      </>)}
     </div>
   );
 }
