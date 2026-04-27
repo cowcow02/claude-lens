@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import type { WeekDigest as WeekDigestType, DayHelpfulness } from "@claude-lens/entries";
-import { OutcomePill } from "./outcome-pill";
 import { renderWithFlagChips } from "./flag-chip";
 import { GoalBar } from "./goal-bar";
 
@@ -17,25 +16,40 @@ const HELP_COLORS: Record<NonNullable<DayHelpfulness>, string> = {
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const RECURRING_SOURCE_TONE: Record<NonNullable<WeekDigestType["recurring_themes"]>[number]["source"], { tag: string; label: string }> = {
+type RecurringSource = NonNullable<WeekDigestType["recurring_themes"]>[number]["source"] | "correlation";
+
+type RecurringRow = {
+  theme: string;
+  days: string[];
+  evidence: string;
+  source: RecurringSource;
+};
+
+const RECURRING_SOURCE_TONE: Record<RecurringSource, { tag: string; label: string }> = {
   suggestion: { tag: "#4299e1", label: "Repeated suggestion" },
   friction: { tag: "#ed8936", label: "Recurring friction" },
   helpfulness_dip: { tag: "#f56565", label: "Helpfulness dip" },
   flag_pattern: { tag: "#a0aec0", label: "Shape of work" },
+  correlation: { tag: "#b794f4", label: "Cross-day pattern" },
 };
 
+const SHIPPED_COLLAPSE_THRESHOLD = 10;
+const PROJECT_MIN_SHARE = 5;
+
 export function WeekDigest({
-  digest, aiEnabled, actions,
+  digest, aiEnabled, actions, priorDigest,
 }: {
   digest: WeekDigestType;
   aiEnabled: boolean;
   actions?: ReactNode;
+  priorDigest?: WeekDigestType | null;
 }) {
   const fmtRange = formatRange(digest.window.start, digest.window.end);
   const totalShipped = digest.shipped.length;
   const dayCount = Object.values(digest.outcome_mix).reduce((a, b) => a + (b ?? 0), 0);
   const hrs = digest.agent_min_total / 60;
   const timeStr = hrs >= 1 ? `${hrs.toFixed(1)}h` : `${Math.round(digest.agent_min_total)}m`;
+  const delta = priorDigest ? buildDelta(digest, priorDigest) : null;
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: "24px 40px" }}>
@@ -50,6 +64,16 @@ export function WeekDigest({
           <span style={{ fontFamily: "var(--font-mono)", color: "var(--af-text-secondary)" }}>
             {fmtRange} · {timeStr} agent time · {dayCount} active day{dayCount === 1 ? "" : "s"} · {totalShipped} PR{totalShipped === 1 ? "" : "s"}
           </span>
+          {delta && (
+            <span style={{
+              fontFamily: "var(--font-mono)", fontSize: 11,
+              color: "var(--af-text-tertiary)",
+              padding: "1px 7px", borderRadius: 999,
+              border: "1px solid var(--af-border-subtle)",
+            }} title="vs the prior calendar week">
+              vs last week: {delta}
+            </span>
+          )}
           {actions && (
             <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
               {actions}
@@ -92,8 +116,6 @@ export function WeekDigest({
       <WeekStatsStrip digest={digest} />
 
       <DaysActiveBars digest={digest} />
-
-      <HoursOfDayStrip hours={digest.hours_distribution} />
 
       {digest.top_goal_categories.length > 0 && (
         <Section title="Goal mix" anchor="goals">
@@ -147,48 +169,20 @@ export function WeekDigest({
         </Section>
       )}
 
-      <RecurringThemes themes={digest.recurring_themes} />
-
-      <OutcomeCorrelations correlations={digest.outcome_correlations} />
+      <RecurringThemes
+        themes={digest.recurring_themes}
+        correlations={digest.outcome_correlations}
+      />
 
       <ProjectAreas digest={digest} />
 
       <FrictionCategories categories={digest.friction_categories} />
 
-      <Suggestions suggestions={digest.suggestions} />
+      <Suggestions suggestions={digest.suggestions} digest={digest} />
 
       <OnTheHorizonOne opportunity={digest.on_the_horizon} />
 
-      {digest.shipped.length > 0 && (
-        <Section title={`Shipped (${digest.shipped.length})`} anchor="shipped">
-          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-            {digest.shipped.map((s, i) => (
-              <li key={i} style={{
-                display: "flex", gap: 10, alignItems: "baseline",
-                padding: "6px 10px", borderRadius: 6,
-                fontSize: 12, color: "var(--af-text)",
-              }}>
-                <Link href={`/digest/${s.date}`} style={{
-                  fontFamily: "var(--font-mono)", fontSize: 10,
-                  color: "var(--af-text-tertiary)", flexShrink: 0, width: 56,
-                  textDecoration: "none",
-                }}>
-                  {dayName(s.date)} {s.date.slice(5)}
-                </Link>
-                <span style={{ flex: 1, minWidth: 0 }}>{s.title}</span>
-                <span style={{
-                  fontSize: 10, color: "var(--af-text-tertiary)",
-                  fontFamily: "var(--font-mono)",
-                }}>
-                  {s.project}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      <OutcomeMixRow outcome_mix={digest.outcome_mix} />
+      <ShippedList shipped={digest.shipped} />
 
       <FunEnding ending={digest.fun_ending} />
     </div>
@@ -337,66 +331,6 @@ function DaysActiveBars({ digest }: { digest: WeekDigestType }) {
   );
 }
 
-function HoursOfDayStrip({ hours }: { hours: number[] }) {
-  const total = hours.reduce((a, b) => a + b, 0);
-  if (total === 0) return null;
-  const maxBucket = Math.max(...hours);
-  return (
-    <section style={{ marginBottom: 28 }}>
-      <div style={{
-        display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6,
-      }}>
-        <h2 style={{ ...sectionTitleStyle(), margin: 0 }}>Hours of day</h2>
-        <span style={{ fontSize: 10, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-          local time · width = minutes worked
-        </span>
-      </div>
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(24, 1fr)",
-        gap: 2,
-        alignItems: "end",
-        height: 56,
-      }}>
-        {hours.map((mins, h) => {
-          const heightPct = maxBucket > 0 ? Math.max(mins > 0 ? 6 : 0, (mins / maxBucket) * 100) : 0;
-          return (
-            <div
-              key={h}
-              title={`${pad2(h)}:00 — ${pad2(h + 1)}:00 · ${Math.round(mins)}m (${total > 0 ? ((mins / total) * 100).toFixed(0) : 0}% of week)`}
-              style={{
-                position: "relative", height: "100%",
-                background: "var(--af-surface)",
-                borderRadius: 2,
-                overflow: "hidden",
-              }}
-            >
-              {mins > 0 && (
-                <div style={{
-                  position: "absolute", bottom: 0, left: 0, right: 0,
-                  height: `${heightPct}%`,
-                  background: "color-mix(in srgb, var(--af-accent) 36%, transparent)",
-                }} />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(24, 1fr)",
-        gap: 2, marginTop: 4,
-        fontSize: 8, fontFamily: "var(--font-mono)",
-        color: "var(--af-text-tertiary)", textAlign: "center",
-      }}>
-        {Array.from({ length: 24 }, (_, h) => (
-          <div key={h}>{h % 6 === 0 ? `${pad2(h)}` : ""}</div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 const OUTCOME_TONE: Record<string, string> = {
   shipped: "#48bb78",
   partial: "#4299e1",
@@ -436,10 +370,6 @@ function formatHourRange(start: number, end: number): string {
   return `${fmt(start)}–${fmt(end)}`;
 }
 
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
 function weekDateLabels(startIso: string): string[] {
   const out: string[] = [];
   const start = new Date(startIso);
@@ -454,57 +384,54 @@ function weekDateLabels(startIso: string): string[] {
   return out;
 }
 
-function RecurringThemes({ themes }: { themes: WeekDigestType["recurring_themes"] }) {
-  if (!themes || themes.length === 0) return null;
+function RecurringThemes({
+  themes, correlations,
+}: {
+  themes: WeekDigestType["recurring_themes"];
+  correlations: WeekDigestType["outcome_correlations"];
+}) {
+  const rows: RecurringRow[] = [];
+  for (const t of themes ?? []) rows.push({ ...t });
+  for (const c of correlations ?? []) {
+    rows.push({
+      theme: c.claim,
+      days: c.supporting_dates,
+      evidence: "",
+      source: "correlation",
+    });
+  }
+  if (rows.length === 0) return null;
   return (
-    <Section title="Recurred this week" anchor="recurring">
+    <Section title="Patterns across days" anchor="patterns">
       <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-        {themes.map((t, i) => {
-          const tone = RECURRING_SOURCE_TONE[t.source];
+        {rows.map((r, i) => {
+          const tone = RECURRING_SOURCE_TONE[r.source];
           return (
             <li key={i} style={{
               padding: "12px 14px", borderRadius: 8,
-              background: "var(--af-surface)",
+              background: r.source === "correlation"
+                ? `color-mix(in srgb, ${tone.tag} 5%, var(--af-surface))`
+                : "var(--af-surface)",
               border: `1px solid color-mix(in srgb, ${tone.tag} 22%, var(--af-border-subtle))`,
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: r.evidence ? 6 : 8, flexWrap: "wrap" }}>
                 <span style={{
                   fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
                   textTransform: "uppercase", color: tone.tag,
                 }}>{tone.label}</span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em" }}>
-                  {renderWithFlagChips(t.theme)}
+                  {renderWithFlagChips(r.theme)}
                 </span>
               </div>
-              <p style={{ fontSize: 12, lineHeight: 1.55, margin: "0 0 8px", color: "var(--af-text-secondary)" }}>
-                {renderWithFlagChips(t.evidence)}
-              </p>
-              <DayChips dates={t.days} tone={tone.tag} />
+              {r.evidence && (
+                <p style={{ fontSize: 12, lineHeight: 1.55, margin: "0 0 8px", color: "var(--af-text-secondary)" }}>
+                  {renderWithFlagChips(r.evidence)}
+                </p>
+              )}
+              <DayChips dates={r.days} tone={tone.tag} />
             </li>
           );
         })}
-      </ul>
-    </Section>
-  );
-}
-
-function OutcomeCorrelations({ correlations }: { correlations: WeekDigestType["outcome_correlations"] }) {
-  if (!correlations || correlations.length === 0) return null;
-  return (
-    <Section title="Cross-day patterns" anchor="correlations">
-      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-        {correlations.map((c, i) => (
-          <li key={i} style={{
-            padding: "12px 14px", borderRadius: 8,
-            background: "color-mix(in srgb, #b794f4 5%, var(--af-surface))",
-            border: "1px solid color-mix(in srgb, #b794f4 24%, var(--af-border-subtle))",
-          }}>
-            <p style={{ fontSize: 13, lineHeight: 1.55, margin: "0 0 8px", color: "var(--af-text)" }}>
-              {renderWithFlagChips(c.claim)}
-            </p>
-            <DayChips dates={c.supporting_dates} tone="#b794f4" />
-          </li>
-        ))}
       </ul>
     </Section>
   );
@@ -530,11 +457,12 @@ function DayChips({ dates, tone }: { dates: string[]; tone: string }) {
 }
 
 function ProjectAreas({ digest }: { digest: WeekDigestType }) {
-  if (digest.projects.length === 0) return null;
+  const visible = digest.projects.filter(p => p.share_pct >= PROJECT_MIN_SHARE || p.shipped_count > 0);
+  if (visible.length === 0) return null;
   return (
     <Section title="Project areas" anchor="projects">
       <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-        {digest.projects.map(p => (
+        {visible.map(p => (
           <li key={p.name} style={{
             padding: "12px 14px", borderRadius: 8,
             background: "var(--af-surface)",
@@ -629,8 +557,14 @@ function FrictionCategories({ categories }: { categories: WeekDigestType["fricti
   );
 }
 
-function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions"] }) {
+function Suggestions({
+  suggestions, digest,
+}: {
+  suggestions: WeekDigestType["suggestions"];
+  digest: WeekDigestType;
+}) {
   if (!suggestions) return null;
+  const featuresFiltered = filterFeatures(suggestions.features_to_try, digest);
   return (
     <section id="suggestions" style={{ marginBottom: 28 }}>
       <h2 style={sectionTitleStyle()}>Suggestions</h2>
@@ -649,8 +583,9 @@ function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions
           ))}
         </SubSection>
 
+        {featuresFiltered.length > 0 && (
         <SubSection title="Features to try" subtitle="Claude Code primitives that fit this week's working pattern.">
-          {suggestions.features_to_try.map((f, i) => (
+          {featuresFiltered.map((f, i) => (
             <div key={i} style={cardStyle()}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)" }}>{f.feature}</span>
@@ -664,6 +599,7 @@ function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions
             </div>
           ))}
         </SubSection>
+        )}
 
         <SubSection title="Usage patterns" subtitle="Process changes you can apply in your next session.">
           {suggestions.usage_patterns.map((u, i) => (
@@ -794,28 +730,102 @@ function CopyBlock({ label, payload }: { label: string; payload: string }) {
   );
 }
 
-function OutcomeMixRow({ outcome_mix }: { outcome_mix: WeekDigestType["outcome_mix"] }) {
-  const total = Object.values(outcome_mix).reduce((a, b) => a + (b ?? 0), 0);
-  if (total === 0) return null;
-  const order: Array<keyof typeof outcome_mix> = ["shipped", "partial", "blocked", "exploratory", "trivial", "idle"];
+function ShippedList({ shipped }: { shipped: WeekDigestType["shipped"] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (shipped.length === 0) return null;
+  const collapsible = shipped.length >= SHIPPED_COLLAPSE_THRESHOLD;
+  const visible = collapsible && !expanded ? shipped.slice(0, 5) : shipped;
+  const hidden = shipped.length - visible.length;
   return (
-    <Section title="Outcome mix" anchor="outcome">
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {order.map(k => {
-          const c = outcome_mix[k] ?? 0;
-          if (c === 0) return null;
-          return (
-            <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <OutcomePill outcome={k} size="md" />
-              <span style={{ fontSize: 10, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                ×{c}
-              </span>
+    <Section title={`Shipped (${shipped.length})`} anchor="shipped">
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+        {visible.map((s, i) => (
+          <li key={i} style={{
+            display: "flex", gap: 10, alignItems: "baseline",
+            padding: "6px 10px", borderRadius: 6,
+            fontSize: 12, color: "var(--af-text)",
+          }}>
+            <Link href={`/digest/${s.date}`} style={{
+              fontFamily: "var(--font-mono)", fontSize: 10,
+              color: "var(--af-text-tertiary)", flexShrink: 0, width: 56,
+              textDecoration: "none",
+            }}>
+              {dayName(s.date)} {s.date.slice(5)}
+            </Link>
+            <span style={{ flex: 1, minWidth: 0 }}>{s.title}</span>
+            <span style={{
+              fontSize: 10, color: "var(--af-text-tertiary)",
+              fontFamily: "var(--font-mono)",
+            }}>
+              {s.project}
             </span>
-          );
-        })}
-      </div>
+          </li>
+        ))}
+      </ul>
+      {collapsible && hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          style={{
+            marginTop: 6, padding: "4px 10px", borderRadius: 5,
+            background: "transparent", border: "1px solid var(--af-border-subtle)",
+            fontSize: 10, color: "var(--af-text-secondary)", cursor: "pointer",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          +{hidden} more
+        </button>
+      )}
+      {collapsible && expanded && (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          style={{
+            marginTop: 6, padding: "4px 10px", borderRadius: 5,
+            background: "transparent", border: "1px solid var(--af-border-subtle)",
+            fontSize: 10, color: "var(--af-text-secondary)", cursor: "pointer",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          show less
+        </button>
+      )}
     </Section>
   );
+}
+
+function buildDelta(curr: WeekDigestType, prior: WeekDigestType): string {
+  const prDelta = curr.shipped.length - prior.shipped.length;
+  const minDelta = curr.agent_min_total - prior.agent_min_total;
+  const hrDelta = minDelta / 60;
+  const prStr = `${prDelta > 0 ? "+" : ""}${prDelta} PR${Math.abs(prDelta) === 1 ? "" : "s"}`;
+  const timeStr = Math.abs(hrDelta) >= 1
+    ? `${hrDelta > 0 ? "+" : ""}${hrDelta.toFixed(1)}h`
+    : `${minDelta > 0 ? "+" : ""}${Math.round(minDelta)}m`;
+  return `${prStr} · ${timeStr}`;
+}
+
+const ALREADY_USES_PATTERNS: Array<{ flag: string; minCount: number; matches: RegExp }> = [
+  { flag: "orchestrated", minCount: 2, matches: /\b(sub-?agents?|orchestrat\w*)\b/i },
+  { flag: "plan_used", minCount: 2, matches: /\bplan mode\b/i },
+];
+
+type WeekSuggestions = NonNullable<WeekDigestType["suggestions"]>;
+
+function filterFeatures(
+  features: WeekSuggestions["features_to_try"],
+  digest: WeekDigestType,
+): WeekSuggestions["features_to_try"] {
+  const flagCounts = new Map<string, number>();
+  for (const f of digest.top_flags) flagCounts.set(f.flag, f.count);
+  return features.filter(f => {
+    for (const rule of ALREADY_USES_PATTERNS) {
+      if ((flagCounts.get(rule.flag) ?? 0) >= rule.minCount && rule.matches.test(f.feature)) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 function Section({ title, anchor, children }: { title: string; anchor?: string; children: ReactNode }) {

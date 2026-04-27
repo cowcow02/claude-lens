@@ -34,7 +34,8 @@ export default async function SavedInsightPage({
     const nextRaw = shiftMonday(monday, +7);
     const today = currentWeekMonday();
     const nextMonday = nextRaw > today ? null : nextRaw;
-    const prevCached = !!readWeekDigest(prev);
+    const priorDigest = readWeekDigest(prev);
+    const prevCached = !!priorDigest;
     const nextCached = nextMonday ? !!readWeekDigest(nextMonday) : false;
 
     return (
@@ -44,7 +45,7 @@ export default async function SavedInsightPage({
           prev={{ key: `week-${prev}`, label: shortLabelMonday(prev), cached: prevCached }}
           next={nextMonday ? { key: `week-${nextMonday}`, label: shortLabelMonday(nextMonday), cached: nextCached } : null}
         />
-        <WeekDigestView initial={cached} monday={monday} aiEnabled={aiOn} />
+        <WeekDigestView initial={cached} monday={monday} aiEnabled={aiOn} prior={priorDigest} />
       </div>
     );
   }

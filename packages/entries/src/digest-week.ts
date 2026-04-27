@@ -232,6 +232,38 @@ const defaultCallLLMWeek: CallLLM = (args) =>
 
 const validateWeek = (content: string) => parseAndValidate(content, WeekDigestResponseSchema);
 
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Strip friction examples whose quote isn't a verbatim substring of the named
+ *  day's text fields. Drops categories left with zero examples. The prompt asks
+ *  for verbatim quotes; this is the enforcement layer. */
+function pruneUngroundedFriction(
+  value: import("./prompts/digest-week.js").WeekDigestResponse,
+  dayDigests: DayDigest[],
+): import("./prompts/digest-week.js").WeekDigestResponse {
+  const dayCorpus = new Map<string, string>();
+  for (const d of dayDigests) {
+    const parts = [d.headline, d.what_went_well, d.what_hit_friction]
+      .filter((s): s is string => !!s);
+    dayCorpus.set(d.key, normalizeForMatch(parts.join(" \n ")));
+  }
+
+  const cleaned = value.friction_categories
+    .map(cat => {
+      const examples = cat.examples.filter(ex => {
+        const corpus = dayCorpus.get(ex.date);
+        if (!corpus) return false;
+        return corpus.includes(normalizeForMatch(ex.quote));
+      });
+      return { ...cat, examples };
+    })
+    .filter(cat => cat.examples.length > 0);
+
+  return { ...value, friction_categories: cleaned };
+}
+
 export async function generateWeekDigest(
   monday: string,
   dayDigests: DayDigest[],
@@ -278,7 +310,7 @@ export async function generateWeekDigest(
     inT += r1.input_tokens; outT += r1.output_tokens; lastModel = r1.model;
     const v1 = validateWeek(r1.content);
     if (v1.ok) {
-      return { digest: mergeNarrative(v1.value), usage: { input_tokens: inT, output_tokens: outT } };
+      return { digest: mergeNarrative(pruneUngroundedFriction(v1.value, dayDigests)), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     const r2 = await callLLM({
@@ -289,7 +321,7 @@ export async function generateWeekDigest(
     inT += r2.input_tokens; outT += r2.output_tokens; lastModel = r2.model;
     const v2 = validateWeek(r2.content);
     if (v2.ok) {
-      return { digest: mergeNarrative(v2.value), usage: { input_tokens: inT, output_tokens: outT } };
+      return { digest: mergeNarrative(pruneUngroundedFriction(v2.value, dayDigests)), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     console.warn(`[digest-week] ${monday}: LLM response failed validation after retry (${v2.error})`);

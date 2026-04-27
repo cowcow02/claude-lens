@@ -6,12 +6,13 @@ import type { WeekDigest as WeekDigestType } from "@claude-lens/entries";
 type Status = "idle" | "streaming" | "done" | "error";
 
 export function WeekDigestView({
-  initial, monday, aiEnabled, autoFire = false,
+  initial, monday, aiEnabled, autoFire = false, prior,
 }: {
   initial: WeekDigestType | null;
   monday: string;
   aiEnabled: boolean;
   autoFire?: boolean;
+  prior?: WeekDigestType | null;
 }) {
   const [digest, setDigest] = useState<WeekDigestType | null>(initial);
   const [status, setStatus] = useState<Status>("idle");
@@ -112,7 +113,7 @@ export function WeekDigestView({
   }
 
   if (digest) {
-    return <WeekDigestRender digest={digest} aiEnabled={aiEnabled} actions={actions} />;
+    return <WeekDigestRender digest={digest} aiEnabled={aiEnabled} actions={actions} priorDigest={prior ?? null} />;
   }
   return (
     <>
