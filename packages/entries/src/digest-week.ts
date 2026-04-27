@@ -75,6 +75,7 @@ export function buildDeterministicWeekDigest(
       agent_min: v.agent_min,
       share_pct: agent_min_total > 0 ? (v.agent_min / agent_min_total) * 100 : 0,
       shipped_count: v.shipped_count,
+      description: null as string | null,
     }));
 
   const shipped: WeekDigest["shipped"] = [];
@@ -149,8 +150,12 @@ export function buildDeterministicWeekDigest(
     headline: null,
     trajectory: null,
     standout_days: null,
-    friction_themes: null,
-    suggestion: null,
+    interaction_style: null,
+    friction_categories: null,
+    suggestions: null,
+    on_the_horizon: null,
+    fun_ending: null,
+    at_a_glance: null,
   };
 }
 
@@ -269,47 +274,47 @@ export async function generateWeekDigest(
   let inT = 0, outT = 0;
   let lastModel = model;
 
+  function mergeNarrative(value: import("./prompts/digest-week.js").WeekDigestResponse): WeekDigest {
+    const projectsByName = new Map(base.projects.map(p => [p.display_name, p]));
+    const enrichedProjects = base.projects.map(p => {
+      const match = value.project_areas.find(pa => pa.display_name === p.display_name);
+      return match ? { ...p, description: match.description } : p;
+    });
+    void projectsByName;
+    return {
+      ...base,
+      projects: enrichedProjects,
+      model: lastModel,
+      cost_usd: computeCostUsd(lastModel, inT, outT),
+      headline: value.headline,
+      trajectory: value.trajectory,
+      standout_days: value.standout_days,
+      interaction_style: value.interaction_style,
+      friction_categories: value.friction_categories,
+      suggestions: value.suggestions,
+      on_the_horizon: value.on_the_horizon,
+      fun_ending: value.fun_ending,
+      at_a_glance: value.at_a_glance,
+    };
+  }
+
   try {
     const r1 = await callLLM({ model, userPrompt, onProgress: opts.onProgress });
     inT += r1.input_tokens; outT += r1.output_tokens; lastModel = r1.model;
     const v1 = parseAndValidate(r1.content);
     if (v1.ok) {
-      return {
-        digest: {
-          ...base,
-          model: lastModel,
-          cost_usd: computeCostUsd(lastModel, inT, outT),
-          headline: v1.value.headline,
-          trajectory: v1.value.trajectory,
-          standout_days: v1.value.standout_days,
-          friction_themes: v1.value.friction_themes,
-          suggestion: v1.value.suggestion,
-        },
-        usage: { input_tokens: inT, output_tokens: outT },
-      };
+      return { digest: mergeNarrative(v1.value), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     const r2 = await callLLM({
       model, userPrompt,
-      reminder: "Your previous response was not valid JSON or did not match the required schema. Return ONLY the JSON object with the five required fields — no prose, no code fence.",
+      reminder: "Your previous response was not valid JSON or did not match the required schema. Return ONLY the JSON object with all required fields — no prose, no code fence.",
       onProgress: opts.onProgress,
     });
     inT += r2.input_tokens; outT += r2.output_tokens; lastModel = r2.model;
     const v2 = parseAndValidate(r2.content);
     if (v2.ok) {
-      return {
-        digest: {
-          ...base,
-          model: lastModel,
-          cost_usd: computeCostUsd(lastModel, inT, outT),
-          headline: v2.value.headline,
-          trajectory: v2.value.trajectory,
-          standout_days: v2.value.standout_days,
-          friction_themes: v2.value.friction_themes,
-          suggestion: v2.value.suggestion,
-        },
-        usage: { input_tokens: inT, output_tokens: outT },
-      };
+      return { digest: mergeNarrative(v2.value), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     console.warn(`[digest-week] ${monday}: LLM response failed validation after retry (${v2.error})`);

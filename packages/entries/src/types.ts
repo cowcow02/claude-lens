@@ -210,6 +210,56 @@ export type DayDigest = DigestEnvelope & {
 // Week digest (Phase 4) — synthesizes 7 day digests into a weekly story.
 // ─────────────────────────────────────────────────────────────────────────
 
+/** Project-area entry with optional LLM-written description of what was built. */
+export type WeekProjectArea = {
+  name: string;
+  display_name: string;
+  agent_min: number;
+  share_pct: number;
+  shipped_count: number;
+  /** 1–2 sentence summary of what was built in this project this week. LLM-generated. */
+  description: string | null;
+};
+
+/** Categorized friction with grounded examples (1–3 each). */
+export type WeekFrictionCategory = {
+  category: string;
+  description: string;
+  examples: string[];
+};
+
+/** Add to CLAUDE.md to encode a recurring guardrail. */
+export type WeekClaudeMdAddition = {
+  addition: string;
+  why: string;
+  /** Where in CLAUDE.md to put it. */
+  prompt_scaffold: string;
+};
+
+/** Surface a Claude Code feature the user isn't yet leaning on. */
+export type WeekFeatureToTry = {
+  feature: string;
+  one_liner: string;
+  why_for_you: string;
+  example_code: string;
+};
+
+/** A reusable usage pattern with a copyable prompt. */
+export type WeekUsagePattern = {
+  title: string;
+  suggestion: string;
+  detail: string;
+  copyable_prompt: string;
+};
+
+/** A forward-looking opportunity grounded in this week's data. */
+export type WeekHorizonOpportunity = {
+  title: string;
+  whats_possible: string;
+  how_to_try: string;
+  copyable_prompt: string;
+};
+
 export type WeekDigest = DigestEnvelope & {
   scope: "week";
   /** ISO Monday in server local TZ, e.g. "2026-04-20" — same value as envelope.key. */
@@ -217,13 +267,8 @@ export type WeekDigest = DigestEnvelope & {
 
   // ── Deterministic aggregations (computed from day digests) ──
   agent_min_total: number;
-  projects: Array<{
-    name: string;
-    display_name: string;
-    agent_min: number;
-    share_pct: number;
-    shipped_count: number;
-  }>;
+  /** Per-project rollup. `description` is filled by the LLM during synth; null until then. */
+  projects: WeekProjectArea[];
   shipped: Array<{ title: string; project: string; date: string; session_id: string }>;
   /** Counts of days bucketed by their day-level outcome. Days with no entries are absent. */
   outcome_mix: Partial<Record<DayOutcome, number>>;
@@ -235,14 +280,52 @@ export type WeekDigest = DigestEnvelope & {
   concurrency_peak_day: { date: string; peak: number } | null;
 
   // ── LLM narrative (null when ai_features.enabled === false or synth failed) ──
+
+  /** Concrete claim grounded in the data; second-person; ≤ 120 chars. */
   headline: string | null;
   /** One short line per day with data. Days with zero entries are omitted (not "idle"). */
   trajectory: Array<{ date: string; line: string }> | null;
   /** 1–2 days that defined the week. */
   standout_days: Array<{ date: string; why: string }> | null;
-  /** 2–3 sentences clustering recurring friction across days. Empty string allowed if no friction. */
-  friction_themes: string | null;
-  suggestion: { headline: string; body: string } | null;
+  /** Multi-paragraph characterization of HOW the user worked this week, plus a one-line key pattern. */
+  interaction_style: { narrative: string; key_pattern: string } | null;
+  /**
+   * 2–4 friction categories. Each carries a description + 1–3 grounded example
+   * incidents. Empty array means the week was smooth — render "no friction"
+   * rather than placeholder prose.
+   */
+  friction_categories: WeekFrictionCategory[] | null;
+  /** Multi-pronged suggestions split by where the user would apply them. */
+  suggestions: {
+    claude_md_additions: WeekClaudeMdAddition[];
+    features_to_try: WeekFeatureToTry[];
+    usage_patterns: WeekUsagePattern[];
+  } | null;
+  /** Forward-looking — 2–3 ambitious workflows enabled by this week's pattern. */
+  on_the_horizon: {
+    intro: string;
+    opportunities: WeekHorizonOpportunity[];
+  } | null;
+  /** A single memorable moment from the week. Optional — null if nothing stood out. */
+  fun_ending: { headline: string; detail: string } | null;
+  /**
+   * 4-bucket scannable summary for top of the page. Cross-section refs are encoded
+   * inline so renderers don't need to invent navigation.
+   */
+  at_a_glance: {
+    whats_working: string;
+    whats_hindering: string;
+    quick_wins: string;
+    ambitious_workflows: string;
+  } | null;
+
+  /**
+   * @deprecated kept for back-compat with cached digests written before
+   * Phase 4 schema expansion. Renderers should prefer `friction_categories`.
+   */
+  friction_themes?: string | null;
+  /** @deprecated kept for back-compat. Renderers should prefer `suggestions.usage_patterns[0]`. */
+  suggestion?: { headline: string; body: string } | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
