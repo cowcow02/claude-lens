@@ -13,11 +13,14 @@ import { DashboardView } from "@/components/dashboard-view";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { LiveBadge } from "@/components/live-badge";
 import { YesterdayHero } from "@/components/yesterday-hero";
+import { TodayHero } from "@/components/today-hero";
 import { RecentDaysPanel } from "@/components/recent-days-panel";
 import type { DaySummary } from "@/components/heatmap";
 import { cutoffMs, parseRange } from "@/lib/date-range";
 import { listSessions } from "@/lib/data";
 import { buildEntriesIndex, listCachedDayDigests } from "@/lib/entries-index";
+import { todayLocal } from "@/lib/entries";
+import { listEntriesForDay } from "@claude-lens/entries/fs";
 import { formatDuration, formatTokens, formatRelative, prettyProjectName } from "@/lib/format";
 import Link from "next/link";
 
@@ -128,6 +131,7 @@ export default async function DashboardHome({
         <DateRangeFilter current={range} />
       </header>
 
+      <TodayHero todayDate={todayLocal()} hasEntries={listEntriesForDay(todayLocal()).length > 0} />
       <YesterdayHero />
 
       <DashboardView sessions={sessions} daySummaries={daySummaries} />
