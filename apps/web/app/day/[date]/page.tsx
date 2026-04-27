@@ -2,9 +2,12 @@ import { listSessions, getSession } from "@/lib/data";
 import {
   buildGanttDay,
   computeParallelismBursts,
+  computeBurstsFromSessions,
+  dailyActivity,
   type GanttDay,
   type ParallelismBurst,
 } from "@claude-lens/parser";
+import { toLocalDay as toLocalDayParser } from "@claude-lens/parser";
 import { readDayDigest, listEntriesForDay } from "@claude-lens/entries/fs";
 import { readSettings, buildDeterministicDigest } from "@claude-lens/entries/node";
 import type { DayDigest } from "@claude-lens/entries";
@@ -12,6 +15,7 @@ import { isValidDate, todayLocal, toLocalDay } from "@/lib/entries";
 import { buildEntriesIndex } from "@/lib/entries-index";
 import type { SessionEntrySummary } from "../../parallelism/gantt-chart";
 import type { BackfillRow } from "@/components/backfill-drawer";
+import type { DayInfo } from "@/components/date-nav";
 import { DayView } from "./day-view";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -118,6 +122,36 @@ export default async function DayPage({
   const next = addDays(date, 1);
   const backfillRows = buildBackfillRows();
 
+  // Calendar popover stats: per-day activity + parallelism stats so the
+  // calendar tints by airtime and dots days with concurrency bursts.
+  const buckets = dailyActivity(allSessions);
+  const allBursts = computeBurstsFromSessions(allSessions);
+  type DayBurstAgg = { totalMs: number; count: number; peak: number };
+  const burstsByDay = new Map<string, DayBurstAgg>();
+  for (const b of allBursts) {
+    const day = toLocalDayParser(b.startMs);
+    const e = burstsByDay.get(day) ?? { totalMs: 0, count: 0, peak: 0 };
+    e.totalMs += b.endMs - b.startMs;
+    e.count += 1;
+    if (b.peak > e.peak) e.peak = b.peak;
+    burstsByDay.set(day, e);
+  }
+  const dayKeys = new Set<string>();
+  for (const b of buckets) if (b.sessions > 0) dayKeys.add(b.date);
+  for (const d of burstsByDay.keys()) dayKeys.add(d);
+  const dayStats: DayInfo[] = Array.from(dayKeys).map((dt) => {
+    const a = buckets.find((b) => b.date === dt);
+    const burst = burstsByDay.get(dt);
+    return {
+      date: dt,
+      sessions: a?.sessions ?? 0,
+      airTimeMs: a?.airTimeMs ?? 0,
+      parallelMs: burst?.totalMs ?? 0,
+      burstCount: burst?.count ?? 0,
+      peakConcurrency: burst?.peak ?? 0,
+    };
+  });
+
   return (
     <DayView
       date={date}
@@ -131,6 +165,7 @@ export default async function DayPage({
       bursts={bursts}
       sessionEntries={sessionEntries}
       backfillRows={backfillRows}
+      dayStats={dayStats}
     />
   );
 }

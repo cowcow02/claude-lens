@@ -1,14 +1,13 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { CalendarDays, ChevronDown, ChevronRight, Layers } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers } from "lucide-react";
 import type { DayDigest, Entry } from "@claude-lens/entries";
 import type { GanttDay, ParallelismBurst } from "@claude-lens/parser";
 import { DayDigestView } from "@/components/day-digest-view";
 import { GanttChart, type SessionEntrySummary } from "../../parallelism/gantt-chart";
 import { BackfillDrawer, type BackfillRow } from "@/components/backfill-drawer";
+import { DateNav, type DayInfo } from "@/components/date-nav";
 
 export function DayView({
   date,
@@ -22,6 +21,7 @@ export function DayView({
   bursts,
   sessionEntries,
   backfillRows,
+  dayStats,
 }: {
   date: string;
   today: string;
@@ -34,18 +34,11 @@ export function DayView({
   bursts: ParallelismBurst[];
   sessionEntries: Record<string, SessionEntrySummary>;
   backfillRows: BackfillRow[];
+  dayStats: DayInfo[];
 }) {
-  const router = useRouter();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const hasNarrative = entries.length > 0;
   const hasTimeline = gantt.sessions.length > 0;
-
-  const onPickDate = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    if (v && /^\d{4}-\d{2}-\d{2}$/.test(v) && v <= today) {
-      router.push(`/day/${v}`);
-    }
-  };
 
   const fmtDate = new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
@@ -66,41 +59,13 @@ export function DayView({
           flexWrap: "wrap",
         }}
       >
-        <Link href={`/day/${prev}`} style={{ color: "var(--af-accent)" }}>← Prev</Link>
-        {next && <Link href={`/day/${next}`} style={{ color: "var(--af-accent)" }}>Next →</Link>}
-        {date !== today && (
-          <Link href={`/day/${today}`} style={{ color: "var(--af-accent)" }}>Today</Link>
-        )}
-
-        <span style={{ color: "var(--af-text-tertiary)", marginLeft: 4 }}>·</span>
-
-        <label
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
-            color: "var(--af-text-secondary)",
-            cursor: "pointer",
-          }}
-          title="Pick a date"
-        >
-          <CalendarDays size={13} />
-          <input
-            type="date"
-            value={date}
-            max={today}
-            onChange={onPickDate}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--af-text)",
-              fontSize: 12,
-              fontFamily: "inherit",
-              padding: 0,
-              cursor: "pointer",
-            }}
-          />
-        </label>
+        <DateNav
+          date={date}
+          today={today}
+          prevDay={prev}
+          nextDay={next ?? undefined}
+          dayStats={dayStats}
+        />
 
         <button
           type="button"
