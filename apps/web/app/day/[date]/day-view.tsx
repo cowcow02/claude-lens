@@ -37,7 +37,13 @@ export function DayView({
   dayStats: DayInfo[];
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const hasNarrative = entries.length > 0;
+  // Narrative section is suppressed when every entry is `skipped_trivial` —
+  // that's a "warm-up only" day with nothing to summarize, so the section
+  // would just be a header above an empty placeholder. Keep the timeline
+  // accessible via its own collapsible.
+  const allTrivial = entries.length > 0
+    && entries.every((e) => e.enrichment.status === "skipped_trivial");
+  const hasNarrative = entries.length > 0 && !allTrivial;
   const hasTimeline = gantt.sessions.length > 0;
 
   const fmtDate = new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {

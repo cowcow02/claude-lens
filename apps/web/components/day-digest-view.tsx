@@ -60,16 +60,14 @@ export function DayDigestView({
 
   const isStreaming = status === "streaming";
 
-  // Are all capsules done AND the narrative cached? Then re-running is mostly
-  // a no-op (force-rerolls the narrative against the same entries). Hide the
-  // primary button to avoid implying "this will redo work".
-  const allCapsulesDone = useMemo(() => {
-    if (entries.length === 0) return false;
-    return entries.every(
-      (e) => e.enrichment.status === "done" || e.enrichment.status === "skipped_trivial",
-    );
-  }, [entries]);
-  const narrativeIsFresh = !!digest?.headline && allCapsulesDone;
+  // A digest with a headline means synthesis ran — trust that as "fresh"
+  // even when a few entries are stuck in `pending` (e.g. rate-limited
+  // retries that didn't increment retry_count). Otherwise stuck entries
+  // would trap the user clicking "Generate" forever, since the pipeline
+  // short-circuits to the cached digest without re-enriching anyway.
+  // Users who want to recover stuck entries can use Re-roll narrative
+  // (which forces a fresh pipeline run that retries the pending capsules).
+  const narrativeIsFresh = !!digest?.headline;
   // Days where every entry is `skipped_trivial` will never produce a
   // narrative — generating again does nothing. Treat as a third "no work
   // to do" state so users don't keep clicking a no-op Generate button.
