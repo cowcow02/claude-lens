@@ -70,9 +70,16 @@ export function DayDigestView({
     );
   }, [entries]);
   const narrativeIsFresh = !!digest?.headline && allCapsulesDone;
+  // Days where every entry is `skipped_trivial` will never produce a
+  // narrative — generating again does nothing. Treat as a third "no work
+  // to do" state so users don't keep clicking a no-op Generate button.
+  const allTrivial = useMemo(() => {
+    if (entries.length === 0) return false;
+    return entries.every((e) => e.enrichment.status === "skipped_trivial");
+  }, [entries]);
   // No entries at all → there's nothing to generate. Hide all CTAs.
   const isEmpty = entries.length === 0;
-  const hasMissingWork = !isEmpty && !narrativeIsFresh;
+  const hasMissingWork = !isEmpty && !allTrivial && !narrativeIsFresh;
 
   return (
     <>
@@ -80,12 +87,12 @@ export function DayDigestView({
         style={{
           display: "flex",
           gap: 10,
-          padding: isEmpty ? 0 : "14px 40px 0",
+          padding: isEmpty || allTrivial ? 0 : "14px 40px 0",
           alignItems: "center",
           flexWrap: "wrap",
         }}
       >
-        {isEmpty ? null : hasMissingWork ? (
+        {isEmpty || allTrivial ? null : hasMissingWork ? (
           <button
             onClick={() => generate(false)}
             disabled={isStreaming}
@@ -140,6 +147,10 @@ export function DayDigestView({
       ) : isEmpty ? (
         <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-tertiary)", fontSize: 13 }}>
           No entries on this day.
+        </div>
+      ) : allTrivial ? (
+        <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-tertiary)", fontSize: 13 }}>
+          💤 Warm-up only — every session was under a minute. No narrative needed.
         </div>
       ) : (
         <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-secondary)", fontSize: 13 }}>
