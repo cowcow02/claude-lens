@@ -110,11 +110,11 @@ INPUT shape:
 - shipped: all PRs shipped this week, each { title, project, date }.
 - top_flags, top_goal_categories.
 - concurrency_peak_day: { date, peak } or null.
-- interaction_modes: HOW THE USER ACTUALLY DROVE AGENTS THIS WEEK. Foundation for the whole narrative — every other section should anchor here. Shape:
-    - orchestration: { subagent_calls, task_ops, days_with_subagents/7, top_types[]: { type, count } }
-    - skill_use: { skill_calls, days_with_skills/7, top_skills[]: { skill, count } }
+- interaction_modes: HOW THE USER ACTUALLY DROVE AGENTS THIS WEEK. Foundation for the whole narrative — every other section should anchor here. Each axis carries qualitative \`examples\` (or \`longest_turn\` for turn_shape) that you SHOULD QUOTE rather than paraphrase. Shape:
+    - orchestration: { subagent_calls, task_ops, days_with_subagents/7, top_types[]: { type, count }, examples[]: { date, project_display, type, prompt_preview } }
+    - skill_use: { skill_calls, days_with_skills/7, top_skills[]: { skill, count }, examples[]: { date, skill, first_user_preview } }
     - plan_gating: { exit_plan_calls, days_with_plan/7 }
-    - turn_shape: { tools_per_turn, interrupts, long_autonomous_days/7, label: "rapid"|"mixed"|"batch" }
+    - turn_shape: { tools_per_turn, interrupts, long_autonomous_days/7, label: "rapid"|"mixed"|"batch", longest_turn: { date, project_display, active_min, top_tools[], first_user_preview } | null }
 - day_summaries: per-day { date, day_name, headline, what_went_well, what_hit_friction, suggestion, agent_min, outcome_day, helpfulness_day, top_flags }. Each entry's text fields are verbatim from that day's digest — quote them, don't paraphrase.
 
 OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence. Schema:
@@ -220,20 +220,21 @@ The reader is a working developer, not someone who reads parser internals. Write
 
 NARRATIVE FLOW (the report's spine):
 
-The reader needs to understand HOW they worked before any pattern/friction/suggestion is meaningful. Build the report as a single argument:
+The reader sees the four "How you worked" mode cards (with counts + one quoted example each) before reading any of your prose. Your job is to take that texture and BUILD ON IT, not restate it. The report is a single argument:
 
-  [1] interaction_modes establishes the working mode (already shown to the reader in the "How you worked" cards above your prose). You don't need to redescribe these — but every downstream claim MUST be grounded in them.
-  [2] key_pattern is your one-sentence characterization of how they drove agents — name the dominant axis from interaction_modes (e.g. "Orchestration-heavy week with batch turns" / "Skill-driven, rapid back-and-forth on every shipping day" / "Plan-gated only on the architectural day"). Don't restate counts the cards already show; name the SHAPE.
-  [3] standout_days + trajectory recap WHAT happened given that mode.
-  [4] recurring_themes + outcome_correlations call out cross-day signals — and where possible, frame them as consequences of the mode ("the days you skipped Plan Mode were also the days that needed mid-run redirection").
-  [5] friction_categories names what hurt — but only friction the user actually hit, not flag patterns. (Flag patterns belong in recurring_themes with source: flag_pattern.)
-  [6] suggestions ONLY land if they tie to a specific interaction_modes axis. A "use Hooks" suggestion to a user already at high orchestration + 0 skill use lands differently than the same suggestion to a solo + heavy-skill user. State the anchor explicitly in why_for_you / why / detail — e.g. "given you orchestrate 5/7 days but skip Plan Mode, …". If you can't tie a suggestion to a specific axis, drop it.
+  [1] interaction_modes establishes the working mode. You see counts AND qualitative examples (subagent prompts, skills paired with what the user said when loading them, the longest single turn's tools + opening prompt). Every downstream claim should reference this texture by name — "the brainstorming-skill openings", "the general-purpose dispatches that ran 130-min batches", "the long autonomous Mon push".
+  [2] key_pattern names the TEXTURE in one sentence — not just counts. Bad: "Subagents on 5 of 6 days." Good: "general-purpose subagent dispatches anchored every shipping day, with brainstorming-skill openings on the planning days and zero plan-gating throughout." Reference subagent types or skill names by name when they're load-bearing.
+  [3] standout_days + trajectory recap WHAT happened — describe the day's work *as an instance of* the mode (e.g., "Wed's 647-min push dispatched general-purpose 47 times before the Phase 1b enrichment shipped").
+  [4] recurring_themes + outcome_correlations call out cross-day signals THROUGH THE MODE LENS. Prefer themes that link an axis to evidence: "Brainstorming-skill openings preceded every clean-shipping day" / "The two days without subagent dispatches were also the two days without mid-run redirection." Quote the qualitative examples (subagent prompt previews, skill-load first_user lines) as evidence — these are not decorative, they're the texture the reader needs to see the pattern.
+  [5] friction_categories names what hurt — and EVERY description MUST cite the mode dimension where the friction surfaced. "Mid-run drift hit on the 3 days you orchestrated without first opening with a brainstorming skill." "The 23-git-invocation stall happened inside an unbroken 130-min general-purpose dispatch with zero plan gates."
+  [6] suggestions ONLY land if they tie to a specific interaction_modes axis. A "use Hooks" suggestion to a user already at high orchestration + 0 skill use lands differently than the same suggestion to a solo + heavy-skill user. State the anchor explicitly in why_for_you / why / detail — name the actual subagent type / skill / longest-turn detail you're responding to.
 
 ANCHORING RULES (enforce while writing):
 
-  - Every suggestions.*[].why and suggestions.*[].why_for_you and suggestions.*[].detail MUST reference at least one of: a specific date, a specific interaction_modes count (e.g. "5/7 days with subagents"), or a named flag pattern.
+  - Every suggestions.*[].why and suggestions.*[].why_for_you and suggestions.*[].detail MUST reference at least one of: a specific date, a specific interaction_modes count (e.g. "5/7 days with subagents"), an interaction_modes example (a subagent type, a skill name, the longest_turn's project), OR a named flag pattern.
+  - recurring_themes[].evidence and friction_categories[].description SHOULD quote at least one qualitative anchor from interaction_modes — a subagent type by name, a skill by name, or the longest_turn detail. Floating prose like "long sessions on multiple days" is weaker than "general-purpose dispatches anchored Mon, Wed, and Fri".
   - features_to_try SKIPS recommendations the user already exhibits at high level. Don't suggest "Custom Skills" if skill_use.skill_calls > 0; don't suggest "Subagents" if orchestration.subagent_calls > 0; don't suggest "Plan Mode" if plan_gating.exit_plan_calls > 0. Reach for the gap, not the strength.
-  - on_the_horizon describes a FUTURE workflow that fits the user's current mode — don't propose subagent-orchestration to a solo worker without acknowledging the shift required.
+  - on_the_horizon describes a FUTURE workflow that fits the user's current mode — name a subagent type or skill from this week and describe how the workflow extends it.
 
 CRITICAL RULES:
 

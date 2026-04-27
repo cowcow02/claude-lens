@@ -40,7 +40,9 @@ function toLocalDateString(d: Date): string {
  *  Treats `subagents`, `skills`, `numbers.subagent_calls/skill_calls/task_ops/
  *  exit_plan_calls/interrupts/turn_count/tools_total`, and the `long_autonomous`
  *  flag as the load-bearing inputs. Day-bucketing uses `local_day` for the
- *  "days_with_*" denominators. */
+ *  "days_with_*" denominators. Also surfaces qualitative examples — actual
+ *  subagent prompts, skill+first_user pairings, longest-turn detail — so
+ *  downstream prose has texture to quote rather than just counts to recite. */
 export function computeInteractionModes(entries: Entry[]): WeekInteractionModes {
   const subagentCallsByDay = new Map<string, number>();
   const skillCallsByDay = new Map<string, number>();
@@ -92,6 +94,63 @@ export function computeInteractionModes(entries: Entry[]): WeekInteractionModes 
     .slice(0, 5)
     .map(([skill, count]) => ({ skill, count }));
 
+  // ── Qualitative examples ────────────────────────────────────────────────
+  // Pick up to 3 distinctive subagent dispatches: prefer one per top_type
+  // (prevents one busy day from monopolizing the examples), pulling the
+  // longest prompt_preview within each type since longer = more texture.
+  const subagentExamples: WeekInteractionModes["orchestration"]["examples"] = [];
+  const seenTypes = new Set<string>();
+  const allDispatches: Array<{ entry: Entry; sa: typeof entries[0]["subagents"][0] }> = [];
+  for (const e of entries) for (const sa of e.subagents) allDispatches.push({ entry: e, sa });
+  // Sort by prompt_preview length desc; pick first match per type.
+  allDispatches.sort((a, b) => b.sa.prompt_preview.length - a.sa.prompt_preview.length);
+  for (const { entry, sa } of allDispatches) {
+    if (subagentExamples.length >= 3) break;
+    if (seenTypes.has(sa.type)) continue;
+    seenTypes.add(sa.type);
+    subagentExamples.push({
+      date: entry.local_day,
+      project_display: prettyProject(entry.project),
+      type: sa.type,
+      prompt_preview: truncate(sa.prompt_preview, 200),
+    });
+  }
+
+  // Pick up to 3 distinct skills with the first_user from an entry that loaded
+  // them — gives the reader a sense of *why* the skill was reached for.
+  const skillExamples: WeekInteractionModes["skill_use"]["examples"] = [];
+  const seenSkills = new Set<string>();
+  for (const e of entries) {
+    for (const skill of Object.keys(e.skills)) {
+      if (skillExamples.length >= 3) break;
+      if (seenSkills.has(skill)) continue;
+      if (!e.first_user || e.first_user.length < 8) continue;
+      seenSkills.add(skill);
+      skillExamples.push({
+        date: e.local_day,
+        skill,
+        first_user_preview: truncate(e.first_user, 200),
+      });
+    }
+  }
+
+  // The long-autonomous entry with the highest active_min — captures the
+  // most-illustrative single push.
+  let longestTurnEntry: Entry | null = null;
+  for (const e of entries) {
+    if (!e.flags.includes("long_autonomous")) continue;
+    if (!longestTurnEntry || e.numbers.active_min > longestTurnEntry.numbers.active_min) {
+      longestTurnEntry = e;
+    }
+  }
+  const longest_turn = longestTurnEntry ? {
+    date: longestTurnEntry.local_day,
+    project_display: prettyProject(longestTurnEntry.project),
+    active_min: longestTurnEntry.numbers.active_min,
+    top_tools: longestTurnEntry.top_tools.slice(0, 5),
+    first_user_preview: truncate(longestTurnEntry.first_user, 200),
+  } : null;
+
   const tools_per_turn = turn_count > 0 ? tools_total / turn_count : 0;
   // 5 / 15 thresholds calibrated to feel right on observed dogfood weeks: a
   // 5-tool turn is a focused single task, 15+ is a clearly batched run.
@@ -104,11 +163,13 @@ export function computeInteractionModes(entries: Entry[]): WeekInteractionModes 
       task_ops,
       days_with_subagents: subagentCallsByDay.size,
       top_types,
+      examples: subagentExamples,
     },
     skill_use: {
       skill_calls,
       days_with_skills: skillCallsByDay.size,
       top_skills,
+      examples: skillExamples,
     },
     plan_gating: {
       exit_plan_calls,
@@ -119,8 +180,14 @@ export function computeInteractionModes(entries: Entry[]): WeekInteractionModes 
       interrupts,
       long_autonomous_days: longAutonomousDays.size,
       label,
+      longest_turn,
     },
   };
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1).trimEnd() + "…";
 }
 
 export type BuildDeterministicWeekOptions = {

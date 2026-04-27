@@ -288,6 +288,14 @@ export type WeekInteractionModes = {
     days_with_subagents: number;
     /** Top subagent types invoked, ordered by count, capped at 5. */
     top_types: Array<{ type: string; count: number }>;
+    /** Up to 3 illustrative dispatches with prompt_preview text — gives the
+     *  reader a sense of what kind of work was orchestrated. */
+    examples: Array<{
+      date: string;
+      project_display: string;
+      type: string;
+      prompt_preview: string;
+    }>;
   };
   /** Skill / slash-command driven workflows. */
   skill_use: {
@@ -296,6 +304,14 @@ export type WeekInteractionModes = {
     days_with_skills: number;
     /** Top skills loaded, ordered by count, capped at 5. */
     top_skills: Array<{ skill: string; count: number }>;
+    /** Up to 3 illustrative skill loads paired with the first_user text from
+     *  the entry that loaded them — shows what the user reached for the
+     *  skill *for*, not just which ones got loaded. */
+    examples: Array<{
+      date: string;
+      skill: string;
+      first_user_preview: string;
+    }>;
   };
   /** Plan Mode discipline — exit_plan tool calls + days with the plan_used flag. */
   plan_gating: {
@@ -314,6 +330,17 @@ export type WeekInteractionModes = {
     long_autonomous_days: number;
     /** Bucket label for quick UI rendering. */
     label: "rapid" | "mixed" | "batch";
+    /** The single most-illustrative long-autonomous turn this week — the entry
+     *  that fired long_autonomous with the highest active_min. Shows the
+     *  reader the texture of the longest unbroken push. null when no such
+     *  turn fired. */
+    longest_turn: {
+      date: string;
+      project_display: string;
+      active_min: number;
+      top_tools: string[];
+      first_user_preview: string;
+    } | null;
   };
 };
 

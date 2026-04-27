@@ -339,12 +339,13 @@ function InteractionModesSection({ modes }: { modes: NonNullable<WeekDigestType[
   const orchestrationLevel = bandFromDays(modes.orchestration.days_with_subagents);
   const skillLevel = bandFromDays(modes.skill_use.days_with_skills);
   const planLevel = bandFromDays(modes.plan_gating.days_with_plan);
+  const lt = modes.turn_shape.longest_turn ?? null;
 
   return (
     <Section title="How you worked" anchor="interaction">
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+        gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
         gap: 10,
       }}>
         <ModeCard
@@ -357,10 +358,14 @@ function InteractionModesSection({ modes }: { modes: NonNullable<WeekDigestType[
           }
           detail={
             modes.orchestration.top_types.length > 0
-              ? modes.orchestration.top_types.map(t => `${t.type} ×${t.count}`).join(" · ")
+              ? modes.orchestration.top_types.slice(0, 3).map(t => `${t.type} ×${t.count}`).join(" · ")
               : null
           }
           extra={modes.orchestration.task_ops > 0 ? `${modes.orchestration.task_ops} TodoWrite ops` : null}
+          evidence={(modes.orchestration.examples ?? []).length > 0 ? {
+            tag: `${modes.orchestration.examples[0]!.type} · ${dayName(modes.orchestration.examples[0]!.date)} ${modes.orchestration.examples[0]!.date.slice(5)}`,
+            quote: modes.orchestration.examples[0]!.prompt_preview,
+          } : null}
         />
         <ModeCard
           label="Skill-driven"
@@ -372,9 +377,13 @@ function InteractionModesSection({ modes }: { modes: NonNullable<WeekDigestType[
           }
           detail={
             modes.skill_use.top_skills.length > 0
-              ? modes.skill_use.top_skills.map(s => `${s.skill} ×${s.count}`).join(" · ")
+              ? modes.skill_use.top_skills.slice(0, 3).map(s => `${s.skill} ×${s.count}`).join(" · ")
               : null
           }
+          evidence={(modes.skill_use.examples ?? []).length > 0 ? {
+            tag: `${modes.skill_use.examples[0]!.skill} · ${dayName(modes.skill_use.examples[0]!.date)} ${modes.skill_use.examples[0]!.date.slice(5)}`,
+            quote: modes.skill_use.examples[0]!.first_user_preview,
+          } : null}
         />
         <ModeCard
           label="Plan-gated"
@@ -385,6 +394,9 @@ function InteractionModesSection({ modes }: { modes: NonNullable<WeekDigestType[
               : `${modes.plan_gating.exit_plan_calls} ExitPlan · ${modes.plan_gating.days_with_plan}/7 days`
           }
           detail={null}
+          absenceProse={modes.plan_gating.exit_plan_calls === 0 && modes.plan_gating.days_with_plan === 0
+            ? "Work proceeded without an explicit plan-approval gate on any day this week."
+            : null}
         />
         <ModeCard
           label="Turn shape"
@@ -396,6 +408,11 @@ function InteractionModesSection({ modes }: { modes: NonNullable<WeekDigestType[
               : null
           }
           extra={modes.turn_shape.interrupts > 0 ? `${modes.turn_shape.interrupts} user interrupt${modes.turn_shape.interrupts === 1 ? "" : "s"}` : null}
+          evidence={lt ? {
+            tag: `Longest push · ${dayName(lt.date)} ${lt.date.slice(5)} · ${lt.project_display} · ${Math.round(lt.active_min)}m`,
+            quote: lt.first_user_preview || (lt.top_tools.length > 0 ? `Top tools: ${lt.top_tools.join(", ")}` : ""),
+            secondary: lt.first_user_preview && lt.top_tools.length > 0 ? `Top tools: ${lt.top_tools.join(", ")}` : null,
+          } : null}
         />
       </div>
     </Section>
@@ -422,13 +439,15 @@ function bandFromDays(days: number): "none" | "light" | "moderate" | "high" {
 }
 
 function ModeCard({
-  label, level, headline, detail, extra,
+  label, level, headline, detail, extra, evidence, absenceProse,
 }: {
   label: string;
   level: ModeLevel;
   headline: string;
   detail: string | null;
   extra?: string | null;
+  evidence?: { tag: string; quote: string; secondary?: string | null } | null;
+  absenceProse?: string | null;
 }) {
   const tone = MODE_TONE[level];
   return (
@@ -436,8 +455,9 @@ function ModeCard({
       padding: "12px 14px", borderRadius: 8,
       background: "var(--af-surface)",
       border: `1px solid color-mix(in srgb, ${tone} 22%, var(--af-border-subtle))`,
+      display: "flex", flexDirection: "column", gap: 6,
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{
           fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
           textTransform: "uppercase", color: "var(--af-text-tertiary)",
@@ -450,13 +470,13 @@ function ModeCard({
           border: `1px solid color-mix(in srgb, ${tone} 28%, transparent)`,
         }}>{level}</span>
       </div>
-      <div style={{ fontSize: 12.5, color: "var(--af-text)", marginBottom: detail || extra ? 4 : 0, lineHeight: 1.4 }}>
+      <div style={{ fontSize: 12.5, color: "var(--af-text)", lineHeight: 1.4 }}>
         {headline}
       </div>
       {detail && (
         <div style={{
           fontSize: 10.5, color: "var(--af-text-secondary)",
-          fontFamily: "var(--font-mono)", lineHeight: 1.5, marginBottom: extra ? 2 : 0,
+          fontFamily: "var(--font-mono)", lineHeight: 1.5,
         }}>
           {detail}
         </div>
@@ -464,6 +484,43 @@ function ModeCard({
       {extra && (
         <div style={{ fontSize: 10, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
           {extra}
+        </div>
+      )}
+      {evidence && (
+        <div style={{
+          marginTop: 4, padding: "8px 10px", borderRadius: 6,
+          background: `color-mix(in srgb, ${tone} 6%, var(--af-surface-raised))`,
+          borderLeft: `2px solid color-mix(in srgb, ${tone} 50%, transparent)`,
+          display: "flex", flexDirection: "column", gap: 4,
+        }}>
+          <div style={{
+            fontSize: 9, fontWeight: 600, letterSpacing: "0.04em",
+            color: tone, fontFamily: "var(--font-mono)",
+          }}>{evidence.tag}</div>
+          {evidence.quote && (
+            <div style={{
+              fontSize: 11, lineHeight: 1.5, color: "var(--af-text)", fontStyle: "italic",
+            }}>
+              <span style={{ color: "var(--af-text-tertiary)" }}>“</span>
+              {evidence.quote}
+              <span style={{ color: "var(--af-text-tertiary)" }}>”</span>
+            </div>
+          )}
+          {evidence.secondary && (
+            <div style={{
+              fontSize: 10, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)",
+            }}>{evidence.secondary}</div>
+          )}
+        </div>
+      )}
+      {absenceProse && (
+        <div style={{
+          marginTop: 4, padding: "8px 10px", borderRadius: 6,
+          background: "var(--af-surface-raised)",
+          borderLeft: "2px solid var(--af-border)",
+          fontSize: 11, lineHeight: 1.5, color: "var(--af-text-secondary)", fontStyle: "italic",
+        }}>
+          {absenceProse}
         </div>
       )}
     </div>
