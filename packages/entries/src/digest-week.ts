@@ -148,14 +148,15 @@ export function buildDeterministicWeekDigest(
     top_goal_categories,
     concurrency_peak_day,
     headline: null,
+    key_pattern: null,
     trajectory: null,
     standout_days: null,
-    interaction_style: null,
+    recurring_themes: null,
+    outcome_correlations: null,
     friction_categories: null,
     suggestions: null,
     on_the_horizon: null,
     fun_ending: null,
-    at_a_glance: null,
   };
 }
 
@@ -287,14 +288,15 @@ export async function generateWeekDigest(
       model: lastModel,
       cost_usd: computeCostUsd(lastModel, inT, outT),
       headline: value.headline,
+      key_pattern: value.key_pattern,
       trajectory: value.trajectory,
       standout_days: value.standout_days,
-      interaction_style: value.interaction_style,
+      recurring_themes: value.recurring_themes,
+      outcome_correlations: value.outcome_correlations,
       friction_categories: value.friction_categories,
       suggestions: value.suggestions,
       on_the_horizon: value.on_the_horizon,
       fun_ending: value.fun_ending,
-      at_a_glance: value.at_a_glance,
     };
   }
 

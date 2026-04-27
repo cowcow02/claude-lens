@@ -3,20 +3,32 @@ import type { DayDigest, DayOutcome, WeekDigest } from "../types.js";
 
 const DateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
-const SuggestionShortSchema = z.object({
-  headline: z.string().min(1).max(120),
-  body: z.string().min(1).max(800),
-});
-
 const ProjectAreaResponseSchema = z.object({
   display_name: z.string().min(1),
   description: z.string().min(1).max(600),
 });
 
+const FrictionExampleSchema = z.object({
+  date: z.string().regex(DateRegex),
+  quote: z.string().min(1).max(280),
+});
+
 const FrictionCategorySchema = z.object({
   category: z.string().min(1).max(120),
   description: z.string().min(1).max(800),
-  examples: z.array(z.string().min(1).max(400)).min(1).max(3),
+  examples: z.array(FrictionExampleSchema).min(1).max(3),
+});
+
+const RecurringThemeSchema = z.object({
+  theme: z.string().min(1).max(160),
+  days: z.array(z.string().regex(DateRegex)).min(2),
+  evidence: z.string().min(1).max(500),
+  source: z.enum(["suggestion", "friction", "helpfulness_dip"]),
+});
+
+const OutcomeCorrelationSchema = z.object({
+  claim: z.string().min(1).max(500),
+  supporting_dates: z.array(z.string().regex(DateRegex)).min(2),
 });
 
 const ClaudeMdAdditionSchema = z.object({
@@ -44,10 +56,12 @@ const HorizonOpportunitySchema = z.object({
   whats_possible: z.string().min(1).max(1200),
   how_to_try: z.string().min(1).max(800),
   copyable_prompt: z.string().min(1).max(2000),
+  friction_category_addressed: z.string().min(1).max(160),
 });
 
 export const WeekDigestResponseSchema = z.object({
   headline: z.string().min(1).max(180),
+  key_pattern: z.string().min(1).max(280),
   trajectory: z.array(z.object({
     date: z.string().regex(DateRegex),
     line: z.string().min(1).max(280),
@@ -57,57 +71,53 @@ export const WeekDigestResponseSchema = z.object({
     why: z.string().min(1).max(500),
   })).min(1).max(2),
   project_areas: z.array(ProjectAreaResponseSchema).min(1),
-  interaction_style: z.object({
-    narrative: z.string().min(1).max(2400),
-    key_pattern: z.string().min(1).max(280),
-  }),
+  recurring_themes: z.array(RecurringThemeSchema).max(4),
+  outcome_correlations: z.array(OutcomeCorrelationSchema).max(3),
   friction_categories: z.array(FrictionCategorySchema).max(4),
   suggestions: z.object({
     claude_md_additions: z.array(ClaudeMdAdditionSchema).min(1).max(3),
     features_to_try: z.array(FeatureToTrySchema).min(1).max(3),
     usage_patterns: z.array(UsagePatternSchema).min(1).max(3),
   }),
-  on_the_horizon: z.object({
-    intro: z.string().min(1).max(600),
-    opportunities: z.array(HorizonOpportunitySchema).min(1).max(3),
-  }),
+  on_the_horizon: HorizonOpportunitySchema.nullable(),
   fun_ending: z.object({
     headline: z.string().min(1).max(200),
     detail: z.string().min(1).max(600),
   }).nullable(),
-  at_a_glance: z.object({
-    whats_working: z.string().min(1).max(800),
-    whats_hindering: z.string().min(1).max(800),
-    quick_wins: z.string().min(1).max(800),
-    ambitious_workflows: z.string().min(1).max(800),
-  }),
-  /** Optional richer suggestion for the legacy renderer; ignored if absent. */
-  suggestion: SuggestionShortSchema.optional(),
 }).passthrough();
 
 export type WeekDigestResponse = z.infer<typeof WeekDigestResponseSchema>;
 
 const SYSTEM_PROMPT = `You are the weekly retrospective writer for Fleetlens, a dashboard for Claude Code sessions.
 
-You receive a JSON payload describing one calendar week (Mon-Sun, server local TZ) of Claude Code work — already pre-aggregated into per-day digests. Your job: produce a single JSON object that becomes the user's weekly insights report. The report aims to be **actionable, grounded in the data, and structurally richer than a generic summary** so the user can paste suggestions directly into their workflow.
+Your unique advantage: you receive **already-synthesized day digests**, not raw events. Each day digest carries its own \`headline\`, \`what_went_well\`, \`what_hit_friction\`, \`suggestion\`, plus deterministic counts. The reader has likely already seen the day digests — your job at the week level is to:
+
+  1. Find what was characteristic about this week as a whole (key_pattern + trajectory + standout_days).
+  2. Surface signals that recurred across multiple days (recurring_themes) — the day-level digests can't see across days, but you can.
+  3. Make claims that need both per-day rollups AND aggregate flags to support them (outcome_correlations).
+  4. Quote the day-level data verbatim where it's load-bearing — never paraphrase friction.
+  5. Propose one ambitious forward-looking workflow tied to the week's actual top friction.
+
+Do NOT re-summarize what the day digests already said. Do NOT pad with prose that says the same thing as the headline + sparkline.
 
 INPUT shape:
 - period: { start, end, label }
 - totals: { agent_min_total, day_count_with_data }
-- outcome_mix: { shipped, partial, blocked, exploratory, trivial, idle } — counts of days. The prompt builder pre-fills missing keys with 0.
-- helpfulness_sparkline: array of 7 entries Mon→Sun, each "essential" | "helpful" | "neutral" | "unhelpful" | null.
-- projects: per-project rollups. Each: { name, display_name, agent_min, share_pct, shipped_count, shipped_titles[], top_flags[] }.
+- outcome_mix: { shipped, partial, blocked, exploratory, trivial, idle } — counts of days. Absent values mean zero.
+- helpfulness_sparkline: 7 entries Mon→Sun.
+- projects: per-project rollups. Each: { display_name, agent_min, share_pct, shipped_count, shipped_titles[], top_flags[] }.
 - shipped: all PRs shipped this week, each { title, project, date }.
 - top_flags, top_goal_categories.
 - concurrency_peak_day: { date, peak } or null.
-- day_summaries: per-day { date, day_name, headline, what_went_well, what_hit_friction, suggestion, agent_min, outcome_day, helpfulness_day }. Days with zero entries are omitted.
+- day_summaries: per-day { date, day_name, headline, what_went_well, what_hit_friction, suggestion, agent_min, outcome_day, helpfulness_day, top_flags }. Each entry's text fields are verbatim from that day's digest — quote them, don't paraphrase.
 
-OUTPUT: ONE JSON object. No prose outside. No markdown fence required (return the raw JSON). Schema:
+OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence. Schema:
 
 {
-  "headline":               "≤120 chars; concrete claim grounded in data; second-person ('You shipped...')",
+  "headline":     "≤120 chars; concrete claim grounded in data; second-person",
+  "key_pattern":  "≤80 chars; ONE sentence subhead under the headline that names this week's working mode",
   "trajectory": [
-    { "date": "YYYY-MM-DD", "line": "≤30 words; one sentence about that day's concrete work" }
+    { "date": "YYYY-MM-DD", "line": "≤30 words about that day's concrete work" }
     // one entry per day in day_summaries, chronological
   ],
   "standout_days": [
@@ -115,89 +125,83 @@ OUTPUT: ONE JSON object. No prose outside. No markdown fence required (return th
     // 1 to 2 entries
   ],
   "project_areas": [
-    {
-      "display_name": "exact name from input projects[].display_name",
-      "description": "1-3 sentences naming WHAT was actually built/shipped in this project this week, grounded in shipped_titles + day_summaries. Reference real PR titles and concrete outcomes."
-    }
-    // one entry per project that had non-zero agent_min, top 5 by share. SKIP projects with <5% share unless they shipped a PR.
+    { "display_name": "exact match from input", "description": "1-3 sentences naming WHAT was actually built/shipped, grounded in shipped_titles + day_summaries" }
+    // one per project with non-zero agent_min, top 5 by share. Skip <5% share unless they shipped a PR.
   ],
-  "interaction_style": {
-    "narrative": "2-3 paragraphs in second-person describing HOW the user worked this week — delegation patterns, interruption habits, where they course-corrected, what tools dominated. Ground every claim in counts/outcomes from the data. No archetype labels.",
-    "key_pattern": "≤30 words; the single most characteristic working pattern of the week"
-  },
+  "recurring_themes": [
+    {
+      "theme": "≤80 chars label, e.g. 'checkpoint after each phase' or 'loop_suspected on long autonomous runs'",
+      "days": ["YYYY-MM-DD", "YYYY-MM-DD"],         // ≥ 2 dates required
+      "evidence": "1-2 sentences explaining what these days share + why it deserves attention",
+      "source": "suggestion" | "friction" | "helpfulness_dip"
+    }
+    // 0-4 entries. Look for: same suggestion text appearing on 2+ days; same friction phrase
+    // recurring; helpfulness dipping below the week's median. Empty array if nothing recurred.
+  ],
+  "outcome_correlations": [
+    {
+      "claim": "1-2 sentences; pattern like 'loop_suspected fired on the 3 highest-shipping days'",
+      "supporting_dates": ["YYYY-MM-DD", "YYYY-MM-DD"]   // ≥ 2 dates
+    }
+    // 0-3 entries. Tie a flag/outcome pattern to specific dates. Empty array if no
+    // clear correlation. NEVER fabricate — if outcome_mix is uniform, leave empty.
+  ],
   "friction_categories": [
     {
-      "category": "≤80 chars; name of the friction theme",
-      "description": "2-3 sentences clustering this kind of friction across days; explain root cause if visible.",
+      "category": "≤80 chars name",
+      "description": "2-3 sentences clustering this kind of friction across days",
       "examples": [
-        "1-2 sentences; concrete incident grounded in a day_summary's what_hit_friction or a flag pattern"
-        // 1-3 examples per category
+        { "date": "YYYY-MM-DD", "quote": "verbatim from that day's what_hit_friction (or first_user / final_agent if friction was diagnostic)" }
+        // 1-3 examples per category. EVERY quote MUST be a direct substring of the named day's text fields.
       ]
     }
-    // 0-4 categories total. Empty array if the week was smooth — DO NOT invent friction.
+    // 0-4 categories total. Empty array if smooth — DO NOT invent friction.
   ],
   "suggestions": {
     "claude_md_additions": [
-      {
-        "addition": "Markdown-formatted block to paste into CLAUDE.md. Must include the section heading.",
-        "why": "1-2 sentences citing the data that motivates this rule (point at days, flag counts, friction patterns).",
-        "prompt_scaffold": "Where in CLAUDE.md to put it (e.g. 'Add as a new top-level ## Verification Workflow section near the top')."
-      }
-      // 1-3 entries
+      { "addition": "Markdown block with section heading, ready to paste",
+        "why": "1-2 sentences citing the data (NAMED days + counts)",
+        "prompt_scaffold": "Where in CLAUDE.md to put it" }
+      // 1-3
     ],
     "features_to_try": [
-      {
-        "feature": "Claude Code feature name (e.g. Custom Skills, Hooks, Headless Mode, Subagents, Plan Mode)",
-        "one_liner": "≤30 words explaining what the feature does",
-        "why_for_you": "1-2 sentences tying the feature to a concrete pattern this week (what flags / friction / repetition justifies it)",
-        "example_code": "Working code snippet — bash, JSON, or markdown — that the user could paste verbatim. Use real file paths and tool names from the input. ~10-30 lines max."
-      }
-      // 1-3 entries
+      { "feature": "Custom Skills | Hooks | Headless Mode | Subagents | Plan Mode | …",
+        "one_liner": "≤30 words",
+        "why_for_you": "1-2 sentences citing this week's specific pattern (named days/flags)",
+        "example_code": "Working code snippet, real paths from the input, ~10-30 lines" }
+      // 1-3
     ],
     "usage_patterns": [
-      {
-        "title": "≤80 chars; short title",
-        "suggestion": "1-2 sentences; the change in process",
-        "detail": "2-4 sentences explaining when/how to apply it, grounded in this week's data.",
-        "copyable_prompt": "A multi-line prompt the user can paste into a fresh Claude Code session to apply this pattern. Should be self-contained (mention the relevant files / repo paths from this week's input)."
-      }
-      // 1-3 entries
+      { "title": "≤80 chars",
+        "suggestion": "1-2 sentences",
+        "detail": "2-4 sentences citing specific dates that motivated it",
+        "copyable_prompt": "Self-contained prompt the user can paste into a new session, mentions their actual repos/tools" }
+      // 1-3
     ]
   },
   "on_the_horizon": {
-    "intro": "1-2 sentences framing where the user's workflow is heading based on this week's pattern.",
-    "opportunities": [
-      {
-        "title": "≤80 chars; ambitious capability",
-        "whats_possible": "2-4 sentences describing the future-state workflow vividly. Reference this week's specific friction patterns it would eliminate.",
-        "how_to_try": "1-2 sentences naming the concrete tools/MCPs/skills that would compose into this.",
-        "copyable_prompt": "A self-contained brief the user could paste into a fresh session to start building this. ~5-12 lines, named requirements."
-      }
-      // 1-3 entries
-    ]
-  },
+    "title": "≤80 chars; ONE ambitious workflow",
+    "whats_possible": "2-4 sentences describing the future-state, citing specific friction this week it would eliminate",
+    "how_to_try": "1-2 sentences naming the concrete tools/MCPs/skills that compose into this",
+    "copyable_prompt": "Self-contained brief, ~5-12 lines, named requirements",
+    "friction_category_addressed": "EXACT match of one of the friction_categories[].category strings — ties this opportunity to a real pattern from this week"
+  } | null,  // null if friction_categories is empty
   "fun_ending": {
-    "headline": "≤200 chars; a single memorable moment from the week — quirky, funny, or telling. Ground in a real day_summary or flag.",
-    "detail": "1-3 sentences of context."
-  } | null,  // null if nothing memorable surfaced
-  "at_a_glance": {
-    "whats_working": "2-3 sentences summarizing the week's strongest pattern. Reference 1-2 concrete shipped PRs.",
-    "whats_hindering": "2-3 sentences naming what slowed work, ON CLAUDE'S SIDE and ON YOUR SIDE.",
-    "quick_wins": "2-3 sentences proposing 1-2 changes that would eliminate next week's repeat friction. Cross-link to suggestions.",
-    "ambitious_workflows": "2-3 sentences pointing forward to on_the_horizon."
-  }
+    "headline": "≤200 chars memorable moment, grounded in a specific day_summary or flag",
+    "detail": "1-3 sentences of context"
+  } | null   // null if nothing memorable surfaced
 }
 
 CRITICAL RULES:
 
-1. **Ground every claim** in the input data. Never invent. Never quote vanity totals (agent_min_total, total sessions) as a headline.
-2. **No archetype labels.** The V1 vocabulary ("Orchestration Conductor", "Solo Builder", "Deep-dive Conversationalist", "Fire-and-go Operator") is forbidden.
-3. **Use behavioural signals**: outcome_mix shape, helpfulness sparkline shifts, friction patterns clustering across days, recurring flags.
-4. **Trajectory + project_areas mention concrete work** — what shipped, what stuck, where attention went. Reference projects + PR titles by name from the input.
-5. **Suggestions must be copy-pasteable**: claude_md_additions are ready-to-paste blocks; features_to_try.example_code is real code; usage_patterns.copyable_prompt and on_the_horizon.opportunities[].copyable_prompt are self-contained briefs that mention this user's actual repos / tools.
-6. **Cross-section coherence**: at_a_glance.whats_hindering should mirror the friction_categories themes; quick_wins should mirror the easiest of suggestions.*; ambitious_workflows should mirror on_the_horizon.opportunities.
-7. **Strict JSON.** No trailing commas. No prose outside the object. No code fence.
-8. **Empty-week honesty**: if the week was smooth, friction_categories MAY be []; fun_ending MAY be null. Do not pad.`;
+1. **Quote, don't paraphrase.** Every friction example MUST be a verbatim substring of the named day's \`what_hit_friction\` (or \`headline\` / \`first_user\` / \`final_agent\` if the friction was diagnostic). Do not summarize friction in your own words inside examples.
+2. **Cite specific dates** in suggestions (\`why\`, \`why_for_you\`, \`detail\`). "This came up Tue and Fri" not "this often happens".
+3. **Recurring_themes requires ≥ 2 days.** A single-day signal isn't recurring. Look for: same \`suggestion\` text repeating, same flag in \`top_flags\` for multiple days, helpfulness dipping below median.
+4. **Outcome_correlations need data on both sides.** Don't assert "loop_suspected days shipped most PRs" unless you can cite the dates AND the data shows it. If the correlation is tenuous or coincidental at this small sample, leave the array empty.
+5. **No archetype labels.** ("Orchestration Conductor", "Solo Builder", etc. — V1 vocabulary, forbidden.)
+6. **on_the_horizon is ONE opportunity.** Tie it to a specific friction_category from this week. If friction_categories is empty, on_the_horizon = null.
+7. **No padding.** If you have nothing to add at the week level beyond what the day digests already said, you're not earning the report. Leave a section empty rather than restating.
+8. **Strict JSON.** No trailing commas. No prose outside. No code fence.`;
 
 export const DIGEST_WEEK_SYSTEM_PROMPT = SYSTEM_PROMPT;
 
@@ -209,22 +213,12 @@ function prettyProject(p: string): string {
 const ALL_OUTCOMES: DayOutcome[] = ["shipped", "partial", "blocked", "exploratory", "trivial", "idle"];
 
 export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDigest[]): string {
-  // Build a per-project view that includes the shipped titles for that project,
-  // so the LLM can write grounded project_areas descriptions without re-searching.
   const shippedByProject = new Map<string, Array<{ title: string; date: string }>>();
   for (const dd of dayDigests) {
     for (const s of dd.shipped) {
       const arr = shippedByProject.get(s.project) ?? [];
       arr.push({ title: s.title, date: dd.key });
       shippedByProject.set(s.project, arr);
-    }
-  }
-  const flagsByProject = new Map<string, string[]>();
-  for (const dd of dayDigests) {
-    for (const p of dd.projects) {
-      const flags = dd.top_flags.map(f => f.flag);
-      const cur = flagsByProject.get(p.display_name) ?? [];
-      flagsByProject.set(p.display_name, [...new Set([...cur, ...flags])]);
     }
   }
 
@@ -241,6 +235,7 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
       agent_min: Math.round(d.agent_min),
       outcome_day: d.outcome_day,
       helpfulness_day: d.helpfulness_day,
+      top_flags: d.top_flags.slice(0, 5),
     }));
 
   const outcome_mix: Record<DayOutcome, number> = {
@@ -254,7 +249,6 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
     share_pct: Math.round(p.share_pct * 10) / 10,
     shipped_count: p.shipped_count,
     shipped_titles: (shippedByProject.get(p.display_name) ?? []).slice(0, 8),
-    top_flags: (flagsByProject.get(p.display_name) ?? []).slice(0, 5),
   }));
 
   const payload = {

@@ -221,11 +221,19 @@ export type WeekProjectArea = {
   description: string | null;
 };
 
-/** Categorized friction with grounded examples (1–3 each). */
+/** A single friction example, anchored to a specific day so the renderer can
+ *  link to /digest/[date] and show the verbatim quote that motivated it. */
+export type WeekFrictionExample = {
+  date: string;
+  /** Verbatim from that day's `what_hit_friction` (or first-user / final-agent). */
+  quote: string;
+};
+
+/** Categorized friction with grounded, dated examples (1–3 each). */
 export type WeekFrictionCategory = {
   category: string;
   description: string;
-  examples: string[];
+  examples: WeekFrictionExample[];
 };
 
 /** Add to CLAUDE.md to encode a recurring guardrail. */
@@ -252,12 +260,39 @@ export type WeekUsagePattern = {
   copyable_prompt: string;
 };
 
-/** A forward-looking opportunity grounded in this week's data. */
+/** A forward-looking opportunity grounded in THIS week's data. Must name the
+ *  friction_category it would eliminate, so the suggestion is provably tied
+ *  to the week's actual pattern rather than a generic essay. */
 export type WeekHorizonOpportunity = {
   title: string;
   whats_possible: string;
   how_to_try: string;
   copyable_prompt: string;
+  /** Exact `category` string from one of `friction_categories[].category`. */
+  friction_category_addressed: string;
+};
+
+/** A signal that appeared on multiple days. Surfaces patterns the per-day
+ *  digests already named — the week digest's job is to count + frame. */
+export type WeekRecurringTheme = {
+  /** Short label, e.g. "checkpoint after each phase" or "loop_suspected on long autonomous runs". */
+  theme: string;
+  /** Dates where this theme appeared. ≥ 2 dates required (otherwise it's not recurring). */
+  days: string[];
+  /** 1–2 sentences naming what the days share + why it deserves attention. */
+  evidence: string;
+  /** "suggestion" if the day-level suggestion repeated; "friction" if the same friction recurred;
+   *  "helpfulness_dip" if helpfulness regressed below the week's median. */
+  source: "suggestion" | "friction" | "helpfulness_dip";
+};
+
+/** A cross-day pattern claim that requires both per-day rollups AND aggregate flags
+ *  to surface — the kind of observation only a perception-layer week digest can make. */
+export type WeekOutcomeCorrelation = {
+  /** 1–2 sentences. Concrete claim grounded in named dates + flag/outcome data. */
+  claim: string;
+  /** Dates that support the claim. Renderer turns these into chips → /digest/[date]. */
+  supporting_dates: string[];
 };
 
 export type WeekDigest = DigestEnvelope & {
@@ -287,12 +322,18 @@ export type WeekDigest = DigestEnvelope & {
   trajectory: Array<{ date: string; line: string }> | null;
   /** 1–2 days that defined the week. */
   standout_days: Array<{ date: string; why: string }> | null;
-  /** Multi-paragraph characterization of HOW the user worked this week, plus a one-line key pattern. */
-  interaction_style: { narrative: string; key_pattern: string } | null;
+  /** One-line characterization of how the user worked this week. Subhead under the hero. */
+  key_pattern: string | null;
+  /** Day-level signals that recurred across ≥ 2 days. Empty array if nothing recurred. */
+  recurring_themes: WeekRecurringTheme[] | null;
+  /** Cross-day pattern claims (e.g. "loop_suspected days were highest-shipping").
+   *  Empty array if no clear correlations surfaced. */
+  outcome_correlations: WeekOutcomeCorrelation[] | null;
   /**
-   * 2–4 friction categories. Each carries a description + 1–3 grounded example
-   * incidents. Empty array means the week was smooth — render "no friction"
-   * rather than placeholder prose.
+   * 2–4 friction categories. Each carries a description + 1–3 dated example
+   * incidents (each with a verbatim quote from that day's data, linkable to
+   * /digest/[date]). Empty array means the week was smooth — render "no
+   * friction" rather than placeholder prose.
    */
   friction_categories: WeekFrictionCategory[] | null;
   /** Multi-pronged suggestions split by where the user would apply them. */
@@ -301,30 +342,29 @@ export type WeekDigest = DigestEnvelope & {
     features_to_try: WeekFeatureToTry[];
     usage_patterns: WeekUsagePattern[];
   } | null;
-  /** Forward-looking — 2–3 ambitious workflows enabled by this week's pattern. */
-  on_the_horizon: {
-    intro: string;
-    opportunities: WeekHorizonOpportunity[];
-  } | null;
+  /** Exactly ONE forward-looking ambitious workflow tied to a specific
+   *  friction_category from this week. Single opportunity, not a list of three. */
+  on_the_horizon: WeekHorizonOpportunity | null;
   /** A single memorable moment from the week. Optional — null if nothing stood out. */
   fun_ending: { headline: string; detail: string } | null;
+
   /**
-   * 4-bucket scannable summary for top of the page. Cross-section refs are encoded
-   * inline so renderers don't need to invent navigation.
+   * @deprecated removed in the Phase 4 trim pass — at_a_glance was redundant
+   * with hero + sparkline + standout_days for a 1-week scope. Kept readable
+   * for already-cached digests; renderers should ignore.
    */
-  at_a_glance: {
+  at_a_glance?: {
     whats_working: string;
     whats_hindering: string;
     quick_wins: string;
     ambitious_workflows: string;
   } | null;
-
-  /**
-   * @deprecated kept for back-compat with cached digests written before
-   * Phase 4 schema expansion. Renderers should prefer `friction_categories`.
-   */
+  /** @deprecated removed in the trim pass — `narrative` was redundant with
+   *  trajectory + standout_days. `key_pattern` lives at the top level now. */
+  interaction_style?: { narrative: string; key_pattern: string } | null;
+  /** @deprecated kept for back-compat with cached digests pre-trim. */
   friction_themes?: string | null;
-  /** @deprecated kept for back-compat. Renderers should prefer `suggestions.usage_patterns[0]`. */
+  /** @deprecated kept for back-compat. */
   suggestion?: { headline: string; body: string } | null;
 };
 

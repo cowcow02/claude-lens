@@ -15,6 +15,12 @@ const HELP_COLORS: Record<NonNullable<DayHelpfulness>, string> = {
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+const RECURRING_SOURCE_TONE: Record<NonNullable<WeekDigestType["recurring_themes"]>[number]["source"], { tag: string; label: string }> = {
+  suggestion: { tag: "#4299e1", label: "Repeated suggestion" },
+  friction: { tag: "#ed8936", label: "Recurring friction" },
+  helpfulness_dip: { tag: "#f56565", label: "Helpfulness dip" },
+};
+
 export function WeekDigest({
   digest, aiEnabled, actions,
 }: {
@@ -50,7 +56,7 @@ export function WeekDigest({
         {digest.headline ? (
           <h1 style={{
             fontSize: 26, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-0.02em",
-            margin: "0 0 14px", maxWidth: 820, color: "var(--af-text)",
+            margin: "0 0 6px", maxWidth: 820, color: "var(--af-text)",
           }}>
             {digest.headline}
           </h1>
@@ -60,6 +66,14 @@ export function WeekDigest({
               ? "No narrative yet."
               : `Worked ${timeStr} across ${digest.projects.length} project${digest.projects.length === 1 ? "" : "s"}.`}
           </h1>
+        )}
+        {digest.key_pattern && (
+          <p style={{
+            fontSize: 13, fontStyle: "italic", margin: 0, lineHeight: 1.5,
+            color: "var(--af-text-secondary)", maxWidth: 820,
+          }}>
+            {digest.key_pattern}
+          </p>
         )}
       </header>
 
@@ -71,8 +85,6 @@ export function WeekDigest({
           Enable AI features in <Link href="/settings" style={{ color: "var(--af-accent)" }}>Settings</Link> to see weekly narratives.
         </div>
       )}
-
-      <AtAGlance digest={digest} />
 
       <Sparkline sparkline={digest.helpfulness_sparkline} />
 
@@ -122,34 +134,17 @@ export function WeekDigest({
         </Section>
       )}
 
-      <ProjectAreas digest={digest} />
+      <RecurringThemes themes={digest.recurring_themes} />
 
-      {digest.interaction_style && (
-        <Section title="How you worked this week" anchor="style">
-          <p style={{ fontSize: 13, lineHeight: 1.65, margin: "0 0 10px", color: "var(--af-text)", whiteSpace: "pre-wrap" }}>
-            {digest.interaction_style.narrative}
-          </p>
-          <div style={{
-            padding: "10px 14px", borderRadius: 8,
-            background: "color-mix(in srgb, var(--af-accent) 5%, var(--af-surface))",
-            border: "1px solid var(--af-border-subtle)",
-            fontSize: 12, fontStyle: "italic", color: "var(--af-text)",
-          }}>
-            <span style={{
-              fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
-              textTransform: "uppercase", color: "var(--af-text-tertiary)",
-              marginRight: 8,
-            }}>Key pattern</span>
-            {digest.interaction_style.key_pattern}
-          </div>
-        </Section>
-      )}
+      <OutcomeCorrelations correlations={digest.outcome_correlations} />
+
+      <ProjectAreas digest={digest} />
 
       <FrictionCategories categories={digest.friction_categories} />
 
       <Suggestions suggestions={digest.suggestions} />
 
-      <OnTheHorizon horizon={digest.on_the_horizon} />
+      <OnTheHorizonOne opportunity={digest.on_the_horizon} />
 
       {digest.shipped.length > 0 && (
         <Section title={`Shipped (${digest.shipped.length})`} anchor="shipped">
@@ -160,12 +155,13 @@ export function WeekDigest({
                 padding: "6px 10px", borderRadius: 6,
                 fontSize: 12, color: "var(--af-text)",
               }}>
-                <span style={{
+                <Link href={`/digest/${s.date}`} style={{
                   fontFamily: "var(--font-mono)", fontSize: 10,
                   color: "var(--af-text-tertiary)", flexShrink: 0, width: 56,
+                  textDecoration: "none",
                 }}>
                   {dayName(s.date)} {s.date.slice(5)}
-                </span>
+                </Link>
                 <span style={{ flex: 1, minWidth: 0 }}>{s.title}</span>
                 <span style={{
                   fontSize: 10, color: "var(--af-text-tertiary)",
@@ -188,46 +184,78 @@ export function WeekDigest({
 
 // ─── Sub-components ──────────────────────────────────────────────────────
 
-function AtAGlance({ digest }: { digest: WeekDigestType }) {
-  const g = digest.at_a_glance;
-  if (!g) return null;
-  const cards: Array<{ label: string; body: string; href: string; tone: "ok" | "warn" | "tip" | "future" }> = [
-    { label: "What's working",        body: g.whats_working,        href: "#shipped",   tone: "ok" },
-    { label: "What's hindering",      body: g.whats_hindering,      href: "#friction",  tone: "warn" },
-    { label: "Quick wins",            body: g.quick_wins,           href: "#suggestions", tone: "tip" },
-    { label: "Ambitious workflows",   body: g.ambitious_workflows,  href: "#horizon",   tone: "future" },
-  ];
-  const TONES: Record<typeof cards[0]["tone"], { border: string; tag: string }> = {
-    ok:     { border: "color-mix(in srgb, #48bb78 30%, var(--af-border))", tag: "#48bb78" },
-    warn:   { border: "color-mix(in srgb, #ed8936 30%, var(--af-border))", tag: "#ed8936" },
-    tip:    { border: "color-mix(in srgb, #4299e1 30%, var(--af-border))", tag: "#4299e1" },
-    future: { border: "color-mix(in srgb, #b794f4 30%, var(--af-border))", tag: "#b794f4" },
-  };
+function RecurringThemes({ themes }: { themes: WeekDigestType["recurring_themes"] }) {
+  if (!themes || themes.length === 0) return null;
   return (
-    <section style={{ marginBottom: 28 }}>
-      <h2 style={sectionTitleStyle()}>At a glance</h2>
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-        gap: 10,
-      }}>
-        {cards.map(c => (
-          <a key={c.label} href={c.href} style={{
-            display: "block", textDecoration: "none",
-            padding: "12px 14px", borderRadius: 10,
-            background: "var(--af-surface)",
-            border: `1px solid ${TONES[c.tone].border}`,
+    <Section title="Recurred this week" anchor="recurring">
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+        {themes.map((t, i) => {
+          const tone = RECURRING_SOURCE_TONE[t.source];
+          return (
+            <li key={i} style={{
+              padding: "12px 14px", borderRadius: 8,
+              background: "var(--af-surface)",
+              border: `1px solid color-mix(in srgb, ${tone.tag} 22%, var(--af-border-subtle))`,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                <span style={{
+                  fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+                  textTransform: "uppercase", color: tone.tag,
+                }}>{tone.label}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em" }}>
+                  {t.theme}
+                </span>
+              </div>
+              <p style={{ fontSize: 12, lineHeight: 1.55, margin: "0 0 8px", color: "var(--af-text-secondary)" }}>
+                {t.evidence}
+              </p>
+              <DayChips dates={t.days} tone={tone.tag} />
+            </li>
+          );
+        })}
+      </ul>
+    </Section>
+  );
+}
+
+function OutcomeCorrelations({ correlations }: { correlations: WeekDigestType["outcome_correlations"] }) {
+  if (!correlations || correlations.length === 0) return null;
+  return (
+    <Section title="Cross-day patterns" anchor="correlations">
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+        {correlations.map((c, i) => (
+          <li key={i} style={{
+            padding: "12px 14px", borderRadius: 8,
+            background: "color-mix(in srgb, #b794f4 5%, var(--af-surface))",
+            border: "1px solid color-mix(in srgb, #b794f4 24%, var(--af-border-subtle))",
           }}>
-            <div style={{
-              fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
-              textTransform: "uppercase", color: TONES[c.tone].tag,
-              marginBottom: 6,
-            }}>{c.label}</div>
-            <div style={{ fontSize: 12, lineHeight: 1.55, color: "var(--af-text)" }}>{c.body}</div>
-          </a>
+            <p style={{ fontSize: 13, lineHeight: 1.55, margin: "0 0 8px", color: "var(--af-text)" }}>
+              {c.claim}
+            </p>
+            <DayChips dates={c.supporting_dates} tone="#b794f4" />
+          </li>
         ))}
-      </div>
-    </section>
+      </ul>
+    </Section>
+  );
+}
+
+function DayChips({ dates, tone }: { dates: string[]; tone: string }) {
+  return (
+    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+      {dates.map(d => (
+        <Link key={d} href={`/digest/${d}`} style={{
+          display: "inline-flex", alignItems: "center", gap: 4,
+          padding: "2px 8px", borderRadius: 999,
+          background: `color-mix(in srgb, ${tone} 12%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${tone} 28%, transparent)`,
+          fontSize: 10, fontFamily: "var(--font-mono)",
+          color: tone, textDecoration: "none", fontWeight: 600,
+        }}>
+          {dayName(d)} {d.slice(5)}
+        </Link>
+      ))}
+    </div>
   );
 }
 
@@ -301,15 +329,32 @@ function FrictionCategories({ categories }: { categories: WeekDigestType["fricti
             </p>
             <ul style={{
               listStyle: "none", padding: 0, margin: 0,
-              display: "flex", flexDirection: "column", gap: 4,
-              borderLeft: "2px solid color-mix(in srgb, #ed8936 28%, var(--af-border))",
-              paddingLeft: 10,
+              display: "flex", flexDirection: "column", gap: 6,
+              borderLeft: "2px solid color-mix(in srgb, #ed8936 32%, var(--af-border))",
+              paddingLeft: 12,
             }}>
-              {cat.examples.map((ex, j) => (
-                <li key={j} style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--af-text)" }}>
-                  {ex}
-                </li>
-              ))}
+              {cat.examples.map((ex, j) => {
+                // back-compat: legacy string-shaped examples render plain
+                if (typeof ex === "string") {
+                  return <li key={j} style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--af-text)" }}>{ex}</li>;
+                }
+                return (
+                  <li key={j} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <Link href={`/digest/${ex.date}`} style={{
+                      fontSize: 10, fontWeight: 600, color: "#ed8936",
+                      fontFamily: "var(--font-mono)", flexShrink: 0, width: 56, paddingTop: 2,
+                      textDecoration: "none",
+                    }}>
+                      {dayName(ex.date)} {ex.date.slice(5)}
+                    </Link>
+                    <span style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--af-text)" }}>
+                      <span style={{ color: "var(--af-text-tertiary)" }}>“</span>
+                      {ex.quote}
+                      <span style={{ color: "var(--af-text-tertiary)" }}>”</span>
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           </li>
         ))}
@@ -349,7 +394,7 @@ function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions
               <p style={{ fontSize: 11.5, lineHeight: 1.55, margin: "0 0 10px", color: "var(--af-text-secondary)" }}>
                 {f.why_for_you}
               </p>
-              <CopyBlock label="Copy example" payload={f.example_code} mono />
+              <CopyBlock label="Copy example" payload={f.example_code} />
             </div>
           ))}
         </SubSection>
@@ -375,34 +420,40 @@ function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions
   );
 }
 
-function OnTheHorizon({ horizon }: { horizon: WeekDigestType["on_the_horizon"] }) {
-  if (!horizon) return null;
+function OnTheHorizonOne({ opportunity }: { opportunity: WeekDigestType["on_the_horizon"] }) {
+  if (!opportunity) return null;
   return (
     <section id="horizon" style={{ marginBottom: 28 }}>
       <h2 style={sectionTitleStyle()}>On the horizon</h2>
-      <p style={{ fontSize: 13, lineHeight: 1.6, margin: "0 0 14px", color: "var(--af-text-secondary)", maxWidth: 820 }}>
-        {horizon.intro}
-      </p>
-      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-        {horizon.opportunities.map((o, i) => (
-          <li key={i} style={{
-            padding: "14px 16px", borderRadius: 10,
-            background: "color-mix(in srgb, #b794f4 6%, var(--af-surface))",
-            border: "1px solid color-mix(in srgb, #b794f4 22%, var(--af-border))",
-          }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", marginBottom: 6, letterSpacing: "-0.01em" }}>
-              {o.title}
-            </div>
-            <p style={{ fontSize: 12, lineHeight: 1.6, margin: "0 0 8px", color: "var(--af-text)" }}>
-              {o.whats_possible}
-            </p>
-            <p style={{ fontSize: 11.5, lineHeight: 1.55, margin: "0 0 10px", color: "var(--af-text-secondary)" }}>
-              <strong style={{ color: "var(--af-text)" }}>How to try:</strong> {o.how_to_try}
-            </p>
-            <CopyBlock label="Copy starter prompt" payload={o.copyable_prompt} />
-          </li>
-        ))}
-      </ul>
+      <div style={{
+        padding: "14px 16px", borderRadius: 10,
+        background: "color-mix(in srgb, #b794f4 6%, var(--af-surface))",
+        border: "1px solid color-mix(in srgb, #b794f4 22%, var(--af-border))",
+      }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em", flex: 1, minWidth: 0 }}>
+            {opportunity.title}
+          </span>
+          <a href="#friction" style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            padding: "2px 8px", borderRadius: 999,
+            background: "color-mix(in srgb, #ed8936 14%, transparent)",
+            border: "1px solid color-mix(in srgb, #ed8936 30%, transparent)",
+            fontSize: 9, fontWeight: 700, letterSpacing: "0.04em",
+            textTransform: "uppercase", color: "#ed8936",
+            textDecoration: "none",
+          }} title="Jump to friction category this addresses">
+            Addresses: {opportunity.friction_category_addressed}
+          </a>
+        </div>
+        <p style={{ fontSize: 12, lineHeight: 1.6, margin: "0 0 8px", color: "var(--af-text)" }}>
+          {opportunity.whats_possible}
+        </p>
+        <p style={{ fontSize: 11.5, lineHeight: 1.55, margin: "0 0 10px", color: "var(--af-text-secondary)" }}>
+          <strong style={{ color: "var(--af-text)" }}>How to try:</strong> {opportunity.how_to_try}
+        </p>
+        <CopyBlock label="Copy starter prompt" payload={opportunity.copyable_prompt} />
+      </div>
     </section>
   );
 }
@@ -429,7 +480,7 @@ function FunEnding({ ending }: { ending: WeekDigestType["fun_ending"] }) {
   );
 }
 
-function CopyBlock({ label, payload, mono = false }: { label: string; payload: string; mono?: boolean }) {
+function CopyBlock({ label, payload }: { label: string; payload: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div style={{ position: "relative" }}>
@@ -441,7 +492,7 @@ function CopyBlock({ label, payload, mono = false }: { label: string; payload: s
         background: "var(--af-surface-raised)",
         border: "1px solid var(--af-border-subtle)",
         fontSize: 11,
-        fontFamily: mono ? "var(--font-mono)" : "var(--font-mono)",
+        fontFamily: "var(--font-mono)",
         color: "var(--af-text)",
         whiteSpace: "pre-wrap",
         wordBreak: "break-word",

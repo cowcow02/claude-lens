@@ -31,38 +31,26 @@ const VALID_RESPONSE = {
   standout_days: [
     { date: "2026-04-20", why: "Spec converged in one brainstorm and the reviewer pass found only minor issues." },
   ],
+  key_pattern: "Tight brainstorm-to-spec turnaround with reviewer pass inline.",
   project_areas: [
     { display_name: "x", description: "Phase 4 spec + implementation landed under this project." },
   ],
-  interaction_style: {
-    narrative: "You ran the brainstorm to spec to implementation flow tightly across two days, with the reviewer pass folded inline rather than queued. Tool use was concentrated in Edit + Write rather than Read.",
-    key_pattern: "Tight brainstorm-to-spec turnaround with reviewer pass inline.",
-  },
+  recurring_themes: [],
+  outcome_correlations: [],
   friction_categories: [],
   suggestions: {
     claude_md_additions: [
-      { addition: "## Spec rituals\n- Always reviewer-pass before commit.", why: "Phase 4 spec needed two reviewer passes before approval.", prompt_scaffold: "Top of CLAUDE.md, near the existing Code style section." },
+      { addition: "## Spec rituals\n- Always reviewer-pass before commit.", why: "Phase 4 spec needed two reviewer passes before approval (Mon, Tue).", prompt_scaffold: "Top of CLAUDE.md, near the existing Code style section." },
     ],
     features_to_try: [
-      { feature: "Custom Skills", one_liner: "Reusable command modules.", why_for_you: "Your brainstorm + spec ritual is uniform; codify it.", example_code: "mkdir -p .claude/skills/spec-ritual && cat > .claude/skills/spec-ritual/SKILL.md <<'EOF'\n# Spec Ritual\nBrainstorm, write spec, reviewer pass, commit.\nEOF" },
+      { feature: "Custom Skills", one_liner: "Reusable command modules.", why_for_you: "Your brainstorm + spec ritual is uniform across Mon and Tue; codify it.", example_code: "mkdir -p .claude/skills/spec-ritual && cat > .claude/skills/spec-ritual/SKILL.md <<'EOF'\n# Spec Ritual\nBrainstorm, write spec, reviewer pass, commit.\nEOF" },
     ],
     usage_patterns: [
-      { title: "Hold the trajectory format", suggestion: "Use one-line-per-sub-period for month digests too.", detail: "It worked for day digests as input; the LLM ground each line concretely.", copyable_prompt: "Generate the month digest using one line per week_start, mirroring the day-level format." },
+      { title: "Hold the trajectory format", suggestion: "Use one-line-per-sub-period for month digests too.", detail: "It worked for day digests as input on 2026-04-20 + 2026-04-21; the LLM ground each line concretely.", copyable_prompt: "Generate the month digest using one line per week_start, mirroring the day-level format." },
     ],
   },
-  on_the_horizon: {
-    intro: "Your week-level synthesis pattern scales naturally to month and quarter.",
-    opportunities: [
-      { title: "Month digest with the same trajectory shape", whats_possible: "One line per week, standout weeks, same friction-categories spine.", how_to_try: "Reuse the WeekDigest renderer with month-scope props.", copyable_prompt: "Build a month digest that mirrors the week digest exactly, scaled up." },
-    ],
-  },
+  on_the_horizon: null,
   fun_ending: null,
-  at_a_glance: {
-    whats_working: "Tight spec-to-implementation loop with reviewer pass folded in.",
-    whats_hindering: "Nothing material this week.",
-    quick_wins: "Codify the spec-ritual as a Custom Skill.",
-    ambitious_workflows: "Mirror this onto month and quarter scopes.",
-  },
 };
 
 describe("generateWeekDigest", () => {
