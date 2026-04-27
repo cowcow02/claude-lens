@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Check, AlertCircle, Loader2, Clock } from "lucide-react";
+import { Check, AlertCircle, Loader2, Clock } from "lucide-react";
 import Link from "next/link";
 
 type Job = {
@@ -72,59 +72,74 @@ export function JobQueueWidget() {
   const active = jobs.filter(j => j.status === "running" || j.status === "queued");
   const recent = jobs.filter(j => j.status === "done" || j.status === "error" || j.status === "cancelled").slice(0, 8);
 
-  // Hide entirely if nothing to show.
-  if (active.length === 0 && recent.length === 0) return null;
+  // Hide entirely when nothing is active. Recent jobs are still accessible
+  // by re-triggering an action; we don't want a permanent footer chip.
+  if (active.length === 0) return null;
 
   return (
     <div
       style={{
         position: "fixed",
-        right: 20,
-        bottom: 80,
+        // Sit to the LEFT of the live-sessions widget pill (~110px).
+        // Anchored to the same bottom baseline so the two read as a row.
+        right: 140,
+        bottom: 20,
         zIndex: 99,
-        width: 320,
-        background: "var(--af-surface-elevated)",
-        border: "1px solid var(--af-border-subtle)",
-        borderRadius: 10,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-        overflow: "hidden",
-        backdropFilter: "blur(8px)",
-        WebkitBackdropFilter: "blur(8px)",
+        display: "flex",
+        flexDirection: "column-reverse",
+        gap: 6,
+        maxWidth: 320,
+        alignItems: "flex-end",
       }}
     >
-      {/* Header — clickable to toggle */}
+      {/* Pill — always visible (we early-returned if no active). */}
       <button
         type="button"
         onClick={() => setExpandedPersist(v => !v)}
+        title={`${active.length} job${active.length === 1 ? "" : "s"} running — click to ${expanded ? "collapse" : "expand"}`}
         style={{
-          display: "flex",
+          display: "inline-flex",
           alignItems: "center",
-          gap: 8,
-          width: "100%",
-          padding: "10px 14px",
-          background: "transparent",
-          border: "none",
-          borderBottom: expanded ? "1px solid var(--af-border-subtle)" : "none",
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--af-text)",
+          gap: 6,
+          padding: "5px 11px 5px 9px",
+          background: "rgba(66, 153, 225, 0.14)",
+          border: "1px solid rgba(66, 153, 225, 0.4)",
+          borderRadius: 100,
+          fontSize: 10,
+          fontWeight: 700,
+          color: "#4299e1",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
           cursor: "pointer",
-          textAlign: "left",
+          userSelect: "none",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          boxShadow: "0 2px 10px rgba(66, 153, 225, 0.15)",
+          alignSelf: "flex-end",
         }}
       >
-        {active.length > 0 ? (
-          <Loader2 size={13} className="cs-job-spin" style={{ color: "#4299e1", flexShrink: 0 }} />
-        ) : (
-          <Check size={13} style={{ color: "#48bb78", flexShrink: 0 }} />
-        )}
-        <span style={{ flex: 1 }}>
-          {active.length > 0 ? `${active.length} job${active.length === 1 ? "" : "s"} running` : "All jobs done"}
-        </span>
-        {expanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+        <Loader2
+          size={11}
+          className="cs-job-spin"
+          style={{ flexShrink: 0 }}
+        />
+        Jobs · {active.length}
       </button>
 
       {expanded && (
-        <div style={{ maxHeight: 360, overflowY: "auto" }}>
+        <div
+          style={{
+            width: 320,
+            maxHeight: 360,
+            overflowY: "auto",
+            background: "var(--af-surface-elevated)",
+            border: "1px solid var(--af-border-subtle)",
+            borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+          }}
+        >
           {active.length > 0 && (
             <div>
               <SectionLabel>Running</SectionLabel>
