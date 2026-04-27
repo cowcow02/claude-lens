@@ -272,9 +272,115 @@ export type WeekHorizonOpportunity = {
   friction_category_addressed: string;
 };
 
-/** Deterministic snapshot of how the user drove agents this week. Anchors the
- *  narrative — every other section (patterns, friction, suggestions) is
- *  expected to reference one of these axes rather than float free.
+/** Named orchestration patterns — the primary unit of how the user drove
+ *  agents this week. Each entry's session is classified into one shape based
+ *  on subagent dispatches, skills, and first_user. */
+export type WorkingShape =
+  | "spec-review-loop"
+  | "chunk-implementation"
+  | "research-then-build"
+  | "reviewer-triad"
+  | "background-coordinated"
+  | "solo-continuation"
+  | "solo-design"
+  | "solo-build"
+  | null;
+
+/** Role inferred from a subagent's description + prompt_preview. */
+export type SubagentRole =
+  | "reviewer"
+  | "implementer"
+  | "explorer"
+  | "researcher"
+  | "env-setup"
+  | "polish"
+  | "other";
+
+/** Custom prompt-framing the user employs — coordinator handoffs, command
+ *  caveats, image attachments, session-conclusion preambles. Surfaces the
+ *  user's interaction grammar rather than just count of inputs. */
+export type PromptFrame =
+  | "teammate"
+  | "local-command-caveat"
+  | "handoff-prose"
+  | "image-attached";
+
+/** Skill origin — distinguishes user-authored skills (project-local) from
+ *  stock superpowers / mcp tooling. */
+export type SkillOrigin = "stock" | "user" | "infra";
+
+/** Per-shape rollup with named occurrences and outcome distribution. */
+export type WeekWorkingShapeRow = {
+  shape: NonNullable<WorkingShape>;
+  occurrences: Array<{
+    date: string;
+    session_id: string;
+    project_display: string;
+    outcome: DayOutcome | null;
+    helpfulness: DayHelpfulness;
+    /** A representative subagent dispatch for this shape's evidence. null
+     *  for solo shapes. */
+    evidence_subagent: { type: string; description: string; prompt_preview: string } | null;
+    /** Truncated first_user for solo shapes or as supporting context. */
+    evidence_first_user: string | null;
+  }>;
+  outcome_distribution: Partial<Record<DayOutcome, number>>;
+};
+
+export type WeekInteractionGrammar = {
+  /** Days where superpowers:brainstorming or other planning skills loaded
+   *  before any tool use — pattern-matching for "warmup ritual". */
+  brainstorming_warmup_days: string[];
+  /** Custom prompt-frames detected across the week's first_user fields. */
+  prompt_frames: Array<{ frame: PromptFrame; count: number; days: string[] }>;
+  /** Skills not matching stock prefixes — likely user-authored project skills. */
+  user_authored_skills: Array<{ skill: string; count: number; days: string[] }>;
+  /** Multi-day session continuity — session_ids whose entries span > 1 day,
+   *  or sequential entries linked by handoff-prose continuation. */
+  threads: Array<{
+    thread_id: string;
+    entries: Array<{ date: string; session_id: string; project_display: string; has_handoff_frame: boolean }>;
+    total_active_min: number;
+    outcome: DayOutcome | null;
+  }>;
+  todo_ops_total: number;
+  plan_mode: { exit_plan_calls: number; days_with_plan: number };
+};
+
+/** Each narrative finding cites the working_shape (or grammar element) it
+ *  came from. The prompt's spine: no shape-anchor, no card. */
+export type WeekFinding = {
+  title: string;
+  detail: string;
+  /** Either a WorkingShape ("spec-review-loop"), a grammar key
+   *  ("interaction_grammar.brainstorming_warmup_days"), or "plan-mode-gap". */
+  anchor: string;
+  evidence: { date: string; quote: string };
+};
+
+export type WeekSurprise = WeekFinding & {
+  surprise_kind: "outlier" | "novel-use" | "user-built-tool" | "cross-week-contrast";
+};
+
+export type WeekLeanIn = WeekFinding & {
+  lean_kind: "claude-md" | "skill" | "hook" | "harness" | "decision";
+  /** A copyable prompt or rule block when applicable. */
+  copyable: string | null;
+};
+
+/** LEGACY — kept on the type for backward compat with cached v2 digests
+ *  generated before the working_shapes refactor. New digests don't populate
+ *  these; the renderer hides them when working_shapes is present. */
+export type WeekRecurringThemeLegacy = {
+  theme: string;
+  days: string[];
+  evidence: string;
+  source: "suggestion" | "friction" | "helpfulness_dip" | "flag_pattern";
+};
+
+/** Deterministic snapshot of how the user drove agents this week. Kept
+ *  alongside working_shapes as the "by the numbers" fold-down — counts and
+ *  bands without the qualitative texture.
  *
  *  Fully computed from per-Entry data (subagents/skills/numbers/flags). Null
  *  on the deterministic-only path when entries weren't loaded. */
@@ -415,10 +521,21 @@ export type WeekDigest = DigestEnvelope & {
    *  Each entry's active_min is attributed to its start_iso hour bucket. Length always 24. */
   hours_distribution: number[];
 
-  /** How the user actually drove agents this week. Computed from per-Entry data;
-   *  null on the deterministic-only path when entries weren't loaded.
-   *  Anchors the narrative — patterns/friction/suggestions all reference these axes. */
+  /** "By the numbers" — count snapshot kept for the fold-down. Working shapes
+   *  carry the qualitative texture; this is for the user who wants raw counts.
+   *  Computed from per-Entry data; null on the deterministic-only path when
+   *  entries weren't loaded. */
   interaction_modes: WeekInteractionModes | null;
+
+  /** Named orchestration shapes observed across the week's sessions. Primary
+   *  surface for "How you worked" — replaces the numeric mode-card grid as the
+   *  reader's first qualitative anchor. */
+  working_shapes: WeekWorkingShapeRow[] | null;
+
+  /** The user's custom prompt-framings, ritual skills, harness handoffs,
+   *  multi-day threads. Surfaces meta-tools the user has built around stock
+   *  Claude Code that the count layer can't see. */
+  interaction_grammar: WeekInteractionGrammar | null;
 
   // ── LLM narrative (null when ai_features.enabled === false or synth failed) ──
 
@@ -430,29 +547,34 @@ export type WeekDigest = DigestEnvelope & {
   standout_days: Array<{ date: string; why: string }> | null;
   /** One-line characterization of how the user worked this week. Subhead under the hero. */
   key_pattern: string | null;
-  /** Day-level signals that recurred across ≥ 2 days. Empty array if nothing recurred. */
-  recurring_themes: WeekRecurringTheme[] | null;
-  /** Cross-day pattern claims (e.g. "loop_suspected days were highest-shipping").
-   *  Empty array if no clear correlations surfaced. */
-  outcome_correlations: WeekOutcomeCorrelation[] | null;
-  /**
-   * 2–4 friction categories. Each carries a description + 1–3 dated example
-   * incidents (each with a verbatim quote from that day's data, linkable to
-   * /digest/[date]). Empty array means the week was smooth — render "no
-   * friction" rather than placeholder prose.
-   */
-  friction_categories: WeekFrictionCategory[] | null;
-  /** Multi-pronged suggestions split by where the user would apply them. */
-  suggestions: {
+
+  /** Things that worked, each anchored to a working_shape it came from.
+   *  3–5 items, sorted by load-bearing-ness (the most week-defining first). */
+  what_worked: WeekFinding[] | null;
+  /** Things that stalled, each citing the working_shape they stalled INSIDE.
+   *  2–4 items. Friction is mode-shape-specific by construction. */
+  what_stalled: WeekFinding[] | null;
+  /** Outliers, novel uses, user-built tooling that surprised the digest writer.
+   *  1–3 items. */
+  what_surprised: WeekSurprise[] | null;
+  /** Recommendations grouped by anchor (mode-shape gap, grammar gap, plan-mode
+   *  decision). 3–6 items. */
+  where_to_lean: WeekLeanIn[] | null;
+
+  // ── LEGACY narrative fields ──
+  // Kept optional on the type so cached v2 digests generated before the
+  // working_shapes refactor still parse. New digests leave these null and the
+  // renderer prefers the new fields.
+  recurring_themes?: WeekRecurringTheme[] | null;
+  outcome_correlations?: WeekOutcomeCorrelation[] | null;
+  friction_categories?: WeekFrictionCategory[] | null;
+  suggestions?: {
     claude_md_additions: WeekClaudeMdAddition[];
     features_to_try: WeekFeatureToTry[];
     usage_patterns: WeekUsagePattern[];
   } | null;
-  /** Exactly ONE forward-looking ambitious workflow tied to a specific
-   *  friction_category from this week. Single opportunity, not a list of three. */
-  on_the_horizon: WeekHorizonOpportunity | null;
-  /** A single memorable moment from the week. Optional — null if nothing stood out. */
-  fun_ending: { headline: string; detail: string } | null;
+  on_the_horizon?: WeekHorizonOpportunity | null;
+  fun_ending?: { headline: string; detail: string } | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────

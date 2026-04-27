@@ -1,7 +1,9 @@
 import {
   CURRENT_WEEK_DIGEST_SCHEMA_VERSION,
-  type DayDigest, type DayHelpfulness, type DayOutcome, type Entry,
-  type WeekDigest, type WeekInteractionModes,
+  type DayDigest, type DayHelpfulness, type DayOutcome, type Entry, type EntrySubagent,
+  type WeekDigest, type WeekInteractionModes, type WeekWorkingShapeRow,
+  type WeekInteractionGrammar, type WorkingShape, type SubagentRole,
+  type PromptFrame, type SkillOrigin,
 } from "./types.js";
 import {
   DIGEST_WEEK_SYSTEM_PROMPT,
@@ -190,6 +192,279 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1).trimEnd() + "…";
 }
 
+// ─── Subagent role classification ────────────────────────────────────────
+
+/** Map a subagent's description + prompt_preview to a role label. Order
+ *  matters: more specific verbs win. */
+export function classifySubagentRole(sa: EntrySubagent): SubagentRole {
+  const text = `${sa.description} ${sa.prompt_preview}`.toLowerCase();
+  if (/\b(re-?review|review[s]?|verify|audit|spec[- ]review|code[- ]quality|code[- ]reuse|efficiency review)\b/.test(text)) {
+    return "reviewer";
+  }
+  if (/\b(implement|build chunk|build task|initialize|create the|add the)\b/.test(text)) {
+    return "implementer";
+  }
+  if (/\bexplore\b|\binventory\b|\bmap\b.*\b(codebase|repo|branch)\b|\baudit\b.*coverage/.test(text)) {
+    return "explorer";
+  }
+  if (/\b(investigate|research|reverse[- ]engineer|study|analy[sz]e)\b/.test(text)) {
+    return "researcher";
+  }
+  if (/\b(env(?:ironment)? setup|configure|setup|bootstrap)\b/.test(text)) {
+    return "env-setup";
+  }
+  if (/\b(polish|cleanup|fix|refactor)\b/.test(text)) {
+    return "polish";
+  }
+  return "other";
+}
+
+// ─── Working-shape inference ─────────────────────────────────────────────
+
+/** Map a single Entry's session-shape from its subagent dispatches + first_user
+ *  + skills. Returns null when the entry is too small to characterize (trivial
+ *  outcomes, < 1 turn). */
+export function inferWorkingShape(entry: Entry): WorkingShape {
+  if (entry.numbers.turn_count < 2) return null;
+
+  const subagents = entry.subagents ?? [];
+  const roles = subagents.map(classifySubagentRole);
+  const reviewerCount = roles.filter(r => r === "reviewer").length;
+  const implementerCount = roles.filter(r => r === "implementer").length;
+  const explorerOrResearcher = roles.filter(r => r === "explorer" || r === "researcher").length;
+  const hasBackground = subagents.some(sa => sa.background);
+
+  // 1. Reviewer triad — 3+ reviewers with distinct lens descriptions.
+  if (reviewerCount >= 3) {
+    const lensSigs = new Set<string>();
+    for (let i = 0; i < subagents.length; i++) {
+      if (roles[i] !== "reviewer") continue;
+      // Lens signature = first 3 distinctive words from description.
+      const sig = subagents[i]!.description.toLowerCase()
+        .replace(/[^a-z0-9 ]/g, "")
+        .split(/\s+/)
+        .filter(w => w.length > 2)
+        .slice(0, 3)
+        .join("|");
+      lensSigs.add(sig);
+    }
+    if (lensSigs.size >= 3) return "reviewer-triad";
+  }
+
+  // 2. Chunk implementation — 2+ implementer dispatches against numbered chunks.
+  if (implementerCount >= 2) {
+    const chunkRefs = subagents.filter(sa => /\b(chunk|task)\s*\d+/i.test(`${sa.description} ${sa.prompt_preview}`));
+    if (chunkRefs.length >= 2) return "chunk-implementation";
+  }
+
+  // 3. Spec-review loop — 2+ reviewer dispatches (against the same target,
+  //    or with re-review markers).
+  if (reviewerCount >= 2) return "spec-review-loop";
+
+  // 4. Research-then-build — explorer/researcher dispatches present AND
+  //    implementer dispatches OR substantial post-research work.
+  if (explorerOrResearcher >= 2 || (explorerOrResearcher >= 1 && implementerCount >= 1)) {
+    return "research-then-build";
+  }
+
+  // 5. Background-coordinated — any background:true subagent + foreground work.
+  if (hasBackground && subagents.length >= 1) return "background-coordinated";
+
+  // 6. Solo shapes (no subagents).
+  if (subagents.length === 0) {
+    const first = (entry.first_user || "").trim().toLowerCase();
+    if (/^continue\b/.test(first) || first === "continue.") return "solo-continuation";
+    const skills = Object.keys(entry.skills ?? {});
+    if (skills.some(s => /brainstorm|writing-plans|brainstorming/i.test(s))) return "solo-design";
+    return "solo-build";
+  }
+
+  // Mixed but doesn't match a named pattern — fall through to solo-build.
+  return "solo-build";
+}
+
+// ─── Prompt-frame detection ──────────────────────────────────────────────
+
+export function detectPromptFrames(text: string | null | undefined): PromptFrame[] {
+  if (!text) return [];
+  const out: PromptFrame[] = [];
+  if (/<teammate-message\b/i.test(text)) out.push("teammate");
+  if (/<local-command-caveat\b/i.test(text)) out.push("local-command-caveat");
+  if (/^# Handoff:/m.test(text) || /^## Session conclusion/m.test(text)) out.push("handoff-prose");
+  if (/\[Image #\d+\]/.test(text)) out.push("image-attached");
+  return out;
+}
+
+// ─── Skill origin classification ─────────────────────────────────────────
+
+const STOCK_PREFIXES = /^(superpowers|mcp__|frontend-design|code-review|codex|claude-code-guide|claude-api):/i;
+
+export function classifySkill(name: string): SkillOrigin {
+  if (name.startsWith("(ToolSearch:")) return "infra";
+  if (STOCK_PREFIXES.test(name)) return "stock";
+  if (name === "using-superpowers") return "stock";
+  return "user";
+}
+
+// ─── Working-shapes week aggregator ──────────────────────────────────────
+
+export function computeWorkingShapes(
+  entries: Entry[],
+  dayDigests: DayDigest[],
+): WeekWorkingShapeRow[] {
+  const dayOutcome = new Map<string, DayOutcome>();
+  const dayHelp = new Map<string, DayHelpfulness>();
+  for (const dd of dayDigests) {
+    dayOutcome.set(dd.key, dd.outcome_day);
+    dayHelp.set(dd.key, dd.helpfulness_day);
+  }
+
+  // Group entries by inferred shape.
+  const byShape = new Map<NonNullable<WorkingShape>, Entry[]>();
+  for (const e of entries) {
+    const shape = inferWorkingShape(e);
+    if (!shape) continue;
+    const arr = byShape.get(shape) ?? [];
+    arr.push(e);
+    byShape.set(shape, arr);
+  }
+
+  // Order shapes by frequency (ties broken by load-bearing-ness — orchestrated
+  // shapes first because they describe the dominant orchestration mode).
+  const shapeOrder: Array<NonNullable<WorkingShape>> = [
+    "spec-review-loop", "chunk-implementation", "reviewer-triad",
+    "research-then-build", "background-coordinated",
+    "solo-continuation", "solo-design", "solo-build",
+  ];
+  const ordered: WeekWorkingShapeRow[] = [];
+
+  for (const shape of shapeOrder) {
+    const shapeEntries = byShape.get(shape);
+    if (!shapeEntries || shapeEntries.length === 0) continue;
+
+    const occurrences = shapeEntries
+      .sort((a, b) => a.local_day.localeCompare(b.local_day))
+      .map(e => {
+        // Pick a representative subagent — for orchestrated shapes prefer the
+        // longest prompt_preview that matches a relevant role; for solo shapes
+        // there's no subagent.
+        let evidence_subagent: WeekWorkingShapeRow["occurrences"][0]["evidence_subagent"] = null;
+        if (e.subagents && e.subagents.length > 0) {
+          const sorted = [...e.subagents].sort((a, b) => b.prompt_preview.length - a.prompt_preview.length);
+          const sa = sorted[0]!;
+          evidence_subagent = {
+            type: sa.type,
+            description: sa.description,
+            prompt_preview: truncate(sa.prompt_preview, 200),
+          };
+        }
+        return {
+          date: e.local_day,
+          session_id: e.session_id,
+          project_display: prettyProject(e.project),
+          outcome: dayOutcome.get(e.local_day) ?? null,
+          helpfulness: dayHelp.get(e.local_day) ?? null,
+          evidence_subagent,
+          evidence_first_user: e.first_user ? truncate(e.first_user, 200) : null,
+        };
+      });
+
+    const outcome_distribution: Partial<Record<DayOutcome, number>> = {};
+    for (const o of occurrences) {
+      if (!o.outcome) continue;
+      outcome_distribution[o.outcome] = (outcome_distribution[o.outcome] ?? 0) + 1;
+    }
+
+    ordered.push({ shape, occurrences, outcome_distribution });
+  }
+
+  return ordered;
+}
+
+// ─── Interaction grammar aggregator ──────────────────────────────────────
+
+const BRAINSTORM_PATTERN = /brainstorm|writing-plans/i;
+
+export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGrammar {
+  const brainstormDays = new Set<string>();
+  const frameMap = new Map<PromptFrame, { count: number; days: Set<string> }>();
+  const userSkillMap = new Map<string, { count: number; days: Set<string> }>();
+  let todo_ops_total = 0;
+  let exit_plan_calls = 0;
+  const planDays = new Set<string>();
+
+  // Group entries by session for thread detection.
+  const bySession = new Map<string, Entry[]>();
+
+  for (const e of entries) {
+    const day = e.local_day;
+    todo_ops_total += e.numbers.task_ops;
+    exit_plan_calls += e.numbers.exit_plan_calls;
+    if (e.numbers.exit_plan_calls > 0 || (e.flags ?? []).includes("plan_used")) planDays.add(day);
+
+    // Brainstorming warmup: skill loaded matching brainstorm pattern.
+    for (const skill of Object.keys(e.skills ?? {})) {
+      if (BRAINSTORM_PATTERN.test(skill)) {
+        brainstormDays.add(day);
+      }
+      if (classifySkill(skill) === "user") {
+        const cur = userSkillMap.get(skill) ?? { count: 0, days: new Set<string>() };
+        cur.count += e.skills[skill] ?? 1;
+        cur.days.add(day);
+        userSkillMap.set(skill, cur);
+      }
+    }
+
+    for (const frame of detectPromptFrames(e.first_user)) {
+      const cur = frameMap.get(frame) ?? { count: 0, days: new Set<string>() };
+      cur.count += 1;
+      cur.days.add(day);
+      frameMap.set(frame, cur);
+    }
+
+    const arr = bySession.get(e.session_id) ?? [];
+    arr.push(e);
+    bySession.set(e.session_id, arr);
+  }
+
+  // Threads: sessions whose entries span 2+ days.
+  const threads: WeekInteractionGrammar["threads"] = [];
+  for (const [sid, arr] of bySession.entries()) {
+    const distinctDays = new Set(arr.map(e => e.local_day));
+    if (distinctDays.size < 2) continue;
+    arr.sort((a, b) => a.local_day.localeCompare(b.local_day));
+    const total_active_min = arr.reduce((s, e) => s + e.numbers.active_min, 0);
+    const lastDay = arr[arr.length - 1]!.local_day;
+    const lastEntry = arr[arr.length - 1]!;
+    threads.push({
+      thread_id: sid,
+      entries: arr.map(e => ({
+        date: e.local_day,
+        session_id: e.session_id,
+        project_display: prettyProject(e.project),
+        has_handoff_frame: detectPromptFrames(e.first_user).includes("handoff-prose"),
+      })),
+      total_active_min,
+      outcome: (lastEntry.enrichment?.outcome ?? null) as DayOutcome | null,
+    });
+    void lastDay;
+  }
+  threads.sort((a, b) => b.total_active_min - a.total_active_min);
+
+  return {
+    brainstorming_warmup_days: [...brainstormDays].sort(),
+    prompt_frames: [...frameMap.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([frame, v]) => ({ frame, count: v.count, days: [...v.days].sort() })),
+    user_authored_skills: [...userSkillMap.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([skill, v]) => ({ skill, count: v.count, days: [...v.days].sort() })),
+    threads,
+    todo_ops_total,
+    plan_mode: { exit_plan_calls, days_with_plan: planDays.size },
+  };
+}
+
 export type BuildDeterministicWeekOptions = {
   /** Optional entries — needed for longest_run + hours_distribution.
    *  When omitted both fields are null/empty and the renderer hides those slices. */
@@ -328,6 +603,8 @@ export function buildDeterministicWeekDigest(
   }
 
   const interaction_modes = entries.length > 0 ? computeInteractionModes(entries) : null;
+  const working_shapes = entries.length > 0 ? computeWorkingShapes(entries, dayDigests) : null;
+  const interaction_grammar = entries.length > 0 ? computeInteractionGrammar(entries) : null;
 
   const sunday = dates[6]!;
   const window = { start: `${monday}T00:00:00`, end: `${sunday}T23:59:59` };
@@ -355,10 +632,19 @@ export function buildDeterministicWeekDigest(
     longest_run,
     hours_distribution,
     interaction_modes,
+    working_shapes,
+    interaction_grammar,
     headline: null,
     key_pattern: null,
     trajectory: null,
     standout_days: null,
+    what_worked: null,
+    what_stalled: null,
+    what_surprised: null,
+    where_to_lean: null,
+    // Legacy fields stay null on the new code path; cached pre-refactor digests
+    // may carry populated values which the renderer will hide when working_shapes
+    // is present.
     recurring_themes: null,
     outcome_correlations: null,
     friction_categories: null,
@@ -394,12 +680,14 @@ function normalizeForMatch(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/** Strip friction examples whose quote isn't a verbatim substring of the named
- *  day's text fields. Drops categories left with zero examples. The prompt asks
- *  for verbatim quotes; this is the enforcement layer. */
-function pruneUngroundedFriction(
+/** Strip findings whose evidence quote isn't a substring of the named day's
+ *  text fields. The prompt asks for grounded quotes; this enforces it across
+ *  what_worked / what_stalled / what_surprised. Findings with ungrounded
+ *  evidence are dropped. */
+function pruneUngroundedFindings(
   value: import("./prompts/digest-week.js").WeekDigestResponse,
   dayDigests: DayDigest[],
+  entries: Entry[],
 ): import("./prompts/digest-week.js").WeekDigestResponse {
   const dayCorpus = new Map<string, string>();
   for (const d of dayDigests) {
@@ -407,19 +695,32 @@ function pruneUngroundedFriction(
       .filter((s): s is string => !!s);
     dayCorpus.set(d.key, normalizeForMatch(parts.join(" \n ")));
   }
+  // Augment corpus with first_user + final_agent + subagent prompt previews
+  // from entries — broader pool because what_worked/what_surprised may quote
+  // user input or subagent prompts, not just day-digest prose.
+  for (const e of entries) {
+    const day = e.local_day;
+    const prior = dayCorpus.get(day) ?? "";
+    const extra = [e.first_user, e.final_agent, ...(e.subagents ?? []).flatMap(sa => [sa.description, sa.prompt_preview])]
+      .filter((s): s is string => !!s)
+      .join(" \n ");
+    dayCorpus.set(day, normalizeForMatch(prior + " \n " + extra));
+  }
 
-  const cleaned = value.friction_categories
-    .map(cat => {
-      const examples = cat.examples.filter(ex => {
-        const corpus = dayCorpus.get(ex.date);
-        if (!corpus) return false;
-        return corpus.includes(normalizeForMatch(ex.quote));
-      });
-      return { ...cat, examples };
-    })
-    .filter(cat => cat.examples.length > 0);
+  const groundedFinding = (f: import("./prompts/digest-week.js").WeekDigestResponse["what_worked"][number]) => {
+    const corpus = dayCorpus.get(f.evidence.date);
+    if (!corpus) return false;
+    return corpus.includes(normalizeForMatch(f.evidence.quote));
+  };
 
-  return { ...value, friction_categories: cleaned };
+  return {
+    ...value,
+    what_worked: (value.what_worked ?? []).filter(groundedFinding),
+    what_stalled: (value.what_stalled ?? []).filter(groundedFinding),
+    what_surprised: (value.what_surprised ?? []).filter(groundedFinding),
+    // where_to_lean evidence is a quote the user can act on, not always
+    // substring-grounded — keep all.
+  };
 }
 
 export async function generateWeekDigest(
@@ -440,6 +741,8 @@ export async function generateWeekDigest(
   let inT = 0, outT = 0;
   let lastModel = model;
 
+  const entriesArr = opts.entries ?? [];
+
   function mergeNarrative(value: import("./prompts/digest-week.js").WeekDigestResponse): WeekDigest {
     const enrichedProjects = base.projects.map(p => {
       const match = value.project_areas.find(pa => pa.display_name === p.display_name);
@@ -454,12 +757,17 @@ export async function generateWeekDigest(
       key_pattern: value.key_pattern,
       trajectory: value.trajectory,
       standout_days: value.standout_days,
-      recurring_themes: value.recurring_themes,
-      outcome_correlations: value.outcome_correlations,
-      friction_categories: value.friction_categories,
-      suggestions: value.suggestions,
-      on_the_horizon: value.on_the_horizon,
-      fun_ending: value.fun_ending,
+      what_worked: value.what_worked,
+      what_stalled: value.what_stalled,
+      what_surprised: value.what_surprised,
+      where_to_lean: value.where_to_lean,
+      // Legacy fields stay null on the new path; renderer prefers new fields.
+      recurring_themes: null,
+      outcome_correlations: null,
+      friction_categories: null,
+      suggestions: null,
+      on_the_horizon: null,
+      fun_ending: null,
     };
   }
 
@@ -468,7 +776,7 @@ export async function generateWeekDigest(
     inT += r1.input_tokens; outT += r1.output_tokens; lastModel = r1.model;
     const v1 = validateWeek(r1.content);
     if (v1.ok) {
-      return { digest: mergeNarrative(pruneUngroundedFriction(v1.value, dayDigests)), usage: { input_tokens: inT, output_tokens: outT } };
+      return { digest: mergeNarrative(pruneUngroundedFindings(v1.value, dayDigests, entriesArr)), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     const r2 = await callLLM({
@@ -479,7 +787,7 @@ export async function generateWeekDigest(
     inT += r2.input_tokens; outT += r2.output_tokens; lastModel = r2.model;
     const v2 = validateWeek(r2.content);
     if (v2.ok) {
-      return { digest: mergeNarrative(pruneUngroundedFriction(v2.value, dayDigests)), usage: { input_tokens: inT, output_tokens: outT } };
+      return { digest: mergeNarrative(pruneUngroundedFindings(v2.value, dayDigests, entriesArr)), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     console.warn(`[digest-week] ${monday}: LLM response failed validation after retry (${v2.error})`);

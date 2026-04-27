@@ -35,22 +35,26 @@ const VALID_RESPONSE = {
   project_areas: [
     { display_name: "x", description: "Phase 4 spec + implementation landed under this project." },
   ],
-  recurring_themes: [],
-  outcome_correlations: [],
-  friction_categories: [],
-  suggestions: {
-    claude_md_additions: [
-      { addition: "## Spec rituals\n- Always reviewer-pass before commit.", why: "Phase 4 spec needed two reviewer passes before approval (Mon, Tue).", prompt_scaffold: "Top of CLAUDE.md, near the existing Code style section." },
-    ],
-    features_to_try: [
-      { feature: "Custom Skills", one_liner: "Reusable command modules.", why_for_you: "Your brainstorm + spec ritual is uniform across Mon and Tue; codify it.", example_code: "mkdir -p .claude/skills/spec-ritual && cat > .claude/skills/spec-ritual/SKILL.md <<'EOF'\n# Spec Ritual\nBrainstorm, write spec, reviewer pass, commit.\nEOF" },
-    ],
-    usage_patterns: [
-      { title: "Hold the trajectory format", suggestion: "Use one-line-per-sub-period for month digests too.", detail: "It worked for day digests as input on 2026-04-20 + 2026-04-21; the LLM ground each line concretely.", copyable_prompt: "Generate the month digest using one line per week_start, mirroring the day-level format." },
-    ],
-  },
-  on_the_horizon: null,
-  fun_ending: null,
+  what_worked: [
+    {
+      title: "Spec → reviewer pass shipped phase 4 cleanly",
+      detail: "The brainstorm-skill warmup followed by a reviewer subagent pass converged the phase-4 spec without redo cycles. Two enriched days in a row, both shipped.",
+      anchor: "spec-review-loop",
+      evidence: { date: "2026-04-20", quote: "shipped phase 4" },
+    },
+  ],
+  what_stalled: [],
+  what_surprised: [],
+  where_to_lean: [
+    {
+      title: "Codify the spec-ritual into a skill",
+      detail: "Brainstorm + spec + reviewer pass repeated identically Mon and Tue. Lift it into .claude/skills/spec-ritual so future sessions don't re-derive it.",
+      anchor: "spec-review-loop",
+      evidence: { date: "2026-04-20", quote: "tight design loop" },
+      lean_kind: "skill",
+      copyable: "mkdir -p .claude/skills/spec-ritual && cat > .claude/skills/spec-ritual/SKILL.md <<'EOF'\n# Spec Ritual\nBrainstorm, write spec, reviewer pass, commit.\nEOF",
+    },
+  ],
 };
 
 describe("generateWeekDigest", () => {
@@ -75,7 +79,8 @@ describe("generateWeekDigest", () => {
     expect(r.digest.headline).toBe(VALID_RESPONSE.headline);
     expect(r.digest.trajectory).toEqual(VALID_RESPONSE.trajectory);
     expect(r.digest.standout_days).toEqual(VALID_RESPONSE.standout_days);
-    expect(r.digest.suggestion).toEqual(VALID_RESPONSE.suggestion);
+    expect(r.digest.what_worked).toEqual(VALID_RESPONSE.what_worked);
+    expect(r.digest.where_to_lean).toEqual(VALID_RESPONSE.where_to_lean);
     expect(r.usage).toEqual({ input_tokens: 1000, output_tokens: 200 });
   });
 
