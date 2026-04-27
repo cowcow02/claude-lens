@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { DayDigest as DayDigestRender } from "./day-digest";
 import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
 
@@ -17,7 +17,7 @@ export function DayDigestView({
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState<string>("");
 
-  const regenerate = useCallback(async (force = false) => {
+  const generate = useCallback(async (force = false) => {
     setStatus("streaming");
     setProgress("Starting...");
     const url = `/api/digest/day/${date}${force ? "?force=1" : ""}`;
@@ -60,23 +60,76 @@ export function DayDigestView({
 
   const isStreaming = status === "streaming";
 
+  // Are all capsules done AND the narrative cached? Then re-running is mostly
+  // a no-op (force-rerolls the narrative against the same entries). Hide the
+  // primary button to avoid implying "this will redo work".
+  const allCapsulesDone = useMemo(() => {
+    if (entries.length === 0) return false;
+    return entries.every(
+      (e) => e.enrichment.status === "done" || e.enrichment.status === "skipped_trivial",
+    );
+  }, [entries]);
+  const narrativeIsFresh = !!digest?.headline && allCapsulesDone;
+  const hasMissingWork = !narrativeIsFresh;
+
   return (
     <>
-      <div style={{ display: "flex", gap: 10, padding: "14px 40px 0", alignItems: "center" }}>
-        <button
-          onClick={() => regenerate(true)}
-          disabled={isStreaming}
-          style={{
-            padding: "6px 12px",
-            border: "1px solid var(--af-border-subtle)",
-            borderRadius: 6,
-            background: "transparent",
-            cursor: isStreaming ? "default" : "pointer",
-            fontSize: 12,
-            opacity: isStreaming ? 0.6 : 1,
-          }}>
-          🔄 {isStreaming ? "Regenerating..." : "Regenerate"}
-        </button>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          padding: "14px 40px 0",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        {hasMissingWork ? (
+          <button
+            onClick={() => generate(false)}
+            disabled={isStreaming}
+            style={{
+              padding: "6px 12px",
+              background: "var(--af-accent)",
+              color: "white",
+              border: "none",
+              borderRadius: 6,
+              cursor: isStreaming ? "default" : "pointer",
+              fontSize: 12,
+              opacity: isStreaming ? 0.6 : 1,
+            }}
+          >
+            {isStreaming ? "Generating..." : digest ? "Generate (catch up)" : "Generate digest"}
+          </button>
+        ) : (
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--af-text-tertiary)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            ✓ All up to date
+            <button
+              onClick={() => generate(true)}
+              disabled={isStreaming}
+              title="Re-roll the narrative without re-enriching capsules"
+              style={{
+                padding: "3px 8px",
+                background: "transparent",
+                border: "1px solid var(--af-border-subtle)",
+                borderRadius: 5,
+                fontSize: 10,
+                color: "var(--af-text-secondary)",
+                cursor: isStreaming ? "default" : "pointer",
+                opacity: isStreaming ? 0.6 : 1,
+              }}
+            >
+              {isStreaming ? "..." : "Re-roll narrative"}
+            </button>
+          </span>
+        )}
         {progress && <span style={{ fontSize: 11, color: "var(--af-text-tertiary)" }}>{progress}</span>}
       </div>
 
@@ -84,20 +137,7 @@ export function DayDigestView({
         <DayDigestRender digest={digest} entries={entries} aiEnabled={aiEnabled} />
       ) : (
         <div style={{ padding: 40, textAlign: "center", color: "var(--af-text-secondary)" }}>
-          <p>No digest generated yet.</p>
-          <button onClick={() => regenerate(false)} disabled={isStreaming}
-            style={{
-              padding: "8px 16px",
-              marginTop: 10,
-              background: "var(--af-accent)",
-              color: "white",
-              border: "none",
-              borderRadius: 6,
-              cursor: isStreaming ? "default" : "pointer",
-              opacity: isStreaming ? 0.6 : 1,
-            }}>
-            {isStreaming ? "Generating..." : "Generate digest"}
-          </button>
+          <p>No digest generated yet — click Generate above.</p>
         </div>
       )}
     </>
