@@ -321,9 +321,11 @@ Hero auto-fire rule: on `/insights` server-render, the page checks three precond
 
 If all three pass, the page atomically writes `last_completed_week`'s Monday into the file and passes `autoFire: true` to the client. The client triggers the SSE POST on mount. This guarantees one auto-fire per ISO week per host, regardless of browser refresh. The contents check is the only load-bearing one — no mtime comparison needed.
 
+A corrupt or unparseable `auto-week-fired-at` file (anything that doesn't match `^\d{4}-\d{2}-\d{2}$`) is treated as "absent" — the page proceeds to auto-fire and overwrites the file with a clean Monday line. No error surfaced to the user.
+
 The auto-fire guard is server-side per-host (one file, one process group) while Phase 2.1's yesterday-hero guard is browser-side (`localStorage[cclens:autogen-yesterday:{date}]`). This split is intentional: the daily hero auto-fires on every device the user opens because losing one yesterday's narrative is cheap; the weekly hero costs ~5x more per fire so it's gated globally per host.
 
-**Empty week / month** (zero day digests, zero entries) renders a "no activity" card with no Generate CTA — matches the Phase 3 honesty pattern for empty days.
+**Empty week / month** (zero day digests, zero entries) renders a "no activity" card with no Generate CTA — matches the Phase 3 honesty pattern for empty days. The week pipeline does NOT persist a digest to disk for an empty past week; the file simply doesn't exist, and the index endpoint's "cached or fallback" check naturally treats it as un-cached. This avoids "cached but empty" sentinels that the picker would otherwise have to special-case.
 
 **`/insights/[key]`:**
 - `key = "week-YYYY-MM-DD"` → load from `~/.cclens/digests/week/<date>.json`, render `<WeekDigest>`.
@@ -359,7 +361,7 @@ Your job: produce a 5-field JSON object capturing the shape of the week.
 You will be given:
   • period: { start, end, label }
   • totals: { agent_min_total, day_count_with_data }
-  • outcome_mix: { shipped, partial, blocked, exploratory, trivial }  (counts of days)
+  • outcome_mix: { shipped, partial, blocked, exploratory, trivial }  (counts of days; absent keys mean zero — the prompt builder pre-fills with 0)
   • helpfulness_sparkline: 7 entries Mon-Sun (essential|helpful|neutral|unhelpful|null)
   • projects: top 5 by minutes
   • shipped: all PRs shipped this week with date+project
