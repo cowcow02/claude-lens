@@ -245,8 +245,20 @@ export function inferWorkingShape(entry: Entry): WorkingShape {
   const explorerOrResearcher = roles.filter(r => r === "explorer" || r === "researcher").length;
   const hasBackground = subagents.some(sa => sa.background);
 
-  // 1. Reviewer triad — 3+ reviewers with distinct lens descriptions.
-  if (reviewerCount >= 3) {
+  // 1. Chunk implementation — 2+ implementer dispatches against numbered
+  //    chunks/tasks. Checked first because chunk-implementation sessions
+  //    often ALSO carry per-chunk reviewer dispatches; we don't want those
+  //    to trip reviewer-triad detection.
+  if (implementerCount >= 2) {
+    const chunkRefs = subagents.filter(sa => /\b(chunk|task)\s*\d+/i.test(`${sa.description} ${sa.prompt_preview}`));
+    if (chunkRefs.length >= 2) return "chunk-implementation";
+  }
+
+  // 2. Reviewer triad — 3+ reviewers with distinct lens descriptions, AND
+  //    no implementer dispatches in the same session (pure review mode on
+  //    a single diff, not chunked work). The defining shape is: same diff
+  //    going through 3 different review lenses.
+  if (reviewerCount >= 3 && implementerCount === 0) {
     const lensSigs = new Set<string>();
     for (let i = 0; i < subagents.length; i++) {
       if (roles[i] !== "reviewer") continue;
@@ -260,12 +272,6 @@ export function inferWorkingShape(entry: Entry): WorkingShape {
       lensSigs.add(sig);
     }
     if (lensSigs.size >= 3) return "reviewer-triad";
-  }
-
-  // 2. Chunk implementation — 2+ implementer dispatches against numbered chunks.
-  if (implementerCount >= 2) {
-    const chunkRefs = subagents.filter(sa => /\b(chunk|task)\s*\d+/i.test(`${sa.description} ${sa.prompt_preview}`));
-    if (chunkRefs.length >= 2) return "chunk-implementation";
   }
 
   // 3. Spec-review loop — 2+ reviewer dispatches (against the same target,
