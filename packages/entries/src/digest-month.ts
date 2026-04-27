@@ -188,6 +188,7 @@ export async function generateMonthDigest(
   const callLLM = opts.callLLM ?? defaultCallLLMMonth;
   const userPrompt = buildMonthDigestUserPrompt(base, weekDigests);
   let inT = 0, outT = 0;
+  // eslint-disable-next-line no-useless-assignment
   let lastModel = model;
 
   try {

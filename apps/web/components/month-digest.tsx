@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import type { MonthDigest as MonthDigestType, DayHelpfulness } from "@claude-lens/entries";
-import { OutcomePill } from "./outcome-pill";
 import type { ReactNode } from "react";
 
 const HELP_COLORS: Record<NonNullable<DayHelpfulness>, string> = {

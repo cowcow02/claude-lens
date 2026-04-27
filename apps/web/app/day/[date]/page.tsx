@@ -80,15 +80,12 @@ export default async function DayPage({
   const settings = readSettings();
   const aiEnabled = settings.ai_features.enabled;
   const entries = listEntriesForDay(date);
-  let initial: DayDigest | null = null;
-  if (date === today) {
-    // Today's digest lives only in the 10-min in-memory TTL cache — never on disk.
-    // Falling back to deterministic-only here would erase the LLM narrative the
-    // user just generated; check the cache first.
-    initial = getTodayDigestFromCache(date, Date.now());
-  } else {
-    initial = readDayDigest(date);
-  }
+  // Today's digest lives only in the 10-min in-memory TTL cache — never on disk.
+  // Falling back to deterministic-only would erase the LLM narrative the user
+  // just generated; the today branch reads the cache instead of disk.
+  let initial: DayDigest | null = date === today
+    ? getTodayDigestFromCache(date, Date.now())
+    : readDayDigest(date);
   if (!initial && entries.length > 0) initial = buildDeterministicDigest(date, entries);
 
   // ---- Timeline side (Gantt) ----

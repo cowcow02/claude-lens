@@ -7,7 +7,7 @@ import {
   DayDigestResponseSchema,
   buildDigestUserPrompt,
 } from "./prompts/digest-day.js";
-import type { CallLLM, EnrichUsage, LLMResponse } from "./enrich.js";
+import type { CallLLM, EnrichUsage } from "./enrich.js";
 import { computeCostUsd } from "./enrich.js";
 import { runClaudeSubprocess, parseAndValidate } from "./llm-runner.js";
 
