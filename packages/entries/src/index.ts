@@ -3,3 +3,4 @@ export * from "./types.js";
 export * from "./signals.js";
 export * from "./trivial.js";
 export * from "./build.js";
+export * from "./flag-glossary.js";

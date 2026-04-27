@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import type { WeekDigest as WeekDigestType, DayHelpfulness } from "@claude-lens/entries";
 import { OutcomePill } from "./outcome-pill";
+import { renderWithFlagChips } from "./flag-chip";
 
 const HELP_COLORS: Record<NonNullable<DayHelpfulness>, string> = {
   essential: "#48bb78",
@@ -58,7 +59,7 @@ export function WeekDigest({
             fontSize: 26, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-0.02em",
             margin: "0 0 6px", maxWidth: 820, color: "var(--af-text)",
           }}>
-            {digest.headline}
+            {renderWithFlagChips(digest.headline)}
           </h1>
         ) : (
           <h1 style={{ fontSize: 20, color: "var(--af-text-secondary)", margin: "0 0 14px" }}>
@@ -72,7 +73,7 @@ export function WeekDigest({
             fontSize: 13, fontStyle: "italic", margin: 0, lineHeight: 1.5,
             color: "var(--af-text-secondary)", maxWidth: 820,
           }}>
-            {digest.key_pattern}
+            {renderWithFlagChips(digest.key_pattern)}
           </p>
         )}
       </header>
@@ -108,7 +109,7 @@ export function WeekDigest({
                 >
                   {dayName(s.date)} {s.date.slice(5)}
                 </Link>
-                <span style={{ fontSize: 13, lineHeight: 1.55, color: "var(--af-text)" }}>{s.why}</span>
+                <span style={{ fontSize: 13, lineHeight: 1.55, color: "var(--af-text)" }}>{renderWithFlagChips(s.why)}</span>
               </li>
             ))}
           </ul>
@@ -127,7 +128,7 @@ export function WeekDigest({
                 }}>
                   {dayName(t.date)} {t.date.slice(5)}
                 </Link>
-                <span style={{ fontSize: 13, lineHeight: 1.55, color: "var(--af-text-secondary)" }}>{t.line}</span>
+                <span style={{ fontSize: 13, lineHeight: 1.55, color: "var(--af-text-secondary)" }}>{renderWithFlagChips(t.line)}</span>
               </li>
             ))}
           </ol>
@@ -203,11 +204,11 @@ function RecurringThemes({ themes }: { themes: WeekDigestType["recurring_themes"
                   textTransform: "uppercase", color: tone.tag,
                 }}>{tone.label}</span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em" }}>
-                  {t.theme}
+                  {renderWithFlagChips(t.theme)}
                 </span>
               </div>
               <p style={{ fontSize: 12, lineHeight: 1.55, margin: "0 0 8px", color: "var(--af-text-secondary)" }}>
-                {t.evidence}
+                {renderWithFlagChips(t.evidence)}
               </p>
               <DayChips dates={t.days} tone={tone.tag} />
             </li>
@@ -230,7 +231,7 @@ function OutcomeCorrelations({ correlations }: { correlations: WeekDigestType["o
             border: "1px solid color-mix(in srgb, #b794f4 24%, var(--af-border-subtle))",
           }}>
             <p style={{ fontSize: 13, lineHeight: 1.55, margin: "0 0 8px", color: "var(--af-text)" }}>
-              {c.claim}
+              {renderWithFlagChips(c.claim)}
             </p>
             <DayChips dates={c.supporting_dates} tone="#b794f4" />
           </li>
@@ -322,10 +323,10 @@ function FrictionCategories({ categories }: { categories: WeekDigestType["fricti
               fontSize: 13, fontWeight: 600, color: "var(--af-text)",
               marginBottom: 6, letterSpacing: "-0.01em",
             }}>
-              {cat.category}
+              {renderWithFlagChips(cat.category)}
             </div>
             <p style={{ fontSize: 12, lineHeight: 1.55, margin: "0 0 10px", color: "var(--af-text-secondary)" }}>
-              {cat.description}
+              {renderWithFlagChips(cat.description)}
             </p>
             <ul style={{
               listStyle: "none", padding: 0, margin: 0,
@@ -374,7 +375,7 @@ function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions
             <div key={i} style={cardStyle()}>
               <CopyBlock label="Copy CLAUDE.md block" payload={c.addition} />
               <div style={{ fontSize: 11.5, lineHeight: 1.55, color: "var(--af-text-secondary)", marginTop: 8 }}>
-                <strong style={{ color: "var(--af-text)" }}>Why:</strong> {c.why}
+                <strong style={{ color: "var(--af-text)" }}>Why:</strong> {renderWithFlagChips(c.why)}
               </div>
               <div style={{ fontSize: 11, color: "var(--af-text-tertiary)", marginTop: 4, fontStyle: "italic" }}>
                 {c.prompt_scaffold}
@@ -392,7 +393,7 @@ function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions
                 <span style={{ fontSize: 12, color: "var(--af-text-secondary)" }}>{f.one_liner}</span>
               </div>
               <p style={{ fontSize: 11.5, lineHeight: 1.55, margin: "0 0 10px", color: "var(--af-text-secondary)" }}>
-                {f.why_for_you}
+                {renderWithFlagChips(f.why_for_you)}
               </p>
               <CopyBlock label="Copy example" payload={f.example_code} />
             </div>
@@ -406,10 +407,10 @@ function Suggestions({ suggestions }: { suggestions: WeekDigestType["suggestions
                 {u.title}
               </div>
               <p style={{ fontSize: 12, lineHeight: 1.55, margin: "0 0 6px", color: "var(--af-text)" }}>
-                {u.suggestion}
+                {renderWithFlagChips(u.suggestion)}
               </p>
               <p style={{ fontSize: 11.5, lineHeight: 1.55, margin: "0 0 10px", color: "var(--af-text-secondary)" }}>
-                {u.detail}
+                {renderWithFlagChips(u.detail)}
               </p>
               <CopyBlock label="Copy prompt" payload={u.copyable_prompt} />
             </div>
@@ -432,7 +433,7 @@ function OnTheHorizonOne({ opportunity }: { opportunity: WeekDigestType["on_the_
       }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", letterSpacing: "-0.01em", flex: 1, minWidth: 0 }}>
-            {opportunity.title}
+            {renderWithFlagChips(opportunity.title)}
           </span>
           <a href="#friction" style={{
             display: "inline-flex", alignItems: "center", gap: 4,
@@ -443,14 +444,14 @@ function OnTheHorizonOne({ opportunity }: { opportunity: WeekDigestType["on_the_
             textTransform: "uppercase", color: "#ed8936",
             textDecoration: "none",
           }} title="Jump to friction category this addresses">
-            Addresses: {opportunity.friction_category_addressed}
+            Addresses: {renderWithFlagChips(opportunity.friction_category_addressed)}
           </a>
         </div>
         <p style={{ fontSize: 12, lineHeight: 1.6, margin: "0 0 8px", color: "var(--af-text)" }}>
-          {opportunity.whats_possible}
+          {renderWithFlagChips(opportunity.whats_possible)}
         </p>
         <p style={{ fontSize: 11.5, lineHeight: 1.55, margin: "0 0 10px", color: "var(--af-text-secondary)" }}>
-          <strong style={{ color: "var(--af-text)" }}>How to try:</strong> {opportunity.how_to_try}
+          <strong style={{ color: "var(--af-text)" }}>How to try:</strong> {renderWithFlagChips(opportunity.how_to_try)}
         </p>
         <CopyBlock label="Copy starter prompt" payload={opportunity.copyable_prompt} />
       </div>

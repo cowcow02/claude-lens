@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { DayDigest, DayOutcome, WeekDigest } from "../types.js";
+import { flagGlossaryForPrompt, FLAG_GLOSSARY } from "../flag-glossary.js";
 
 const DateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -192,6 +193,10 @@ OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence. Schema:
   } | null   // null if nothing memorable surfaced
 }
 
+FLAG VOCABULARY:
+
+You will see internal flag tokens like \`loop_suspected\`, \`long_autonomous\`, \`orchestrated\`, \`fast_ship\`, \`plan_used\`, \`interrupt_heavy\`, \`high_errors\` in \`top_flags\` and per-day \`top_flags\`. These are short tokens for code; the reader does NOT know what they mean. The input payload includes a \`flag_glossary\` array translating each token to a plain-English label + threshold. When you reference a flag in any user-facing string (\`headline\`, \`key_pattern\`, \`trajectory[].line\`, \`recurring_themes[].theme\` / \`evidence\`, \`outcome_correlations[].claim\`, \`friction_categories[].category\` / \`description\`, \`suggestions.*\`, \`on_the_horizon.*\`), translate it. Use the \`label\` from the glossary; if the threshold matters to the claim, name it inline (e.g. "consecutive-tool runs of 8+ same tool calls" not "loop_suspected"). Raw flag tokens are forbidden in user-facing prose. They MAY appear inside friction example \`quote\` fields if the verbatim day-text used them.
+
 CRITICAL RULES:
 
 1. **Quote, don't paraphrase.** Every friction example MUST be a verbatim substring of the named day's \`what_hit_friction\` (or \`headline\` / \`first_user\` / \`final_agent\` if the friction was diagnostic). Do not summarize friction in your own words inside examples.
@@ -251,6 +256,19 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
     shipped_titles: (shippedByProject.get(p.display_name) ?? []).slice(0, 8),
   }));
 
+  // Restrict glossary to flags actually present this week so the LLM only
+  // sees translations relevant to this report.
+  const presentFlags = new Set<string>();
+  for (const f of base.top_flags) presentFlags.add(f.flag);
+  for (const dd of dayDigests) for (const f of dd.top_flags) presentFlags.add(f.flag);
+  const glossary = flagGlossaryForPrompt().filter(g => presentFlags.has(g.token));
+  // Always include the most common offenders so the LLM has a sane fallback:
+  for (const token of ["loop_suspected", "long_autonomous", "orchestrated"]) {
+    if (FLAG_GLOSSARY[token] && !glossary.some(g => g.token === token)) {
+      glossary.push(FLAG_GLOSSARY[token]);
+    }
+  }
+
   const payload = {
     period: { start: base.window.start, end: base.window.end, label: base.key },
     totals: {
@@ -265,6 +283,7 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
     top_goal_categories: base.top_goal_categories,
     concurrency_peak_day: base.concurrency_peak_day,
     day_summaries,
+    flag_glossary: glossary,
   };
 
   return JSON.stringify(payload, null, 2);
