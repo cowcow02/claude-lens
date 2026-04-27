@@ -296,14 +296,30 @@ export type SubagentRole =
   | "polish"
   | "other";
 
-/** Custom prompt-framing the user employs — coordinator handoffs, command
- *  caveats, image attachments, session-conclusion preambles. Surfaces the
- *  user's interaction grammar rather than just count of inputs. */
+/** Prompt-framing patterns observed in first_user. Two origins:
+ *  - "claude-feature": framings emitted by Claude Code itself (teammate from
+ *    agent teams, task-notification from the Monitor tool, local-command-caveat
+ *    from local command output, image-attached from screenshot input,
+ *    slash-command from a custom or stock /command).
+ *  - "personal-habit": framings the user himself adopts as a working
+ *    convention (handoff-prose for cross-session compaction). These aren't
+ *    standard patterns — just observed habits worth surfacing. */
 export type PromptFrame =
   | "teammate"
+  | "task-notification"
   | "local-command-caveat"
-  | "handoff-prose"
-  | "image-attached";
+  | "image-attached"
+  | "slash-command"
+  | "handoff-prose";
+
+export const PROMPT_FRAME_ORIGIN: Record<PromptFrame, "claude-feature" | "personal-habit"> = {
+  teammate: "claude-feature",
+  "task-notification": "claude-feature",
+  "local-command-caveat": "claude-feature",
+  "image-attached": "claude-feature",
+  "slash-command": "claude-feature",
+  "handoff-prose": "personal-habit",
+};
 
 /** Skill origin — distinguishes user-authored skills (project-local) from
  *  stock superpowers / mcp tooling. */
@@ -331,10 +347,36 @@ export type WeekInteractionGrammar = {
   /** Days where superpowers:brainstorming or other planning skills loaded
    *  before any tool use — pattern-matching for "warmup ritual". */
   brainstorming_warmup_days: string[];
-  /** Custom prompt-frames detected across the week's first_user fields. */
-  prompt_frames: Array<{ frame: PromptFrame; count: number; days: string[] }>;
+  /** Prompt-frames detected across the week's first_user fields. Carries
+   *  origin so the report distinguishes Claude features the user employs
+   *  from personal habits the user has adopted. */
+  prompt_frames: Array<{
+    frame: PromptFrame;
+    origin: "claude-feature" | "personal-habit";
+    count: number;
+    days: string[];
+  }>;
   /** Skills not matching stock prefixes — likely user-authored project skills. */
   user_authored_skills: Array<{ skill: string; count: number; days: string[] }>;
+  /** User-authored skills rolled up by their prefix-before-`-`. Surfaces
+   *  cohesive toolchains (e.g. "harness" family covering harness-build,
+   *  harness-build-pickup, harness-orchestrate-analyze, etc.) rather than
+   *  individual skills. */
+  skill_families: Array<{
+    family: string;
+    members: string[];
+    total_count: number;
+    days: string[];
+  }>;
+  /** Subagent types not in the stock list — e.g. user-built `implement-teammate`.
+   *  Highlights the user's own subagent layer separately from stock dispatches. */
+  user_authored_subagents: Array<{
+    type: string;
+    count: number;
+    days: string[];
+    sample_description: string;
+    sample_prompt_preview: string;
+  }>;
   /** Multi-day session continuity — session_ids whose entries span > 1 day,
    *  or sequential entries linked by handoff-prose continuation. */
   threads: Array<{
@@ -343,6 +385,38 @@ export type WeekInteractionGrammar = {
     total_active_min: number;
     outcome: DayOutcome | null;
   }>;
+  /** Communication-style indicators — how the user provides context per
+   *  directive (verbosity, reliance on external refs) and how much steering
+   *  happens during execution (interrupts, dissatisfied/frustrated signals,
+   *  mid-run redirects). The narrative LLM uses these as anchors to tell
+   *  the reader whether they're delegating, micro-managing, or somewhere
+   *  in between. */
+  communication_style: {
+    /** Histogram of first_user prompt lengths in chars. */
+    verbosity_distribution: {
+      short: number;        // < 100 chars
+      medium: number;       // 100–500
+      long: number;         // 500–2000
+      very_long: number;    // > 2000
+    };
+    /** Sessions whose first_user references an external system rather than
+     *  spelling out the work — Linear KIP-N, GitHub #N, branch refs, URLs.
+     *  High count = high delegation ("go look it up yourself"). */
+    external_context_refs: Array<{
+      date: string;
+      session_id: string;
+      ref_kind: "linear-kip" | "github-issue-pr" | "branch-ref" | "url";
+      preview: string;
+    }>;
+    /** Steering intensity — corrections during execution. */
+    steering: {
+      total_interrupts: number;
+      total_frustrated: number;
+      total_dissatisfied: number;
+      sessions_with_mid_run_redirect: number;   // entries with interrupts >= 2
+      total_turns: number;                       // for normalization
+    };
+  };
   todo_ops_total: number;
   plan_mode: { exit_plan_calls: number; days_with_plan: number };
 };

@@ -58,9 +58,20 @@ const LEAN_KIND_LABELS: Record<string, string> = {
 
 const FRAME_LABELS: Record<string, string> = {
   "teammate": "<teammate-message>",
+  "task-notification": "<task-notification>",
   "local-command-caveat": "<local-command-caveat>",
-  "handoff-prose": "Handoff prose",
+  "slash-command": "Slash command (<command-name>)",
   "image-attached": "[Image #N]",
+  "handoff-prose": "Handoff prose",
+};
+
+const FRAME_HELP: Record<string, string> = {
+  "teammate": "From Claude's agent-teams feature — coordinator dispatching to a teammate role.",
+  "task-notification": "From Claude's Monitor tool — the user's auto-monitor triggers a session.",
+  "local-command-caveat": "Claude convention wrapping local-command output to prevent prompt-injection.",
+  "slash-command": "A custom or stock slash-command invoked by the user.",
+  "image-attached": "User opened with one or more screenshots.",
+  "handoff-prose": "Personal habit: cross-session compaction prompt copied from a prior session.",
 };
 
 export function WeekDigest({
@@ -834,60 +845,262 @@ function InteractionGrammarSection({
 }: {
   grammar: NonNullable<WeekDigestType["interaction_grammar"]>;
 }) {
-  const lines: ReactNode[] = [];
+  const harnessLines = renderHarnessLines(grammar);
+  const commLines = renderCommunicationLines(grammar);
+  const claudeFeatureLines = renderClaudeFeatureLines(grammar);
+  const miscLines = renderMiscGrammarLines(grammar);
+  const allLines = [...harnessLines, ...commLines, ...claudeFeatureLines, ...miscLines];
+
+  if (allLines.length === 0) return null;
+  return (
+    <Section title="Your interaction grammar" anchor="grammar">
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {harnessLines.length > 0 && (
+          <GrammarSubsection title="Your own harness" subtitle="Skills, subagents, and slash commands you authored.">
+            {harnessLines}
+          </GrammarSubsection>
+        )}
+        {commLines.length > 0 && (
+          <GrammarSubsection title="Communication style" subtitle="How you provide context per directive and how much you steer mid-flight.">
+            {commLines}
+          </GrammarSubsection>
+        )}
+        {claudeFeatureLines.length > 0 && (
+          <GrammarSubsection title="Claude features in use" subtitle="Stock framings the user employs (not the user's own inventions).">
+            {claudeFeatureLines}
+          </GrammarSubsection>
+        )}
+        {miscLines.length > 0 && (
+          <GrammarSubsection title="Other patterns" subtitle="Threads, rituals, and gates.">
+            {miscLines}
+          </GrammarSubsection>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function GrammarSubsection({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+  return (
+    <div>
+      <div style={{ marginBottom: 6 }}>
+        <div style={{
+          fontSize: 11, fontWeight: 600, color: "var(--af-text)",
+          letterSpacing: "-0.01em",
+        }}>{title}</div>
+        <div style={{
+          fontSize: 10.5, color: "var(--af-text-tertiary)",
+          lineHeight: 1.45, marginTop: 1,
+        }}>{subtitle}</div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function renderHarnessLines(grammar: NonNullable<WeekDigestType["interaction_grammar"]>): ReactNode[] {
+  const out: ReactNode[] = [];
+
+  // Skill families take precedence — show the cohesive toolchain.
+  for (const fam of grammar.skill_families ?? []) {
+    out.push(
+      <GrammarLine
+        key={`fam-${fam.family}`}
+        label={`${fam.family}-* skill family`}
+        body={`${fam.total_count} loads across ${fam.members.length} skills: ${fam.members.join(", ")}.`}
+        days={fam.days}
+      />
+    );
+  }
+
+  // Single-skill user-authored entries that aren't already covered by a family.
+  const familyMembers = new Set(
+    (grammar.skill_families ?? []).flatMap(f => f.members)
+  );
+  const standaloneSkills = grammar.user_authored_skills.filter(s => !familyMembers.has(s.skill));
+  if (standaloneSkills.length > 0) {
+    out.push(
+      <GrammarLine
+        key="standalone-skills"
+        label="Other user-authored skills"
+        body={standaloneSkills.slice(0, 5).map(s => `${s.skill} ×${s.count}`).join(" · ")}
+        days={standaloneSkills.flatMap(s => s.days).filter((v, i, a) => a.indexOf(v) === i).sort()}
+      />
+    );
+  }
+
+  for (const sa of grammar.user_authored_subagents ?? []) {
+    out.push(
+      <div key={`sub-${sa.type}`} style={{
+        padding: "10px 12px", borderRadius: 8,
+        background: "var(--af-surface)",
+        border: "1px solid color-mix(in srgb, var(--af-accent) 22%, var(--af-border-subtle))",
+      }}>
+        <div style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+          textTransform: "uppercase", color: "var(--af-accent)",
+          marginBottom: 4,
+        }}>User-authored subagent · {sa.type}</div>
+        <div style={{ fontSize: 12, color: "var(--af-text)", lineHeight: 1.5 }}>
+          Dispatched {sa.count} time{sa.count === 1 ? "" : "s"} on {sa.days.length} day{sa.days.length === 1 ? "" : "s"}.
+        </div>
+        {sa.sample_prompt_preview && (
+          <div style={{
+            marginTop: 6, padding: "6px 10px", borderRadius: 6,
+            background: "var(--af-surface-raised)",
+            borderLeft: "2px solid var(--af-accent)",
+            fontSize: 11, lineHeight: 1.5, color: "var(--af-text)", fontStyle: "italic",
+          }}>
+            <span style={{ color: "var(--af-text-tertiary)" }}>“</span>
+            {sa.sample_prompt_preview}
+            <span style={{ color: "var(--af-text-tertiary)" }}>”</span>
+          </div>
+        )}
+        {sa.days.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <DayChips dates={sa.days} tone="var(--af-accent)" />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Custom slash-command frame — surface here as user-authored commands the
+  // user invoked (the harness's command surface).
+  const slashCmd = grammar.prompt_frames.find(f => f.frame === "slash-command");
+  if (slashCmd) {
+    out.push(
+      <GrammarLine
+        key="slash-cmd"
+        label="Custom slash-commands"
+        body={`Invoked ${slashCmd.count} time${slashCmd.count === 1 ? "" : "s"} via <command-name> framing.`}
+        days={slashCmd.days}
+      />
+    );
+  }
+
+  return out;
+}
+
+function renderCommunicationLines(grammar: NonNullable<WeekDigestType["interaction_grammar"]>): ReactNode[] {
+  const cs = grammar.communication_style;
+  if (!cs) return [];
+  const out: ReactNode[] = [];
+
+  // Verbosity histogram inline.
+  const v = cs.verbosity_distribution;
+  const total = v.short + v.medium + v.long + v.very_long;
+  if (total > 0) {
+    out.push(
+      <GrammarLine
+        key="verbosity"
+        label="Prompt length distribution"
+        body={`${v.short} short (<100c) · ${v.medium} medium (100–500c) · ${v.long} long (500–2000c) · ${v.very_long} very-long (>2000c) — across ${total} session opener${total === 1 ? "" : "s"}.`}
+      />
+    );
+  }
+
+  // External refs.
+  if (cs.external_context_refs && cs.external_context_refs.length > 0) {
+    const byKind = new Map<string, number>();
+    for (const r of cs.external_context_refs) {
+      byKind.set(r.ref_kind, (byKind.get(r.ref_kind) ?? 0) + 1);
+    }
+    const summary = [...byKind.entries()].map(([k, c]) => `${c} ${k}`).join(" · ");
+    out.push(
+      <GrammarLine
+        key="ext-refs"
+        label="External-context references"
+        body={`${cs.external_context_refs.length} session opener${cs.external_context_refs.length === 1 ? "" : "s"} delegated by reference rather than spelling out the work — ${summary}.`}
+        days={[...new Set(cs.external_context_refs.map(r => r.date))].sort()}
+      />
+    );
+  }
+
+  // Steering intensity.
+  const s = cs.steering;
+  if (s && (s.total_interrupts > 0 || s.total_frustrated > 0 || s.total_dissatisfied > 0)) {
+    const intensity = s.total_turns > 0 ? ((s.total_interrupts / s.total_turns) * 100) : 0;
+    const parts: string[] = [];
+    parts.push(`${s.total_interrupts} interrupt${s.total_interrupts === 1 ? "" : "s"} across ${s.total_turns} turns (${intensity.toFixed(1)}%)`);
+    if (s.total_frustrated > 0) parts.push(`${s.total_frustrated} frustrated`);
+    if (s.total_dissatisfied > 0) parts.push(`${s.total_dissatisfied} dissatisfied`);
+    if (s.sessions_with_mid_run_redirect > 0) parts.push(`${s.sessions_with_mid_run_redirect} session${s.sessions_with_mid_run_redirect === 1 ? "" : "s"} with ≥2 interrupts`);
+    out.push(
+      <GrammarLine
+        key="steering"
+        label="Steering intensity"
+        body={parts.join(" · ")}
+      />
+    );
+  } else if (s) {
+    out.push(
+      <GrammarLine
+        key="steering-none"
+        label="Steering intensity"
+        body={`No interrupts or frustrated/dissatisfied signals across ${s.total_turns} turns — let the agent run.`}
+      />
+    );
+  }
+
+  return out;
+}
+
+function renderClaudeFeatureLines(grammar: NonNullable<WeekDigestType["interaction_grammar"]>): ReactNode[] {
+  const out: ReactNode[] = [];
+  for (const f of grammar.prompt_frames) {
+    if (f.origin !== "claude-feature") continue;
+    if (f.frame === "slash-command") continue;  // already shown under Harness
+    const label = FRAME_LABELS[f.frame] ?? f.frame;
+    const help = FRAME_HELP[f.frame] ?? "";
+    out.push(
+      <GrammarLine
+        key={`cf-${f.frame}`}
+        label={label}
+        body={`${f.count} session opener${f.count === 1 ? "" : "s"}${help ? `. ${help}` : "."}`}
+        days={f.days}
+      />
+    );
+  }
+  return out;
+}
+
+function renderMiscGrammarLines(grammar: NonNullable<WeekDigestType["interaction_grammar"]>): ReactNode[] {
+  const out: ReactNode[] = [];
 
   if (grammar.brainstorming_warmup_days.length > 0) {
-    lines.push(
+    out.push(
       <GrammarLine
         key="brainstorm"
-        label="Brainstorming as warmup ritual"
+        label="Brainstorming as warmup"
         body={`Loaded a brainstorming/writing-plans skill before tool use on ${grammar.brainstorming_warmup_days.length} day${grammar.brainstorming_warmup_days.length === 1 ? "" : "s"}.`}
         days={grammar.brainstorming_warmup_days}
       />
     );
   }
 
+  // Personal-habit frames (handoff-prose).
   for (const f of grammar.prompt_frames) {
-    const label = FRAME_LABELS[f.frame] ?? f.frame;
-    lines.push(
+    if (f.origin !== "personal-habit") continue;
+    out.push(
       <GrammarLine
-        key={`frame-${f.frame}`}
-        label={`${label} frame`}
-        body={`Used ${f.count} time${f.count === 1 ? "" : "s"} as the opening of a session.`}
+        key={`ph-${f.frame}`}
+        label={`${FRAME_LABELS[f.frame] ?? f.frame} (personal habit)`}
+        body={`${f.count} session opener${f.count === 1 ? "" : "s"}. ${FRAME_HELP[f.frame] ?? ""}`}
         days={f.days}
       />
     );
   }
 
-  if (grammar.user_authored_skills.length > 0) {
-    const top = grammar.user_authored_skills.slice(0, 5);
-    lines.push(
-      <GrammarLine
-        key="user-skills"
-        label="User-authored skills"
-        body={top.map(s => `${s.skill} ×${s.count}`).join(" · ")}
-        days={grammar.user_authored_skills.flatMap(s => s.days).filter((v, i, a) => a.indexOf(v) === i).sort()}
-      />
-    );
-  }
-
+  // Threads — show all, with a "+N more" fold past 5.
   if (grammar.threads.length > 0) {
-    for (const t of grammar.threads.slice(0, 3)) {
-      const dayList = t.entries.map(e => e.date).sort();
-      const span = dayList.length;
-      lines.push(
-        <GrammarLine
-          key={`thread-${t.thread_id}`}
-          label={`Multi-day thread`}
-          body={`Session ${t.thread_id.slice(0, 8)} ran across ${span} days, ${Math.round(t.total_active_min)}m total${t.outcome ? `, finishing ${t.outcome}` : ""}.`}
-          days={dayList}
-        />
-      );
-    }
+    out.push(<ThreadList key="threads" threads={grammar.threads} />);
   }
 
   if (grammar.todo_ops_total > 0) {
-    lines.push(
+    out.push(
       <GrammarLine
         key="todo"
         label="TodoWrite ops"
@@ -897,7 +1110,7 @@ function InteractionGrammarSection({
   }
 
   if (grammar.plan_mode.exit_plan_calls === 0 && grammar.plan_mode.days_with_plan === 0) {
-    lines.push(
+    out.push(
       <GrammarLine
         key="no-plan"
         label="Plan Mode unused"
@@ -905,7 +1118,7 @@ function InteractionGrammarSection({
       />
     );
   } else {
-    lines.push(
+    out.push(
       <GrammarLine
         key="plan-mode"
         label="Plan Mode"
@@ -914,13 +1127,69 @@ function InteractionGrammarSection({
     );
   }
 
-  if (lines.length === 0) return null;
+  return out;
+}
+
+function ThreadList({ threads }: { threads: NonNullable<WeekDigestType["interaction_grammar"]>["threads"] }) {
+  const [expanded, setExpanded] = useState(false);
+  const sorted = threads.slice().sort((a, b) => b.entries.length - a.entries.length || b.total_active_min - a.total_active_min);
+  const visible = expanded ? sorted : sorted.slice(0, 5);
+  const hidden = sorted.length - visible.length;
   return (
-    <Section title="Your interaction grammar" anchor="grammar">
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {lines}
-      </div>
-    </Section>
+    <div style={{
+      padding: "10px 12px", borderRadius: 8,
+      background: "var(--af-surface)",
+      border: "1px solid var(--af-border-subtle)",
+    }}>
+      <div style={{
+        fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+        textTransform: "uppercase", color: "var(--af-text-tertiary)",
+        marginBottom: 6,
+      }}>Multi-day session threads · {threads.length}</div>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+        {visible.map(t => {
+          const dayList = t.entries.map(e => e.date).sort();
+          const project = t.entries[0]?.project_display ?? "";
+          return (
+            <li key={t.thread_id} style={{
+              fontSize: 11, color: "var(--af-text)", lineHeight: 1.5,
+              fontFamily: "var(--font-mono)",
+              display: "flex", gap: 8, alignItems: "baseline",
+            }}>
+              <span style={{ color: "var(--af-text-tertiary)" }}>{t.thread_id.slice(0, 8)}</span>
+              <span style={{ color: "var(--af-text-secondary)" }}>{project}</span>
+              <span style={{ color: "var(--af-text)" }}>{dayList.length}d · {Math.round(t.total_active_min)}m</span>
+              <span style={{ color: "var(--af-text-tertiary)" }}>{dayList[0]} → {dayList[dayList.length - 1]}</span>
+              {t.outcome && <span style={{ color: "var(--af-text-secondary)" }}>· {t.outcome}</span>}
+            </li>
+          );
+        })}
+      </ul>
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          style={{
+            marginTop: 6, padding: "3px 8px", borderRadius: 4,
+            background: "transparent", border: "1px solid var(--af-border-subtle)",
+            fontSize: 10, color: "var(--af-text-secondary)", cursor: "pointer",
+            fontFamily: "var(--font-mono)",
+          }}
+        >+{hidden} more</button>
+      )}
+      {expanded && sorted.length > 5 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          style={{
+            marginTop: 6, padding: "3px 8px", borderRadius: 4,
+            background: "transparent", border: "1px solid var(--af-border-subtle)",
+            fontSize: 10, color: "var(--af-text-secondary)", cursor: "pointer",
+            fontFamily: "var(--font-mono)",
+          }}
+        >show less</button>
+      )}
+    </div>
   );
 }
 

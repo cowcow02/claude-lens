@@ -77,7 +77,25 @@ INPUT shape (JSON payload):
 - shipped: PRs with date+project
 - top_flags, top_goal_categories
 - working_shapes: array of { shape, occurrence_count, days[], outcome_distribution, sample_evidence (one quoted subagent prompt or first_user with date) }
-- interaction_grammar: { brainstorming_warmup_days[], prompt_frames[]: {frame, count, days[]}, user_authored_skills[]: {skill, count, days[]}, threads[]: {thread_id, entries[], total_active_min, outcome}, todo_ops_total, plan_mode: {exit_plan_calls, days_with_plan} }
+- interaction_grammar:
+    - brainstorming_warmup_days[]
+    - prompt_frames[]: { frame, origin: "claude-feature" | "personal-habit", count, days[] }
+        — Claude features the user employs (teammate from agent teams, task-notification from Monitor tool, local-command-caveat, slash-command, image-attached) vs personal habits the user has adopted (handoff-prose for cross-session compaction). Don't mistake claude-feature framings for things the user invented.
+    - user_authored_skills[]: { skill, count, days[] }
+    - skill_families[]: { family, members[], total_count, days[] }
+        — User-authored skills sharing a prefix-before-hyphen. Surfaces cohesive harness toolchains (e.g. "harness" family covering harness-build, harness-build-pickup, harness-orchestrate-analyze).
+    - user_authored_subagents[]: { type, count, days[], sample_description, sample_prompt_preview }
+        — Task-tool subagent types not in the stock set (general-purpose / Explore / Plan / claude-code-guide / superpowers:* / etc.). These are the user's own subagent definitions; surface them by name.
+    - threads[]: { thread_id, entries[], total_active_min, outcome }
+    - communication_style:
+        - verbosity_distribution: { short (<100c), medium (100-500c), long (500-2000c), very_long (>2000c) }
+            — Histogram of first_user lengths. High very_long count = user explains a lot per directive (high control); high short count = user gives terse imperatives or relies on external context (high delegation).
+        - external_context_refs[]: { date, session_id, ref_kind: "linear-kip"|"github-issue-pr"|"branch-ref"|"url", preview }
+            — Sessions that opened by referencing an external system (KIP-N, issue #N, branch refs, URLs) rather than spelling out the work. Indicator of "go look it up" delegation.
+        - steering: { total_interrupts, total_frustrated, total_dissatisfied, sessions_with_mid_run_redirect, total_turns }
+            — Corrections during execution. Normalize against total_turns to estimate steering intensity.
+    - todo_ops_total
+    - plan_mode: { exit_plan_calls, days_with_plan }
 - day_summaries: per-day { date, day_name, headline, what_went_well, what_hit_friction, suggestion, agent_min, outcome_day, helpfulness_day, top_flags }
 - flag_glossary
 
@@ -151,7 +169,7 @@ ANCHORING RULES (critical — every finding must pass these):
 
 1. **Every what_worked / what_stalled / what_surprised / where_to_lean MUST set anchor** to a value that exists in the input:
    - A working_shapes[].shape value the user actually used this week, OR
-   - "interaction_grammar.<key>" where key is one of: brainstorming_warmup_days, prompt_frames, user_authored_skills, threads, OR
+   - "interaction_grammar.<key>" where key is one of: brainstorming_warmup_days, prompt_frames, user_authored_skills, skill_families, user_authored_subagents, threads, communication_style.verbosity, communication_style.external_refs, communication_style.steering, OR
    - "plan-mode-gap" (only valid when interaction_grammar.plan_mode.exit_plan_calls === 0)
 
 2. **Every evidence.quote MUST appear verbatim** somewhere in the input — day_summary.headline / what_went_well / what_hit_friction, working_shapes[].occurrences[].evidence_subagent.prompt_preview, working_shapes[].occurrences[].evidence_first_user, or interaction_grammar fields. The harness will substring-check; ungrounded findings are dropped automatically.
@@ -170,6 +188,22 @@ ANCHORING RULES (critical — every finding must pass these):
 6. **No archetype labels.** No "Orchestration Conductor" / "Solo Builder" / personality-quiz framing. Working shapes are observed patterns, not identity claims.
 
 7. **Strict JSON.** No trailing commas, no prose outside, no fence.
+
+USER-IDENTITY RULES (read carefully — these often go wrong):
+
+- **Claude features the user employs ≠ tools the user built.** \`<teammate-message>\` is from Claude's agent-teams feature, not a user invention. \`<task-notification>\` is from the Monitor tool. \`<local-command-caveat>\` is a Claude convention. \`<command-message>\` / \`<command-name>\` is the slash-command framing. The \`origin\` field on each prompt_frame says which is which — respect it. "You used Claude's agent-teams feature on N days" is correct; "you designed the teammate-message format" is wrong.
+
+- **What IS the user's own harness:** user_authored_skills (anything not matching stock prefixes), skill_families (the cohesive toolchains they roll up to — e.g. "harness-*"), user_authored_subagents (Task subagent types not in the stock set — e.g. \`implement-teammate\`), and any custom slash commands (visible via prompt_frames[frame=slash-command] and the \`<command-name>\` content). When you describe their harness, name THESE.
+
+- **handoff-prose is a personal compaction habit, NOT a standard pattern.** Treat it as "a recent personal habit you've adopted to break a long-running thread into multiple sessions." Don't elevate it to the same level as named working shapes. Don't recommend others copy it.
+
+COMMUNICATION-STYLE RULES:
+
+- The verbosity distribution + external_context_refs together describe how the user delegates. Many short prompts + many external refs = high delegation ("go look it up yourself"). Many very_long prompts + few external refs = high control ("here's everything you need, follow it"). Mixed is mixed; say so.
+
+- Steering intensity is interrupts + frustrated + dissatisfied normalized against total_turns. Low steering on a high-output week = trust paid off. High steering on a low-output week = friction. High steering on a high-output week = micro-managed but successful — the user paid for output with attention.
+
+- These dimensions belong in what_worked / what_stalled / what_surprised when the data shows something specific. Anchor to "communication_style.verbosity" / "communication_style.external_refs" / "communication_style.steering" as appropriate.
 
 VOCABULARY RULES:
 
@@ -282,7 +316,12 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
         "interaction_grammar.brainstorming_warmup_days",
         "interaction_grammar.prompt_frames",
         "interaction_grammar.user_authored_skills",
+        "interaction_grammar.skill_families",
+        "interaction_grammar.user_authored_subagents",
         "interaction_grammar.threads",
+        "interaction_grammar.communication_style.verbosity",
+        "interaction_grammar.communication_style.external_refs",
+        "interaction_grammar.communication_style.steering",
       ],
       decision: ["plan-mode-gap"],
     },

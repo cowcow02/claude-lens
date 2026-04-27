@@ -1,5 +1,6 @@
 import {
   CURRENT_WEEK_DIGEST_SCHEMA_VERSION,
+  PROMPT_FRAME_ORIGIN,
   type DayDigest, type DayHelpfulness, type DayOutcome, type Entry, type EntrySubagent,
   type WeekDigest, type WeekInteractionModes, type WeekWorkingShapeRow,
   type WeekInteractionGrammar, type WorkingShape, type SubagentRole,
@@ -198,7 +199,7 @@ function truncate(s: string, max: number): string {
  *  matters: more specific verbs win. */
 export function classifySubagentRole(sa: EntrySubagent): SubagentRole {
   const text = `${sa.description} ${sa.prompt_preview}`.toLowerCase();
-  if (/\b(re-?review|review[s]?|verify|audit|spec[- ]review|code[- ]quality|code[- ]reuse|efficiency review)\b/.test(text)) {
+  if (/\b(re-?review|review[s]?|verify|audit|spec[- ]review|code[- ]quality|code[- ]reuse|efficiency review|sanity check|quick test)\b/.test(text)) {
     return "reviewer";
   }
   if (/\b(implement|build chunk|build task|initialize|create the|add the)\b/.test(text)) {
@@ -207,7 +208,7 @@ export function classifySubagentRole(sa: EntrySubagent): SubagentRole {
   if (/\bexplore\b|\binventory\b|\bmap\b.*\b(codebase|repo|branch)\b|\baudit\b.*coverage/.test(text)) {
     return "explorer";
   }
-  if (/\b(investigate|research|reverse[- ]engineer|study|analy[sz]e)\b/.test(text)) {
+  if (/\b(investigate|research|reverse[- ]engineer|study|analy[sz]e|look up|tell me|brief me on|find out)\b/.test(text)) {
     return "researcher";
   }
   if (/\b(env(?:ironment)? setup|configure|setup|bootstrap)\b/.test(text)) {
@@ -217,6 +218,16 @@ export function classifySubagentRole(sa: EntrySubagent): SubagentRole {
     return "polish";
   }
   return "other";
+}
+
+/** Subagent types shipped with Claude Code or the public superpowers / mcp /
+ *  codex / frontend-design / code-review / claude-code-guide / playwright-qa-verifier
+ *  / statusline-setup / Plan / Explore / general-purpose set. Anything else is
+ *  treated as user-authored. */
+const STOCK_SUBAGENT_PREFIXES = /^(general-purpose|Explore|Plan|claude-code-guide|playwright-qa-verifier|statusline-setup|frontend-design:|code-review:|code-simplifier:|codex:|superpowers:)/;
+
+export function isStockSubagentType(type: string): boolean {
+  return STOCK_SUBAGENT_PREFIXES.test(type);
 }
 
 // ─── Working-shape inference ─────────────────────────────────────────────
@@ -289,9 +300,22 @@ export function detectPromptFrames(text: string | null | undefined): PromptFrame
   if (!text) return [];
   const out: PromptFrame[] = [];
   if (/<teammate-message\b/i.test(text)) out.push("teammate");
+  if (/<task-notification\b/i.test(text)) out.push("task-notification");
   if (/<local-command-caveat\b/i.test(text)) out.push("local-command-caveat");
-  if (/^# Handoff:/m.test(text) || /^## Session conclusion/m.test(text)) out.push("handoff-prose");
+  if (/<command-(message|name)\b/i.test(text)) out.push("slash-command");
   if (/\[Image #\d+\]/.test(text)) out.push("image-attached");
+  // Broadened handoff-prose: cross-session compaction patterns the user
+  // adopted as a personal habit. Catches "Here's the handoff prompt",
+  // "Here's the handover prompt", "session-close summary", "wrap-up summary",
+  // "all wrapped up", "all captured." in addition to the original markdown
+  // headers.
+  if (
+    /\b(here'?s the (handoff|handover) prompt|session-close summary|wrap-up summary|all wrapped up|all captured\.)\b/i.test(text)
+    || /^##? (Wrap-up|Session conclusion|Handoff)\b/m.test(text)
+    || /^# Handoff:/m.test(text)
+  ) {
+    out.push("handoff-prose");
+  }
   return out;
 }
 
@@ -385,10 +409,50 @@ export function computeWorkingShapes(
 
 const BRAINSTORM_PATTERN = /brainstorm|writing-plans/i;
 
+const EXTERNAL_REF_PATTERNS: Array<{
+  kind: "linear-kip" | "github-issue-pr" | "branch-ref" | "url";
+  re: RegExp;
+}> = [
+  { kind: "linear-kip", re: /\bKIP-\d+\b/i },
+  { kind: "github-issue-pr", re: /\b(issue|pr|pull request)\s*#\d+\b|github\.com\/[^\s]+\/(issues|pull)\/\d+/i },
+  { kind: "branch-ref", re: /\b(branch|feat|fix|chore|refactor)[\/:]\s*[\w./-]+|on `[\w./-]+`/i },
+  { kind: "url", re: /https?:\/\/\S+/ },
+];
+
+function detectExternalRef(text: string | null | undefined): { kind: "linear-kip" | "github-issue-pr" | "branch-ref" | "url"; preview: string } | null {
+  if (!text) return null;
+  // Skip cases where the text is JUST a Claude-feature framing — those aren't
+  // user delegating to external context, they're harness handoffs.
+  if (/<teammate-message|<task-notification|<local-command-caveat/i.test(text.slice(0, 400))) return null;
+  for (const { kind, re } of EXTERNAL_REF_PATTERNS) {
+    const m = text.match(re);
+    if (m) return { kind, preview: text.slice(0, 160) };
+  }
+  return null;
+}
+
+function bucketLength(n: number): "short" | "medium" | "long" | "very_long" {
+  if (n < 100) return "short";
+  if (n < 500) return "medium";
+  if (n < 2000) return "long";
+  return "very_long";
+}
+
 export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGrammar {
   const brainstormDays = new Set<string>();
   const frameMap = new Map<PromptFrame, { count: number; days: Set<string> }>();
   const userSkillMap = new Map<string, { count: number; days: Set<string> }>();
+  const userSubagentMap = new Map<string, { count: number; days: Set<string>; sample_description: string; sample_prompt_preview: string }>();
+
+  // Communication style accumulators.
+  const verbosity = { short: 0, medium: 0, long: 0, very_long: 0 };
+  const externalRefs: WeekInteractionGrammar["communication_style"]["external_context_refs"] = [];
+  let total_interrupts = 0;
+  let total_frustrated = 0;
+  let total_dissatisfied = 0;
+  let total_turns = 0;
+  let sessions_with_mid_run_redirect = 0;
+
   let todo_ops_total = 0;
   let exit_plan_calls = 0;
   const planDays = new Set<string>();
@@ -402,11 +466,9 @@ export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGram
     exit_plan_calls += e.numbers.exit_plan_calls;
     if (e.numbers.exit_plan_calls > 0 || (e.flags ?? []).includes("plan_used")) planDays.add(day);
 
-    // Brainstorming warmup: skill loaded matching brainstorm pattern.
+    // Skills.
     for (const skill of Object.keys(e.skills ?? {})) {
-      if (BRAINSTORM_PATTERN.test(skill)) {
-        brainstormDays.add(day);
-      }
+      if (BRAINSTORM_PATTERN.test(skill)) brainstormDays.add(day);
       if (classifySkill(skill) === "user") {
         const cur = userSkillMap.get(skill) ?? { count: 0, days: new Set<string>() };
         cur.count += e.skills[skill] ?? 1;
@@ -415,12 +477,46 @@ export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGram
       }
     }
 
+    // Subagents — surface user-authored types separately.
+    for (const sa of e.subagents ?? []) {
+      if (isStockSubagentType(sa.type)) continue;
+      const cur = userSubagentMap.get(sa.type) ?? {
+        count: 0, days: new Set<string>(),
+        sample_description: sa.description, sample_prompt_preview: sa.prompt_preview,
+      };
+      cur.count += 1;
+      cur.days.add(day);
+      // Keep the longest prompt_preview as sample.
+      if (sa.prompt_preview.length > cur.sample_prompt_preview.length) {
+        cur.sample_description = sa.description;
+        cur.sample_prompt_preview = sa.prompt_preview;
+      }
+      userSubagentMap.set(sa.type, cur);
+    }
+
+    // Prompt frames.
     for (const frame of detectPromptFrames(e.first_user)) {
       const cur = frameMap.get(frame) ?? { count: 0, days: new Set<string>() };
       cur.count += 1;
       cur.days.add(day);
       frameMap.set(frame, cur);
     }
+
+    // Communication style — verbosity.
+    const fuLen = (e.first_user || "").length;
+    if (fuLen > 0) verbosity[bucketLength(fuLen)] += 1;
+
+    // External context refs in first_user.
+    const ext = detectExternalRef(e.first_user);
+    if (ext) externalRefs.push({ date: day, session_id: e.session_id, ref_kind: ext.kind, preview: truncate(ext.preview, 200) });
+
+    // Steering — interrupts + frustrated/dissatisfied.
+    const ints = e.numbers.interrupts ?? 0;
+    total_interrupts += ints;
+    total_turns += e.numbers.turn_count ?? 0;
+    total_frustrated += e.satisfaction_signals?.frustrated ?? 0;
+    total_dissatisfied += e.satisfaction_signals?.dissatisfied ?? 0;
+    if (ints >= 2) sessions_with_mid_run_redirect += 1;
 
     const arr = bySession.get(e.session_id) ?? [];
     arr.push(e);
@@ -434,7 +530,6 @@ export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGram
     if (distinctDays.size < 2) continue;
     arr.sort((a, b) => a.local_day.localeCompare(b.local_day));
     const total_active_min = arr.reduce((s, e) => s + e.numbers.active_min, 0);
-    const lastDay = arr[arr.length - 1]!.local_day;
     const lastEntry = arr[arr.length - 1]!;
     threads.push({
       thread_id: sid,
@@ -447,19 +542,64 @@ export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGram
       total_active_min,
       outcome: (lastEntry.enrichment?.outcome ?? null) as DayOutcome | null,
     });
-    void lastDay;
   }
   threads.sort((a, b) => b.total_active_min - a.total_active_min);
+
+  // Skill-family rollup: split user-authored skills on "-", group by prefix.
+  const familyMap = new Map<string, { members: Set<string>; total_count: number; days: Set<string> }>();
+  for (const [skill, v] of userSkillMap.entries()) {
+    const family = skill.includes("-") ? skill.split("-")[0]! : skill;
+    const cur = familyMap.get(family) ?? { members: new Set<string>(), total_count: 0, days: new Set<string>() };
+    cur.members.add(skill);
+    cur.total_count += v.count;
+    for (const d of v.days) cur.days.add(d);
+    familyMap.set(family, cur);
+  }
+  const skill_families = [...familyMap.entries()]
+    .filter(([, v]) => v.members.size >= 2 || v.total_count >= 3)
+    .sort((a, b) => b[1].total_count - a[1].total_count)
+    .map(([family, v]) => ({
+      family,
+      members: [...v.members].sort(),
+      total_count: v.total_count,
+      days: [...v.days].sort(),
+    }));
 
   return {
     brainstorming_warmup_days: [...brainstormDays].sort(),
     prompt_frames: [...frameMap.entries()]
       .sort((a, b) => b[1].count - a[1].count)
-      .map(([frame, v]) => ({ frame, count: v.count, days: [...v.days].sort() })),
+      .map(([frame, v]) => ({
+        frame,
+        origin: PROMPT_FRAME_ORIGIN[frame],
+        count: v.count,
+        days: [...v.days].sort(),
+      })),
     user_authored_skills: [...userSkillMap.entries()]
       .sort((a, b) => b[1].count - a[1].count)
       .map(([skill, v]) => ({ skill, count: v.count, days: [...v.days].sort() })),
+    skill_families,
+    user_authored_subagents: [...userSubagentMap.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([type, v]) => ({
+        type,
+        count: v.count,
+        days: [...v.days].sort(),
+        sample_description: v.sample_description,
+        sample_prompt_preview: truncate(v.sample_prompt_preview, 200),
+      })),
     threads,
+    communication_style: {
+      verbosity_distribution: verbosity,
+      external_context_refs: externalRefs,
+      steering: {
+        total_interrupts,
+        total_frustrated,
+        total_dissatisfied,
+        sessions_with_mid_run_redirect,
+        total_turns,
+      },
+    },
     todo_ops_total,
     plan_mode: { exit_plan_calls, days_with_plan: planDays.size },
   };
