@@ -87,7 +87,11 @@ export function WeekDigest({
         </div>
       )}
 
-      <Sparkline sparkline={digest.helpfulness_sparkline} />
+      <WeekStatsStrip digest={digest} />
+
+      <DaysActiveBars digest={digest} />
+
+      <HoursOfDayStrip hours={digest.hours_distribution} />
 
       {digest.standout_days && digest.standout_days.length > 0 && (
         <Section title="Standout days" anchor="standout">
@@ -184,6 +188,262 @@ export function WeekDigest({
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────
+
+function WeekStatsStrip({ digest }: { digest: WeekDigestType }) {
+  const totalHrs = digest.agent_min_total / 60;
+  const totalStr = totalHrs >= 1 ? `${totalHrs.toFixed(1)}h` : `${Math.round(digest.agent_min_total)}m`;
+  const peakHourBucket = peakHour(digest.hours_distribution);
+  const stats: Array<{ label: string; value: ReactNode; href?: string; title?: string }> = [
+    {
+      label: "Agent time",
+      value: `${totalStr} across ${digest.days_active.length} day${digest.days_active.length === 1 ? "" : "s"}`,
+    },
+  ];
+  if (digest.busiest_day) {
+    stats.push({
+      label: "Busiest day",
+      href: `/digest/${digest.busiest_day.date}`,
+      value: `${dayName(digest.busiest_day.date)} ${digest.busiest_day.date.slice(5)} · ${Math.round(digest.busiest_day.agent_min)}m · ${digest.busiest_day.shipped_count} PR`,
+    });
+  }
+  if (digest.longest_run) {
+    stats.push({
+      label: "Longest single run",
+      href: `/sessions/${digest.longest_run.session_id}`,
+      title: `Session ${digest.longest_run.session_id.slice(0, 8)}`,
+      value: `${Math.round(digest.longest_run.active_min)}m · ${digest.longest_run.project_display} · ${dayName(digest.longest_run.date)} ${digest.longest_run.date.slice(5)}`,
+    });
+  }
+  if (peakHourBucket) {
+    stats.push({
+      label: "Peak hours",
+      title: `${formatHourRange(peakHourBucket.start, peakHourBucket.end)} carried ${peakHourBucket.share_pct.toFixed(0)}% of the week's agent time`,
+      value: `${formatHourRange(peakHourBucket.start, peakHourBucket.end)} · ${peakHourBucket.share_pct.toFixed(0)}%`,
+    });
+  }
+
+  return (
+    <section style={{
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+      gap: 8,
+      marginBottom: 20,
+    }}>
+      {stats.map((s, i) => {
+        const inner = (
+          <div style={{
+            padding: "10px 12px", borderRadius: 8,
+            background: "var(--af-surface)",
+            border: "1px solid var(--af-border-subtle)",
+            height: "100%",
+          }} title={s.title}>
+            <div style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+              textTransform: "uppercase", color: "var(--af-text-tertiary)",
+              marginBottom: 4,
+            }}>{s.label}</div>
+            <div style={{
+              fontSize: 12, color: "var(--af-text)", lineHeight: 1.45,
+              fontFamily: "var(--font-mono)",
+            }}>{s.value}</div>
+          </div>
+        );
+        return s.href ? (
+          <Link key={i} href={s.href} style={{ textDecoration: "none" }}>{inner}</Link>
+        ) : (
+          <div key={i}>{inner}</div>
+        );
+      })}
+    </section>
+  );
+}
+
+function DaysActiveBars({ digest }: { digest: WeekDigestType }) {
+  if (digest.days_active.length === 0) return null;
+  const maxMin = Math.max(...digest.days_active.map(d => d.agent_min));
+  const dayMap = new Map(digest.days_active.map(d => [d.date, d]));
+  const dates = weekDateLabels(digest.window.start);
+  return (
+    <section style={{
+      display: "flex", gap: 6, alignItems: "stretch",
+      padding: "12px 0", marginBottom: 24,
+    }}>
+      {dates.map((date, i) => {
+        const d = dayMap.get(date);
+        const mins = d?.agent_min ?? 0;
+        const heightPct = maxMin > 0 && mins > 0 ? Math.max(8, (mins / maxMin) * 100) : 0;
+        const tone = d ? OUTCOME_TONE[d.outcome_day] : "var(--af-text-tertiary)";
+        const helpTone = d?.helpfulness_day ? HELP_COLORS[d.helpfulness_day] : null;
+        return (
+          <Link
+            key={i}
+            href={d ? `/digest/${date}` : "#"}
+            style={{
+              flex: 1, display: "flex", flexDirection: "column", alignItems: "stretch", gap: 2,
+              textDecoration: "none",
+              pointerEvents: d ? "auto" : "none",
+            }}
+            title={d
+              ? `${date} · ${Math.round(mins)}m · ${d.outcome_day}${d.shipped_count > 0 ? ` · ${d.shipped_count} PR` : ""}${d.helpfulness_day ? ` · helpfulness ${d.helpfulness_day}` : ""}`
+              : "no activity"
+            }
+          >
+            <div style={{
+              height: 56, borderRadius: 4, position: "relative",
+              background: "var(--af-surface)",
+              border: `1px solid ${d ? `color-mix(in srgb, ${tone} 28%, var(--af-border-subtle))` : "var(--af-border-subtle)"}`,
+              overflow: "hidden",
+            }}>
+              {d && (
+                <div style={{
+                  position: "absolute", bottom: 0, left: 0, right: 0,
+                  height: `${heightPct}%`,
+                  background: `color-mix(in srgb, ${tone} 28%, transparent)`,
+                }} />
+              )}
+              {helpTone && (
+                <div style={{
+                  position: "absolute", top: 4, right: 4,
+                  width: 6, height: 6, borderRadius: 999,
+                  background: helpTone,
+                }} title={d?.helpfulness_day ?? ""} />
+              )}
+            </div>
+            <div style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+              color: "var(--af-text-tertiary)", textAlign: "center",
+            }}>
+              {DAY_LABELS[i]}
+            </div>
+            <div style={{
+              fontSize: 9, fontFamily: "var(--font-mono)",
+              color: d ? "var(--af-text-secondary)" : "var(--af-text-tertiary)",
+              textAlign: "center",
+            }}>
+              {d ? `${Math.round(mins)}m` : "—"}
+            </div>
+          </Link>
+        );
+      })}
+    </section>
+  );
+}
+
+function HoursOfDayStrip({ hours }: { hours: number[] }) {
+  const total = hours.reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+  const maxBucket = Math.max(...hours);
+  return (
+    <section style={{ marginBottom: 28 }}>
+      <div style={{
+        display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6,
+      }}>
+        <h2 style={{ ...sectionTitleStyle(), margin: 0 }}>Hours of day</h2>
+        <span style={{ fontSize: 10, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
+          local time · width = minutes worked
+        </span>
+      </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(24, 1fr)",
+        gap: 2,
+        alignItems: "end",
+        height: 56,
+      }}>
+        {hours.map((mins, h) => {
+          const heightPct = maxBucket > 0 ? Math.max(mins > 0 ? 6 : 0, (mins / maxBucket) * 100) : 0;
+          return (
+            <div
+              key={h}
+              title={`${pad2(h)}:00 — ${pad2(h + 1)}:00 · ${Math.round(mins)}m (${total > 0 ? ((mins / total) * 100).toFixed(0) : 0}% of week)`}
+              style={{
+                position: "relative", height: "100%",
+                background: "var(--af-surface)",
+                borderRadius: 2,
+                overflow: "hidden",
+              }}
+            >
+              {mins > 0 && (
+                <div style={{
+                  position: "absolute", bottom: 0, left: 0, right: 0,
+                  height: `${heightPct}%`,
+                  background: "color-mix(in srgb, var(--af-accent) 36%, transparent)",
+                }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(24, 1fr)",
+        gap: 2, marginTop: 4,
+        fontSize: 8, fontFamily: "var(--font-mono)",
+        color: "var(--af-text-tertiary)", textAlign: "center",
+      }}>
+        {Array.from({ length: 24 }, (_, h) => (
+          <div key={h}>{h % 6 === 0 ? `${pad2(h)}` : ""}</div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const OUTCOME_TONE: Record<string, string> = {
+  shipped: "#48bb78",
+  partial: "#4299e1",
+  blocked: "#f56565",
+  exploratory: "#a0aec0",
+  trivial: "#cbd5e0",
+  idle: "#cbd5e0",
+};
+
+function peakHour(hours: number[]): { start: number; end: number; share_pct: number } | null {
+  const total = hours.reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+  // Find the longest contiguous window covering >= 60% of activity.
+  // Use a simple sliding-window: for each window length 1..24, find the max-sum window;
+  // pick the smallest length whose max-sum ≥ 60% of total.
+  for (let len = 1; len <= 24; len++) {
+    let bestSum = 0, bestStart = 0;
+    for (let s = 0; s <= 24 - len; s++) {
+      let sum = 0;
+      for (let i = 0; i < len; i++) sum += hours[s + i] ?? 0;
+      if (sum > bestSum) { bestSum = sum; bestStart = s; }
+    }
+    if (bestSum / total >= 0.6) {
+      return { start: bestStart, end: bestStart + len, share_pct: (bestSum / total) * 100 };
+    }
+  }
+  return null;
+}
+
+function formatHourRange(start: number, end: number): string {
+  const fmt = (h: number) => {
+    const period = h < 12 || h === 24 ? "am" : "pm";
+    const mod = ((h % 12) || 12);
+    return `${mod}${period}`;
+  };
+  return `${fmt(start)}–${fmt(end)}`;
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function weekDateLabels(startIso: string): string[] {
+  const out: string[] = [];
+  const start = new Date(startIso);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${day}`);
+  }
+  return out;
+}
 
 function RecurringThemes({ themes }: { themes: WeekDigestType["recurring_themes"] }) {
   if (!themes || themes.length === 0) return null;
@@ -525,39 +785,6 @@ function CopyBlock({ label, payload }: { label: string; payload: string }) {
       >
         {copied ? <><Check size={10} /> Copied</> : <><Copy size={10} /> {label}</>}
       </button>
-    </div>
-  );
-}
-
-function Sparkline({ sparkline }: { sparkline: DayHelpfulness[] }) {
-  const filled = sparkline.length > 0 && sparkline.some(h => h !== null);
-  if (!filled) return null;
-  return (
-    <div style={{
-      display: "flex", gap: 6, alignItems: "stretch",
-      padding: "12px 0", marginBottom: 24,
-    }}>
-      {sparkline.map((h, i) => (
-        <div key={i} style={{
-          flex: 1, padding: "10px 4px", borderRadius: 6,
-          textAlign: "center",
-          background: h ? `color-mix(in srgb, ${HELP_COLORS[h]} 14%, transparent)` : "var(--af-surface)",
-          border: `1px solid ${h ? `color-mix(in srgb, ${HELP_COLORS[h]} 28%, transparent)` : "var(--af-border-subtle)"}`,
-        }}>
-          <div style={{
-            fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
-            color: "var(--af-text-tertiary)", marginBottom: 4,
-          }}>
-            {DAY_LABELS[i]}
-          </div>
-          <div style={{
-            fontSize: 10, fontWeight: 600,
-            color: h ? HELP_COLORS[h] : "var(--af-text-tertiary)",
-          }}>
-            {h ?? "—"}
-          </div>
-        </div>
-      ))}
     </div>
   );
 }

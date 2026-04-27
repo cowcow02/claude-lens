@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import {
   CURRENT_WEEK_DIGEST_SCHEMA_VERSION,
-  type DayDigest, type DayHelpfulness, type DayOutcome, type WeekDigest,
+  type DayDigest, type DayHelpfulness, type DayOutcome, type Entry, type WeekDigest,
 } from "./types.js";
 import {
   DIGEST_WEEK_SYSTEM_PROMPT,
@@ -35,9 +35,16 @@ function toLocalDateString(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+export type BuildDeterministicWeekOptions = {
+  /** Optional entries — needed for longest_run + hours_distribution.
+   *  When omitted both fields are null/empty and the renderer hides those slices. */
+  entries?: Entry[];
+};
+
 export function buildDeterministicWeekDigest(
   monday: string,
   dayDigests: DayDigest[],
+  opts: BuildDeterministicWeekOptions = {},
 ): WeekDigest {
   const dates = weekDates(monday);
   const byDate = new Map<string, DayDigest>();
@@ -126,6 +133,45 @@ export function buildDeterministicWeekDigest(
     }
   }
 
+  // ── days_active strip + busiest_day ──
+  const days_active: WeekDigest["days_active"] = dayDigests
+    .filter(d => d.agent_min > 0)
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map(d => ({
+      date: d.key,
+      agent_min: d.agent_min,
+      shipped_count: d.shipped.length,
+      outcome_day: d.outcome_day,
+      helpfulness_day: d.helpfulness_day,
+    }));
+
+  let busiest_day: WeekDigest["busiest_day"] = null;
+  for (const d of days_active) {
+    if (!busiest_day || d.agent_min > busiest_day.agent_min) {
+      busiest_day = { date: d.date, agent_min: d.agent_min, shipped_count: d.shipped_count };
+    }
+  }
+
+  // ── longest_run + hours_distribution from entries ──
+  let longest_run: WeekDigest["longest_run"] = null;
+  const hours_distribution = new Array<number>(24).fill(0);
+  const entries = opts.entries ?? [];
+  for (const e of entries) {
+    if (!longest_run || e.numbers.active_min > longest_run.active_min) {
+      longest_run = {
+        session_id: e.session_id,
+        date: e.local_day,
+        project_display: prettyProject(e.project),
+        active_min: e.numbers.active_min,
+      };
+    }
+    const startMs = Date.parse(e.start_iso);
+    if (!Number.isNaN(startMs)) {
+      const hour = new Date(startMs).getHours();
+      hours_distribution[hour] = (hours_distribution[hour] ?? 0) + e.numbers.active_min;
+    }
+  }
+
   const sunday = dates[6]!;
   const window = { start: `${monday}T00:00:00`, end: `${sunday}T23:59:59` };
 
@@ -147,6 +193,10 @@ export function buildDeterministicWeekDigest(
     top_flags,
     top_goal_categories,
     concurrency_peak_day,
+    days_active,
+    busiest_day,
+    longest_run,
+    hours_distribution,
     headline: null,
     key_pattern: null,
     trajectory: null,
@@ -166,6 +216,8 @@ export type GenerateWeekOptions = {
   model?: string;
   callLLM?: CallLLM;
   onProgress?: (info: { bytes: number; elapsedMs: number }) => void;
+  /** Entries for the week — used to compute longest_run + hours_distribution. */
+  entries?: Entry[];
 };
 
 export type GenerateWeekResult = {
@@ -264,7 +316,7 @@ export async function generateWeekDigest(
   dayDigests: DayDigest[],
   opts: GenerateWeekOptions = {},
 ): Promise<GenerateWeekResult> {
-  const base = buildDeterministicWeekDigest(monday, dayDigests);
+  const base = buildDeterministicWeekDigest(monday, dayDigests, { entries: opts.entries });
   // Need at least 2 day digests with a real outcome to produce useful narrative.
   const enrichedDays = dayDigests.filter(d => d.outcome_day !== "idle" && d.outcome_day !== "trivial");
   if (enrichedDays.length < 2) return { digest: base, usage: null };

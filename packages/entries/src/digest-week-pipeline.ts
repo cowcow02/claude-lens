@@ -3,13 +3,14 @@ import {
   readWeekDigest,
   getCurrentWeekDigestFromCache, setCurrentWeekDigestInCache,
 } from "./digest-fs.js";
+import { listEntriesForDay } from "./fs.js";
 import { runDayDigestPipeline, type PipelineEvent, type PipelineOptions as DayPipelineOptions } from "./digest-day-pipeline.js";
 import { generateWeekDigest, buildDeterministicWeekDigest, weekDates } from "./digest-week.js";
 import { appendSpend } from "./budget.js";
 import { writeInteractiveLock, removeInteractiveLock } from "./pipeline-lock.js";
 import type { CallLLM } from "./enrich.js";
 import type { AiFeaturesSettings } from "./settings.js";
-import type { DayDigest, WeekDigest } from "./types.js";
+import type { DayDigest, Entry, WeekDigest } from "./types.js";
 
 export type WeekPipelineOptions = {
   settings: AiFeaturesSettings;
@@ -131,6 +132,13 @@ export async function* runWeekDigestPipeline(
     return;
   }
 
+  // Load entries for all dates in the week (cheap: filesystem read filtered by local_day).
+  const weekEntries: Entry[] = [];
+  for (const date of dates) {
+    if (date > opts.todayLocalDay) continue;
+    weekEntries.push(...(listEntriesForDay(date) as Entry[]));
+  }
+
   if (aiOn) writeInteractiveLock();
   try {
     let digest: WeekDigest;
@@ -139,6 +147,7 @@ export async function* runWeekDigestPipeline(
       const progressQueue: Array<{ bytes: number; elapsed_ms: number }> = [];
       const synthPromise = generateWeekDigest(monday, dayDigests, {
         model: opts.settings.model, callLLM: opts.callLLM,
+        entries: weekEntries,
         onProgress: info => { progressQueue.push({ bytes: info.bytes, elapsed_ms: info.elapsedMs }); },
       });
 
@@ -165,7 +174,7 @@ export async function* runWeekDigestPipeline(
         });
       }
     } else {
-      digest = buildDeterministicWeekDigest(monday, dayDigests);
+      digest = buildDeterministicWeekDigest(monday, dayDigests, { entries: weekEntries });
     }
 
     if (!isCurrentWeek) {

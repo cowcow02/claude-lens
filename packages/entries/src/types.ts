@@ -313,6 +313,30 @@ export type WeekDigest = DigestEnvelope & {
   top_goal_categories: Array<{ category: string; minutes: number }>;
   /** The day during the week with the highest concurrency_peak. null if all days had peak 0. */
   concurrency_peak_day: { date: string; peak: number } | null;
+  /** Per-day strip used for the time-and-shape visualization at the top of the report.
+   *  Entries are dates with non-zero data, in chronological order. */
+  days_active: Array<{
+    date: string;
+    agent_min: number;
+    shipped_count: number;
+    outcome_day: DayOutcome;
+    helpfulness_day: DayHelpfulness;
+  }>;
+  /** The single day with the most agent-min. null if zero active days. */
+  busiest_day: { date: string; agent_min: number; shipped_count: number } | null;
+  /** The single longest contiguous entry across the week — points to a real session.
+   *  Computed from entries (not day digests), so requires the pipeline to have loaded
+   *  entry data; null on the deterministic-only path or when no entries exist. */
+  longest_run: {
+    session_id: string;
+    date: string;
+    /** display_name of the project this run sat under. */
+    project_display: string;
+    active_min: number;
+  } | null;
+  /** Minutes of activity per hour-of-day (0–23) summed across the week, in server local TZ.
+   *  Each entry's active_min is attributed to its start_iso hour bucket. Length always 24. */
+  hours_distribution: number[];
 
   // ── LLM narrative (null when ai_features.enabled === false or synth failed) ──
 
