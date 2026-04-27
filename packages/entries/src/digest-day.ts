@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import {
   CURRENT_DAY_DIGEST_SCHEMA_VERSION,
   type DayDigest, type DayHelpfulness, type DayOutcome, type Entry,
@@ -10,6 +9,7 @@ import {
 } from "./prompts/digest-day.js";
 import type { CallLLM, EnrichUsage, LLMResponse } from "./enrich.js";
 import { computeCostUsd } from "./enrich.js";
+import { runClaudeSubprocess, parseAndValidate } from "./llm-runner.js";
 
 function prettyProjectName(p: string): string {
   const parts = p.split("/").filter(Boolean);
@@ -151,89 +151,10 @@ export type GenerateResult = {
 
 const DEFAULT_MODEL = "sonnet";
 
-async function defaultCallLLMDigest(args: {
-  model: string;
-  userPrompt: string;
-  reminder?: string;
-  onProgress?: (info: { bytes: number; elapsedMs: number }) => void;
-}): Promise<LLMResponse> {
-  return new Promise((resolve, reject) => {
-    const claudeArgs = [
-      "-p", "--output-format", "stream-json", "--verbose",
-      "--model", args.model, "--tools", "",
-      "--disable-slash-commands", "--no-session-persistence",
-      "--setting-sources", "",
-      "--append-system-prompt", DIGEST_DAY_SYSTEM_PROMPT,
-    ];
-    const proc = spawn("claude", claudeArgs, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env } });
-    const stdinPayload = args.reminder
-      ? `${args.userPrompt}\n\n---\n\n${args.reminder}`
-      : args.userPrompt;
-    proc.stdin.write(stdinPayload);
-    proc.stdin.end();
+const defaultCallLLMDigest: CallLLM = (args) =>
+  runClaudeSubprocess({ ...args, systemPrompt: DIGEST_DAY_SYSTEM_PROMPT });
 
-    let buffer = "", inputTokens = 0, outputTokens = 0, modelUsed = args.model, stderr = "";
-    const startMs = Date.now();
-    let lastReportedKb = -1;
-    proc.stdout.on("data", (chunk: Buffer) => {
-      for (const line of chunk.toString("utf8").split("\n")) {
-        const t = line.trim();
-        if (!t) continue;
-        try {
-          const obj = JSON.parse(t) as Record<string, unknown>;
-          if (obj.type === "assistant") {
-            const msg = obj.message as Record<string, unknown> | undefined;
-            const content = msg?.content as Array<Record<string, unknown>> | undefined;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (block.type === "text" && typeof block.text === "string") {
-                  buffer += block.text;
-                  if (args.onProgress) {
-                    const kb = Math.floor(buffer.length / 1024);
-                    if (kb > lastReportedKb) {
-                      lastReportedKb = kb;
-                      args.onProgress({ bytes: buffer.length, elapsedMs: Date.now() - startMs });
-                    }
-                  }
-                }
-              }
-            }
-            const mm = (msg as { model?: string } | undefined)?.model;
-            if (mm) modelUsed = mm;
-          }
-          if (obj.type === "result") {
-            const usage = obj.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-            if (usage) {
-              inputTokens = usage.input_tokens ?? 0;
-              outputTokens = usage.output_tokens ?? 0;
-            }
-          }
-        } catch { /* skip non-JSON framing */ }
-      }
-    });
-    proc.stderr.on("data", (c: Buffer) => { stderr += c.toString("utf8"); });
-    proc.on("close", code => {
-      if (code !== 0 && !buffer) {
-        reject(new Error(`claude exited ${code}: ${stderr.trim().slice(0, 300)}`));
-        return;
-      }
-      resolve({ content: buffer, input_tokens: inputTokens, output_tokens: outputTokens, model: modelUsed });
-    });
-    proc.on("error", err => reject(new Error(`Failed to spawn claude: ${err.message}`)));
-  });
-}
-
-function parseAndValidate(content: string) {
-  const stripped = content.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```\s*$/, "").trim();
-  try {
-    const parsed = JSON.parse(stripped);
-    const r = DayDigestResponseSchema.safeParse(parsed);
-    if (r.success) return { ok: true as const, value: r.data };
-    return { ok: false as const, error: "schema: " + r.error.message };
-  } catch (e) {
-    return { ok: false as const, error: "json: " + (e as Error).message };
-  }
-}
+const validateDay = (content: string) => parseAndValidate(content, DayDigestResponseSchema);
 
 export async function generateDayDigest(
   date: string,
@@ -256,7 +177,7 @@ export async function generateDayDigest(
   try {
     const r1 = await callLLM({ model, userPrompt, onProgress: opts.onProgress });
     inT += r1.input_tokens; outT += r1.output_tokens; lastModel = r1.model;
-    const v1 = parseAndValidate(r1.content);
+    const v1 = validateDay(r1.content);
     if (v1.ok) {
       return {
         digest: {
@@ -277,7 +198,7 @@ export async function generateDayDigest(
       onProgress: opts.onProgress,
     });
     inT += r2.input_tokens; outT += r2.output_tokens; lastModel = r2.model;
-    const v2 = parseAndValidate(r2.content);
+    const v2 = validateDay(r2.content);
     if (v2.ok) {
       return {
         digest: {

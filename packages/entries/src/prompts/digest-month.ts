@@ -79,15 +79,11 @@ export function buildMonthDigestUserPrompt(base: MonthDigest, weekDigests: WeekD
     .sort((a, b) => a.key.localeCompare(b.key))
     .map(w => {
       const helpfulness_week = w.helpfulness_sparkline.find(h => h !== null) ?? null;
-      // Project a short string of friction themes for the month-prompt's input
-      // contract regardless of whether the week digest used the new
-      // `friction_categories` shape or the legacy `friction_themes` string.
       const friction_themes = w.friction_categories && w.friction_categories.length > 0
         ? w.friction_categories.map(fc => `${fc.category}: ${fc.description}`).join(" ")
-        : (w.friction_themes ?? null);
-      const suggestion = w.suggestions?.usage_patterns?.[0]
-        ? { headline: w.suggestions.usage_patterns[0].title, body: w.suggestions.usage_patterns[0].suggestion }
-        : (w.suggestion ?? null);
+        : null;
+      const top = w.suggestions?.usage_patterns?.[0];
+      const suggestion = top ? { headline: top.title, body: top.suggestion } : null;
       return {
         week_start: w.key,
         headline: w.headline,

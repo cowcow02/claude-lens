@@ -92,16 +92,11 @@ export function InsightsHistory() {
 
 function WeekItem({ w }: { w: WeekRow }) {
   const empty = w.sessions === 0 && !w.in_progress && !w.saved_key;
-  const isThisWeek = w.in_progress;
-  const target = w.saved_key
-    ? `/insights/${w.saved_key}`
-    : isThisWeek
-      ? `/insights/week-${w.start}`
-      : `/insights/week-${w.start}`;
+  const target = w.saved_key ? `/insights/${w.saved_key}` : `/insights/week-${w.start}`;
   const subline = w.saved_key && w.headline
     ? w.headline
     : empty ? "no data"
-    : isThisWeek ? "in progress · click to view"
+    : w.in_progress ? "in progress · click to view"
     : `${w.sessions} session${w.sessions === 1 ? "" : "s"} · click to generate`;
 
   return (

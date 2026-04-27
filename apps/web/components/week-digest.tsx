@@ -406,12 +406,13 @@ const OUTCOME_TONE: Record<string, string> = {
   idle: "#cbd5e0",
 };
 
+/** Smallest window length we accept as a "peak"; below this and the window
+ *  isn't carrying enough of the week's activity to be characteristic. */
+const PEAK_HOUR_COVERAGE_THRESHOLD = 0.6;
+
 function peakHour(hours: number[]): { start: number; end: number; share_pct: number } | null {
   const total = hours.reduce((a, b) => a + b, 0);
   if (total === 0) return null;
-  // Find the longest contiguous window covering >= 60% of activity.
-  // Use a simple sliding-window: for each window length 1..24, find the max-sum window;
-  // pick the smallest length whose max-sum ≥ 60% of total.
   for (let len = 1; len <= 24; len++) {
     let bestSum = 0, bestStart = 0;
     for (let s = 0; s <= 24 - len; s++) {
@@ -419,7 +420,7 @@ function peakHour(hours: number[]): { start: number; end: number; share_pct: num
       for (let i = 0; i < len; i++) sum += hours[s + i] ?? 0;
       if (sum > bestSum) { bestSum = sum; bestStart = s; }
     }
-    if (bestSum / total >= 0.6) {
+    if (bestSum / total >= PEAK_HOUR_COVERAGE_THRESHOLD) {
       return { start: bestStart, end: bestStart + len, share_pct: (bestSum / total) * 100 };
     }
   }
@@ -603,10 +604,6 @@ function FrictionCategories({ categories }: { categories: WeekDigestType["fricti
               paddingLeft: 12,
             }}>
               {cat.examples.map((ex, j) => {
-                // back-compat: legacy string-shaped examples render plain
-                if (typeof ex === "string") {
-                  return <li key={j} style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--af-text)" }}>{ex}</li>;
-                }
                 return (
                   <li key={j} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                     <Link href={`/digest/${ex.date}`} style={{

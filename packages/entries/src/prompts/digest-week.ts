@@ -24,7 +24,7 @@ const RecurringThemeSchema = z.object({
   theme: z.string().min(1).max(160),
   days: z.array(z.string().regex(DateRegex)).min(2),
   evidence: z.string().min(1).max(500),
-  source: z.enum(["suggestion", "friction", "helpfulness_dip"]),
+  source: z.enum(["suggestion", "friction", "helpfulness_dip", "flag_pattern"]),
 });
 
 const OutcomeCorrelationSchema = z.object({

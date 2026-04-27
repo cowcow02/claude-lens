@@ -1,6 +1,6 @@
 "use client";
 
-import { flagDef } from "@claude-lens/entries";
+import { flagDef, FLAG_GLOSSARY } from "@claude-lens/entries";
 import type { ReactNode } from "react";
 
 const TONE_COLOR: Record<"warn" | "info" | "ok", string> = {
@@ -35,16 +35,12 @@ export function FlagChip({ token, count }: { token: string; count?: number }) {
   );
 }
 
-const KNOWN_FLAG_TOKENS = [
-  "loop_suspected", "long_autonomous", "orchestrated",
-  "fast_ship", "plan_used", "interrupt_heavy", "high_errors",
-];
-
 /** Replace any raw flag tokens in a string with <FlagChip> for inline rendering.
  *  Defensive against LLM output that slipped a token through despite the
- *  system-prompt forbidding it. */
+ *  system-prompt forbidding it. Token list mirrors FLAG_GLOSSARY exactly. */
 export function renderWithFlagChips(text: string): ReactNode[] {
-  const pattern = new RegExp(`\\b(${KNOWN_FLAG_TOKENS.join("|")})\\b`, "g");
+  const tokens = Object.keys(FLAG_GLOSSARY);
+  const pattern = new RegExp(`\\b(${tokens.join("|")})\\b`, "g");
   const out: ReactNode[] = [];
   let lastIdx = 0;
   let match: RegExpExecArray | null;

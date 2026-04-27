@@ -173,8 +173,15 @@ function prettyPrintWeek(d: WeekDigest): void {
     console.log("");
   }
   if (d.standout_days) for (const s of d.standout_days) console.log(`  ★ ${s.date}  ${s.why}`);
-  if (d.friction_themes) console.log(`\n  ⚠ ${d.friction_themes}`);
-  if (d.suggestion) console.log(`\n  → ${d.suggestion.headline}\n    ${d.suggestion.body}`);
+  if (d.friction_categories) {
+    for (const c of d.friction_categories) {
+      console.log(`\n  ⚠ ${c.category}: ${c.description}`);
+      for (const ex of c.examples) console.log(`      ${ex.date}  "${ex.quote}"`);
+    }
+  }
+  const top = d.suggestions?.usage_patterns?.[0];
+  if (top) console.log(`\n  → ${top.title}\n    ${top.suggestion}`);
+  if (d.on_the_horizon) console.log(`\n  ↗ ${d.on_the_horizon.title}`);
   console.log("");
 }
 

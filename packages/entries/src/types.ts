@@ -376,25 +376,6 @@ export type WeekDigest = DigestEnvelope & {
   on_the_horizon: WeekHorizonOpportunity | null;
   /** A single memorable moment from the week. Optional — null if nothing stood out. */
   fun_ending: { headline: string; detail: string } | null;
-
-  /**
-   * @deprecated removed in the Phase 4 trim pass — at_a_glance was redundant
-   * with hero + sparkline + standout_days for a 1-week scope. Kept readable
-   * for already-cached digests; renderers should ignore.
-   */
-  at_a_glance?: {
-    whats_working: string;
-    whats_hindering: string;
-    quick_wins: string;
-    ambitious_workflows: string;
-  } | null;
-  /** @deprecated removed in the trim pass — `narrative` was redundant with
-   *  trajectory + standout_days. `key_pattern` lives at the top level now. */
-  interaction_style?: { narrative: string; key_pattern: string } | null;
-  /** @deprecated kept for back-compat with cached digests pre-trim. */
-  friction_themes?: string | null;
-  /** @deprecated kept for back-compat. */
-  suggestion?: { headline: string; body: string } | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
