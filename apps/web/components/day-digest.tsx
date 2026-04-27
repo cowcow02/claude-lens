@@ -1,16 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
 import { OutcomePill } from "./outcome-pill";
 
 export function DayDigest({
-  digest, entries, aiEnabled,
+  digest, entries, aiEnabled, actions,
 }: {
   digest: DayDigestType;
   entries: Entry[];
   aiEnabled: boolean;
+  /** Optional inline-right cluster (e.g. Generate / Re-roll buttons). */
+  actions?: ReactNode;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const fmtDate = new Date(`${digest.key}T12:00:00`).toLocaleDateString("en-US", {
@@ -40,6 +42,11 @@ export function DayDigest({
             {timeStr} agent time · {digest.projects.length} project{digest.projects.length === 1 ? "" : "s"} · {digest.shipped.length} PR{digest.shipped.length === 1 ? "" : "s"} shipped
             {digest.concurrency_peak > 1 && ` · peak concurrency ×${digest.concurrency_peak}`}
           </span>
+          {actions && (
+            <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+              {actions}
+            </div>
+          )}
         </div>
         {digest.headline ? (
           <h1 style={{
