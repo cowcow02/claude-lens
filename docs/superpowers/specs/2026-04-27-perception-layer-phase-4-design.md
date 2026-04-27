@@ -64,11 +64,23 @@ export const CURRENT_WEEK_DIGEST_SCHEMA_VERSION = 2 as const;
 export const CURRENT_MONTH_DIGEST_SCHEMA_VERSION = 2 as const;
 ```
 
-### `DigestEnvelope` extension
+### `DigestEnvelope` refactor
 
-The envelope keeps its existing `entry_refs: string[]` field for day-scope use. Week and month digests carry their own ref arrays via the typed extensions below — no envelope change needed for week/month since they don't reference entries directly.
+`entry_refs` moves out of the envelope and onto each scope-specific type. The envelope becomes scope-agnostic:
 
-For week and month, `entry_refs` on the envelope is set to `[]` (the digest references day/week digests, not entries directly — the chain is one hop deeper). Renderers that need entry-level provenance for a week click through the day digest.
+```ts
+// BEFORE (Phase 1+2)
+type DigestEnvelope = { version, scope, key, window, entry_refs, generated_at, is_live, model, cost_usd };
+type DayDigest = DigestEnvelope & { ...day-fields };  // entry_refs inherited from envelope
+
+// AFTER (Phase 4)
+type DigestEnvelope = { version, scope, key, window, generated_at, is_live, model, cost_usd };
+type DayDigest   = DigestEnvelope & { entry_refs: string[]; ...day-fields };
+type WeekDigest  = DigestEnvelope & { day_refs:   string[]; ...week-fields };
+type MonthDigest = DigestEnvelope & { week_refs:  string[]; ...month-fields };
+```
+
+Each scope owns its leaf-reference array. The on-disk JSON shape of an existing `DayDigest` is structurally identical (it still serializes `entry_refs` at the top level) — this is a type-only refactor. No migration of cached digests needed. Renderers needing entry-level provenance for a week click through to the day digest at `/digest/[date]`.
 
 ### `WeekDigest`
 
@@ -159,13 +171,13 @@ The deterministic aggregations for `MonthDigest` are summed/derived from constit
 
 Past-period digests immutable on disk. Current-period (this week / this month) lives in 10-min in-memory TTL only — same rule as today's day digest.
 
-### `entry_refs` semantics for non-day scopes
+### Provenance chain for non-day scopes
 
 Week and month digests do not list entry refs directly. Their provenance is one level deeper:
 - `WeekDigest.day_refs[]` → date keys; click into `/digest/[date]` for entry-level detail.
 - `MonthDigest.week_refs[]` → Monday keys; click into `/insights/week-YYYY-MM-DD`.
 
-The shared envelope's `entry_refs` is `[]` for week/month. (Validated in tests; renderers do not consume it for these scopes.)
+After the envelope refactor (above), there is no `entry_refs` field on `WeekDigest` or `MonthDigest` — each type carries the ref array natural to its scope.
 
 ## Generation pipeline
 
@@ -224,7 +236,7 @@ export type PipelineEvent =
   | { type: "error"; message: string };
 ```
 
-The `dependency` event lets the SSE client show "Loading day-23… generated · day-24… generated · synth" before the synth phase fires.
+The `dependency` event lets the SSE client show "Loading day-23… generated · day-24… generated · synth" before the synth phase fires. The day-scope pipeline (`runDayDigestPipeline`) does not emit `dependency` events — it has no sub-digest dependencies. The shared `PipelineEvent` type is a superset; week and month pipelines emit `dependency`, day does not.
 
 ### LLM call budgeting
 
@@ -248,7 +260,7 @@ Same shape as `/api/digest/day/[date]`:
 - Week route validates `startDate` is a Monday. Non-Monday → 400.
 - Month route validates `yearMonth` matches `^\d{4}-\d{2}$` and is a valid month.
 
-**Coalescer:** Mirror the digest-day in-flight coalescer. Map keyed by `${period}|${force ? 1 : 0}`.
+**Coalescer:** Mirror the digest-day in-flight coalescer (`apps/web/lib/inflight-coalesce.ts`). Each route owns its own `InflightCoalescer` instance, but keys are scope-prefixed defensively: `week|YYYY-MM-DD|<force>`, `month|YYYY-MM|<force>`, and the day route migrates to `day|YYYY-MM-DD|<force>` in the same PR. This rules out collisions if a future refactor consolidates instances.
 
 **Job registration:** Each POST registers a `weekly.synth` or `monthly.synth` job in `lib/jobs.ts` (status `running`, label includes the period start). The `<JobQueueWidget>` from Phase 3 surfaces these automatically.
 
@@ -301,7 +313,15 @@ export type JobKind =
 └─────────────────────────────────────────────┘
 ```
 
-Hero auto-fire rule: on `/insights` server-render, check `~/.cclens/auto-week-fired-at`. If absent, or its mtime is in a previous ISO week, OR the file's contents != current ISO-week-Monday, set the file (touch + write Monday) and pass `autoFire: true` to the client. The client triggers the SSE POST on mount. This guarantees one auto-fire per ISO week per host, regardless of browser refresh.
+Hero auto-fire rule: on `/insights` server-render, the page checks three preconditions:
+
+1. `ai_features.enabled === true` (no auto-fire when AI is off — same gate as Phase 2.1's yesterday hero);
+2. The week digest for `last_completed_week` (Monday in **server local TZ**) is not yet cached on disk;
+3. `~/.cclens/auto-week-fired-at` either does not exist, or its UTF-8 contents (a single `YYYY-MM-DD` line) differ from `last_completed_week`'s Monday.
+
+If all three pass, the page atomically writes `last_completed_week`'s Monday into the file and passes `autoFire: true` to the client. The client triggers the SSE POST on mount. This guarantees one auto-fire per ISO week per host, regardless of browser refresh. The contents check is the only load-bearing one — no mtime comparison needed.
+
+The auto-fire guard is server-side per-host (one file, one process group) while Phase 2.1's yesterday-hero guard is browser-side (`localStorage[cclens:autogen-yesterday:{date}]`). This split is intentional: the daily hero auto-fires on every device the user opens because losing one yesterday's narrative is cheap; the weekly hero costs ~5x more per fire so it's gated globally per host.
 
 **Empty week / month** (zero day digests, zero entries) renders a "no activity" card with no Generate CTA — matches the Phase 3 honesty pattern for empty days.
 
@@ -440,7 +460,8 @@ Remove:
 | `apps/web/app/api/insights/weeks-index/route.ts` | move + rewrite at `apps/web/app/api/digest/week-index/route.ts` |
 | `apps/web/app/api/insights/months-index/route.ts` | move + rewrite at `apps/web/app/api/digest/month-index/route.ts` |
 | `apps/web/app/insights/[key]/page.tsx` | rewrite for V2 saved-view |
-| `apps/web/app/insights/[key]/print/page.tsx` | delete (PDF print — out of scope; future follow-up) |
+| `apps/web/app/insights/print/[key]/page.tsx` | delete (PDF print page — out of scope; future follow-up) |
+| `apps/web/app/api/insights/pdf/[key]/route.ts` | delete (V1 PDF render API; consumer of `InsightReport`/`ReportData`) |
 | `packages/parser/src/capsule.ts` | delete (`SessionCapsule`, `buildCapsule`) |
 | `packages/parser/src/aggregate.ts` | trim — keep `aggregateConcurrency`, `calendarWeek`, `priorCalendarWeek`, `last4CompletedWeeks`, `calendarMonth`, `priorCalendarMonth`, `computeBurstsFromSessions`. Delete `buildPeriodBundle`, `PeriodBundle` |
 | `packages/parser/src/index.ts` | drop exports of removed symbols |
@@ -451,6 +472,7 @@ Remove:
 | `packages/cli/src/index.ts` | drop the removed subcommand wiring |
 | `scripts/v1-insights-regression.mjs` | delete |
 | `package.json` (root) | drop the regression script call from `pnpm verify` |
+| `CLAUDE.md` (root) | rewrite the "Insights pipeline" section (lines 162–197 in current head) for the V2 chain (`Entry → DayDigest → WeekDigest → MonthDigest`); replace the `fleetlens stats` / `fleetlens capsules` lines in the CLI surface table; drop the "`fleetlens stats` is period aggregates" paragraph |
 
 ## Testing strategy
 
@@ -471,6 +493,7 @@ Remove:
 
 **CLI parity:**
 - `fleetlens digest week --last-week --json` byte-equal to `/api/digest/week/[Monday]` GET when both are reading the same cached digest.
+- `fleetlens digest month --last-month --json` byte-equal to `/api/digest/month/[YYYY-MM]` GET. (Distinct test because the month prompt and aggregation paths differ from week.)
 
 **Smoke (`scripts/smoke.mjs`):**
 - `GET /insights` → 200
@@ -489,7 +512,7 @@ Pre-generation in smoke uses the deterministic-only path (mock LLM disabled) so 
 |---|---|---|
 | `buildDeterministicWeekDigest(day_digests[7])` | 0 | < 5 ms |
 | `generateWeekDigest` LLM call | ~$0.005 | ~6–12 s |
-| `runWeekDigestPipeline` cold (week with 7 missing day digests) | ~$0.005 + 7 × day pipeline cost | ~30–60 s |
+| `runWeekDigestPipeline` cold (week with 7 missing day digests, ~5 entries each, sequential enrichment) | ~$0.005 + 7 × day pipeline cost ≈ $0.04–0.05 total | ~3–6 min (35 entries × ~5–8 s sequential + 7 × day synth + 1 week synth) |
 | `runWeekDigestPipeline` warm (all day digests cached) | ~$0.005 | ~10 s |
 | `buildDeterministicMonthDigest(week_digests[4-5])` | 0 | < 5 ms |
 | `generateMonthDigest` LLM call | ~$0.012 | ~12–20 s |
@@ -504,7 +527,7 @@ Disk: each week digest ≈ 4 KB, each month digest ≈ 6 KB. 1 year = 52 weeks +
 4. Land CLI subcommands + remove `stats` / `capsules`.
 5. Land smoke route additions + remove regression-script call from `pnpm verify`.
 6. Dogfood end-to-end: open `/insights`, watch auto-fire, walk back through saved weeks, generate a month, run CLI.
-7. PR `feat/v2-perception-phase-4` → `feat/v2-perception-insights`. After merge + dogfood approval, integration branch ships to master as v0.5.0.
+7. PR `feat/v2-perception-phase-4` → `feat/v2-perception-insights`. **No version bump in this PR** — the package.json stays at the integration-branch version. The bump (~v0.5.0) happens in the merge-to-master PR after dogfood approval, run via `npm version minor` at the repo root so `version-sync.mjs` propagates.
 
 ## Out of scope in Phase 4
 
