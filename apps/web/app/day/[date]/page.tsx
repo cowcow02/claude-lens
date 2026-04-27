@@ -8,20 +8,49 @@ import {
 import { readDayDigest, listEntriesForDay } from "@claude-lens/entries/fs";
 import { readSettings, buildDeterministicDigest } from "@claude-lens/entries/node";
 import type { DayDigest } from "@claude-lens/entries";
-import { isValidDate, todayLocal } from "@/lib/entries";
+import { isValidDate, todayLocal, toLocalDay } from "@/lib/entries";
 import { buildEntriesIndex } from "@/lib/entries-index";
 import type { SessionEntrySummary } from "../../parallelism/gantt-chart";
+import type { BackfillRow } from "@/components/backfill-drawer";
 import { DayView } from "./day-view";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
+const BACKFILL_DAYS = 30;
+
 function addDays(date: string, n: number): string {
   const [y, m, d] = date.split("-").map(Number);
   const dt = new Date(y!, (m ?? 1) - 1, d, 12);
   dt.setDate(dt.getDate() + n);
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+function buildBackfillRows(): BackfillRow[] {
+  const out: BackfillRow[] = [];
+  const now = Date.now();
+  for (let i = 0; i < BACKFILL_DAYS; i++) {
+    const d = toLocalDay(now - i * 86_400_000);
+    const entries = listEntriesForDay(d);
+    const digest = readDayDigest(d);
+    const status: BackfillRow["status"] = entries.length === 0 ? "empty"
+      : digest && digest.headline ? "generated"
+      : "pending";
+    const label = i === 0 ? "Today"
+      : i === 1 ? "Yesterday"
+      : new Date(`${d}T12:00:00`).toLocaleDateString("en-US", {
+          weekday: "short", month: "short", day: "numeric",
+        });
+    out.push({
+      date: d,
+      day_label: label,
+      entry_count: entries.length,
+      pr_count: entries.reduce((s, e) => s + e.pr_titles.length, 0),
+      status,
+    });
+  }
+  return out;
 }
 
 export default async function DayPage({
@@ -87,30 +116,21 @@ export default async function DayPage({
 
   const prev = addDays(date, -1);
   const next = addDays(date, 1);
+  const backfillRows = buildBackfillRows();
 
   return (
-    <div>
-      <nav style={{
-        padding: "14px 40px", display: "flex", gap: 14, fontSize: 12,
-        borderBottom: "1px solid var(--af-border-subtle)", alignItems: "center",
-      }}>
-        <Link href={`/day/${prev}`} style={{ color: "var(--af-accent)" }}>← Prev day</Link>
-        {next <= today && <Link href={`/day/${next}`} style={{ color: "var(--af-accent)" }}>Next day →</Link>}
-        {date !== today && (
-          <Link href={`/day/${today}`} style={{ marginLeft: "auto", color: "var(--af-accent)" }}>
-            Today →
-          </Link>
-        )}
-      </nav>
-      <DayView
-        date={date}
-        initial={initial}
-        entries={entries}
-        aiEnabled={aiEnabled}
-        gantt={gantt}
-        bursts={bursts}
-        sessionEntries={sessionEntries}
-      />
-    </div>
+    <DayView
+      date={date}
+      today={today}
+      prev={prev}
+      next={next <= today ? next : null}
+      initial={initial}
+      entries={entries}
+      aiEnabled={aiEnabled}
+      gantt={gantt}
+      bursts={bursts}
+      sessionEntries={sessionEntries}
+      backfillRows={backfillRows}
+    />
   );
 }

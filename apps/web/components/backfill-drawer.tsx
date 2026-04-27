@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { DayRow } from "./day-index";
+
+export type BackfillRow = {
+  date: string;
+  day_label: string;
+  entry_count: number;
+  pr_count: number;
+  status: "generated" | "pending" | "empty";
+};
 
 /**
  * Side drawer that lets the user select multiple days and enqueue
@@ -18,7 +25,7 @@ export function BackfillDrawer({
 }: {
   open: boolean;
   onClose: () => void;
-  rows: DayRow[];
+  rows: BackfillRow[];
   aiEnabled: boolean;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
