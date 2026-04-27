@@ -7,8 +7,24 @@ import { enrichEntry, type CallLLM } from "./enrich.js";
 import { generateDayDigest, buildDeterministicDigest } from "./digest-day.js";
 import { appendSpend, monthToDateSpend } from "./budget.js";
 import { writeInteractiveLock, removeInteractiveLock } from "./pipeline-lock.js";
+import { listSessions } from "@claude-lens/parser/fs";
+import { computeBurstsFromSessions, aggregateConcurrency } from "@claude-lens/parser";
 import type { AiFeaturesSettings } from "./settings.js";
 import type { DayDigest, Entry, EntryEnrichmentStatus, MonthDigest, WeekDigest } from "./types.js";
+
+/** Compute the deterministic concurrency_peak for a single local day, using the
+ *  same burst-merge rules as the /parallelism page and week-rollup so values
+ *  agree across surfaces. Returns 0 on any failure (best-effort). */
+async function computeDayConcurrencyPeak(date: string): Promise<number> {
+  try {
+    const metas = await listSessions({ limit: 10000 });
+    const bursts = computeBurstsFromSessions(metas);
+    const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+    const start = new Date(y, m - 1, d, 0, 0, 0, 0);
+    const end = new Date(y, m - 1, d, 23, 59, 59, 999);
+    return aggregateConcurrency(bursts, { start, end }).peak;
+  } catch { return 0; }
+}
 
 /** Shared event union across day/week/month pipelines.
  *  - day pipeline: emits status + entry + progress + digest + saved + error
@@ -130,6 +146,10 @@ export async function* runDayDigestPipeline(
     // Reload entries (may have updated enrichment)
     const fresh = listEntriesForDay(date) as Entry[];
 
+    // Concurrency peak is computed once from session bursts so day / week /
+    // month / parallelism-page values stay aligned.
+    const concurrencyPeak = await computeDayConcurrencyPeak(date);
+
     // Stage 2: synthesize
     let digest: DayDigest;
     if (aiOn) {
@@ -139,6 +159,7 @@ export async function* runDayDigestPipeline(
       const progressQueue: Array<{ bytes: number; elapsed_ms: number }> = [];
       const synthPromise = generateDayDigest(date, fresh, {
         model: opts.settings.model, callLLM: opts.callLLM,
+        concurrencyPeak,
         onProgress: (info) => {
           progressQueue.push({ bytes: info.bytes, elapsed_ms: info.elapsedMs });
         },
@@ -172,7 +193,7 @@ export async function* runDayDigestPipeline(
         });
       }
     } else {
-      digest = buildDeterministicDigest(date, fresh);
+      digest = buildDeterministicDigest(date, fresh, { concurrencyPeak });
     }
 
     // Stage 3: persist

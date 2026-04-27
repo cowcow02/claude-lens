@@ -238,8 +238,10 @@ export async function generateWeekDigest(
   opts: GenerateWeekOptions = {},
 ): Promise<GenerateWeekResult> {
   const base = buildDeterministicWeekDigest(monday, dayDigests, { entries: opts.entries });
-  // Need at least 2 day digests with a real outcome to produce useful narrative.
-  const enrichedDays = dayDigests.filter(d => d.outcome_day !== "idle" && d.outcome_day !== "trivial");
+  // Need at least 2 LLM-enriched day digests (headline populated) to produce a
+  // grounded weekly narrative. A deterministic-only day digest has null prose
+  // fields, so synth would run on empty `day_summaries` and hallucinate.
+  const enrichedDays = dayDigests.filter(d => d.headline !== null);
   if (enrichedDays.length < 2) return { digest: base, usage: null };
 
   const model = opts.model ?? DEFAULT_MODEL;

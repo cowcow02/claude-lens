@@ -8,7 +8,7 @@ type WeekRow = {
   start: string;
   end: string;
   label: string;
-  sessions: number;
+  active_days: number;
   in_progress: boolean;
   saved_key: string | null;
   headline: string | null;
@@ -22,7 +22,7 @@ type MonthRow = {
   start: string;
   end: string;
   label: string;
-  sessions: number;
+  active_days: number;
   in_progress: boolean;
   saved_key: string | null;
   headline: string | null;
@@ -91,13 +91,13 @@ export function InsightsHistory() {
 }
 
 function WeekItem({ w }: { w: WeekRow }) {
-  const empty = w.sessions === 0 && !w.in_progress && !w.saved_key;
+  const empty = w.active_days === 0 && !w.in_progress && !w.saved_key;
   const target = w.saved_key ? `/insights/${w.saved_key}` : `/insights/week-${w.start}`;
   const subline = w.saved_key && w.headline
     ? w.headline
     : empty ? "no data"
     : w.in_progress ? "in progress · click to view"
-    : `${w.sessions} session${w.sessions === 1 ? "" : "s"} · click to generate`;
+    : `${w.active_days} active day${w.active_days === 1 ? "" : "s"} · click to generate`;
 
   return (
     <li style={pickerRow(!!w.saved_key)}>
@@ -126,7 +126,7 @@ function WeekItem({ w }: { w: WeekRow }) {
 }
 
 function MonthItem({ m }: { m: MonthRow }) {
-  const empty = m.sessions === 0 && !m.in_progress && !m.saved_key;
+  const empty = m.active_days === 0 && !m.in_progress && !m.saved_key;
   const target = m.saved_key
     ? `/insights/${m.saved_key}`
     : `/insights/month-${m.start.slice(0, 7)}`;
@@ -134,7 +134,7 @@ function MonthItem({ m }: { m: MonthRow }) {
     ? m.headline
     : empty ? "no data"
     : m.in_progress ? "in progress · click to view"
-    : `${m.sessions} session${m.sessions === 1 ? "" : "s"} · click to generate`;
+    : `${m.active_days} active day${m.active_days === 1 ? "" : "s"} · click to generate`;
 
   return (
     <li style={pickerRow(!!m.saved_key)}>

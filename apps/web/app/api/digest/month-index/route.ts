@@ -1,6 +1,6 @@
-import { listSessions } from "@claude-lens/parser/fs";
 import { calendarMonth, priorCalendarMonth } from "@claude-lens/parser";
-import { listMonthDigestKeys, readMonthDigest } from "@claude-lens/entries/fs";
+import { listEntryKeys, listMonthDigestKeys, readMonthDigest } from "@claude-lens/entries/fs";
+import { parseEntryKey } from "@claude-lens/entries";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,7 +11,7 @@ type MonthRow = {
   start: string;
   end: string;
   label: string;
-  sessions: number;
+  active_days: number;
   in_progress: boolean;
   saved_key: string | null;
   headline: string | null;
@@ -40,8 +40,13 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const count = Math.min(12, Math.max(1, parseInt(url.searchParams.get("count") ?? "6", 10)));
 
-  const metas = await listSessions({ limit: 10000 });
   const cachedKeys = new Set(listMonthDigestKeys());
+
+  const entryDays = new Set<string>();
+  for (const key of listEntryKeys()) {
+    const parsed = parseEntryKey(key);
+    if (parsed) entryDays.add(parsed.local_day);
+  }
 
   const current = calendarMonth();
   const prior = priorCalendarMonth();
@@ -58,13 +63,12 @@ export async function GET(req: Request) {
       end = new Date(refMonth.getFullYear(), refMonth.getMonth() + 1, 0);
       in_progress = false;
     }
-    const startMs = start.getTime();
-    const endMs = new Date(end).setHours(23, 59, 59, 999);
-    const sessions = metas.filter((m) => {
-      if (!m.firstTimestamp) return false;
-      const t = Date.parse(m.firstTimestamp);
-      return !Number.isNaN(t) && t >= startMs && t <= endMs;
-    }).length;
+    let active_days = 0;
+    const cursor = new Date(start);
+    while (cursor.getTime() <= end.getTime()) {
+      if (entryDays.has(isoDay(cursor))) active_days++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
     const ymKey = yearMonthKey(start);
     const savedKey = cachedKeys.has(ymKey) ? `month-${ymKey}` : null;
 
@@ -86,7 +90,7 @@ export async function GET(req: Request) {
       start: isoDay(start),
       end: isoDay(end),
       label: label(start),
-      sessions,
+      active_days,
       in_progress,
       saved_key: savedKey,
       headline,

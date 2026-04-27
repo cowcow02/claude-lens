@@ -1,6 +1,6 @@
-import { listSessions } from "@claude-lens/parser/fs";
 import { calendarWeek, priorCalendarWeek } from "@claude-lens/parser";
-import { listWeekDigestKeys, readWeekDigest } from "@claude-lens/entries/fs";
+import { listEntryKeys, listWeekDigestKeys, readWeekDigest } from "@claude-lens/entries/fs";
+import { parseEntryKey } from "@claude-lens/entries";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -10,7 +10,10 @@ type WeekRow = {
   start: string;
   end: string;
   label: string;
-  sessions: number;
+  /** Distinct local-days with at least one entry in this window.
+   *  More accurate than session-firstTimestamp counts: a session that crosses
+   *  midnight produces entries on both sides and counts in both periods. */
+  active_days: number;
   in_progress: boolean;
   saved_key: string | null;
   headline: string | null;
@@ -41,8 +44,15 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const count = Math.min(26, Math.max(1, parseInt(url.searchParams.get("count") ?? "12", 10)));
 
-  const metas = await listSessions({ limit: 10000 });
   const cachedKeys = new Set(listWeekDigestKeys());
+
+  // Bucket entry keys by local_day once so each window can sum in O(window_days)
+  // rather than re-scanning all entries.
+  const entryDays = new Set<string>();
+  for (const key of listEntryKeys()) {
+    const parsed = parseEntryKey(key);
+    if (parsed) entryDays.add(parsed.local_day);
+  }
 
   const current = calendarWeek();
   const prior = priorCalendarWeek();
@@ -58,13 +68,12 @@ export async function GET(req: Request) {
       end = new Date(prior.end); end.setDate(prior.end.getDate() - offset);
       in_progress = false;
     }
-    const startMs = start.getTime();
-    const endMs = new Date(end).setHours(23, 59, 59, 999);
-    const sessions = metas.filter((m) => {
-      if (!m.firstTimestamp) return false;
-      const t = Date.parse(m.firstTimestamp);
-      return !Number.isNaN(t) && t >= startMs && t <= endMs;
-    }).length;
+    let active_days = 0;
+    const cursor = new Date(start);
+    while (cursor.getTime() <= end.getTime()) {
+      if (entryDays.has(isoDay(cursor))) active_days++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
     const startKey = isoDay(start);
     const savedKey = cachedKeys.has(startKey) ? `week-${startKey}` : null;
 
@@ -85,7 +94,7 @@ export async function GET(req: Request) {
       start: startKey,
       end: isoDay(end),
       label: label(start, end),
-      sessions,
+      active_days,
       in_progress,
       saved_key: savedKey,
       headline,

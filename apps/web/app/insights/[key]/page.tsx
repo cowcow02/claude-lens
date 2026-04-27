@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
-import { readSettings, readWeekDigest, readMonthDigest } from "@claude-lens/entries/node";
+import {
+  readSettings, readWeekDigest, readMonthDigest,
+  getCurrentWeekDigestFromCache, getCurrentMonthDigestFromCache,
+} from "@claude-lens/entries/node";
 import { WeekDigestView } from "@/components/week-digest-view";
 import { MonthDigestView } from "@/components/month-digest-view";
 import { currentWeekMonday, currentYearMonth } from "@/lib/entries";
@@ -21,7 +24,11 @@ export default async function SavedInsightPage({
   const weekMatch = WEEK_KEY.exec(key);
   if (weekMatch) {
     const monday = weekMatch[1]!;
-    const cached = readWeekDigest(monday);
+    // Current week lives only in the 10-min in-memory TTL cache; fall through
+    // to disk only for past weeks.
+    const cached = monday === currentWeekMonday()
+      ? getCurrentWeekDigestFromCache(monday, Date.now())
+      : readWeekDigest(monday);
 
     const prev = shiftMonday(monday, -7);
     const nextRaw = shiftMonday(monday, +7);
@@ -45,7 +52,9 @@ export default async function SavedInsightPage({
   const monthMatch = MONTH_KEY.exec(key);
   if (monthMatch) {
     const yearMonth = monthMatch[1]!;
-    const cached = readMonthDigest(yearMonth);
+    const cached = yearMonth === currentYearMonth()
+      ? getCurrentMonthDigestFromCache(yearMonth, Date.now())
+      : readMonthDigest(yearMonth);
 
     const prev = shiftYearMonth(yearMonth, -1);
     const nextRaw = shiftYearMonth(yearMonth, +1);

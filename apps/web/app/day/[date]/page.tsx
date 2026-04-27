@@ -9,7 +9,7 @@ import {
 } from "@claude-lens/parser";
 import { toLocalDay as toLocalDayParser } from "@claude-lens/parser";
 import { readDayDigest, listEntriesForDay } from "@claude-lens/entries/fs";
-import { readSettings, buildDeterministicDigest } from "@claude-lens/entries/node";
+import { readSettings, buildDeterministicDigest, getTodayDigestFromCache } from "@claude-lens/entries/node";
 import type { DayDigest } from "@claude-lens/entries";
 import { isValidDate, todayLocal, toLocalDay } from "@/lib/entries";
 import { buildEntriesIndex } from "@/lib/entries-index";
@@ -81,7 +81,14 @@ export default async function DayPage({
   const aiEnabled = settings.ai_features.enabled;
   const entries = listEntriesForDay(date);
   let initial: DayDigest | null = null;
-  if (date !== today) initial = readDayDigest(date);
+  if (date === today) {
+    // Today's digest lives only in the 10-min in-memory TTL cache — never on disk.
+    // Falling back to deterministic-only here would erase the LLM narrative the
+    // user just generated; check the cache first.
+    initial = getTodayDigestFromCache(date, Date.now());
+  } else {
+    initial = readDayDigest(date);
+  }
   if (!initial && entries.length > 0) initial = buildDeterministicDigest(date, entries);
 
   // ---- Timeline side (Gantt) ----
