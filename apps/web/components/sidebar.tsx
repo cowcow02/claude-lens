@@ -209,13 +209,6 @@ export function Sidebar({
         >
           Insights
         </NavLink>
-        <NavLink
-          href="/settings"
-          active={pathname === "/settings"}
-          icon={<Settings size={15} />}
-        >
-          Settings
-        </NavLink>
       </nav>
 
       {/* Projects search + list */}
@@ -282,6 +275,24 @@ export function Sidebar({
         <span style={{ flex: 1, minWidth: 0 }}>
           {totalSessions} sessions · {projects.length} projects
         </span>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            color: pathname === "/settings" ? "var(--af-text)" : "var(--af-text-tertiary)",
+            background: pathname === "/settings" ? "var(--af-surface-hover)" : "transparent",
+            textDecoration: "none",
+          }}
+        >
+          <Settings size={14} />
+        </Link>
         <ThemeToggle />
       </div>
     </aside>
