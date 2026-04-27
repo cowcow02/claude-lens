@@ -13,6 +13,7 @@ export type JobKind =
   | "digest.day"
   | "digest.day.backfill"
   | "weekly.synth"
+  | "monthly.synth"
   | "ask_claude";
 
 export type JobStatus = "queued" | "running" | "done" | "error" | "cancelled";
