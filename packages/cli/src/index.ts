@@ -30,19 +30,9 @@ async function main() {
       await update();
       break;
     }
-    case "stats": {
-      const { stats } = await import("./commands/stats.js");
-      await stats(args.slice(1));
-      break;
-    }
     case "usage": {
       const { usage } = await import("./commands/usage.js");
       await usage(args.slice(1));
-      break;
-    }
-    case "capsules": {
-      const { capsules } = await import("./commands/capsules.js");
-      await capsules(args.slice(1));
       break;
     }
     case "entries": {
@@ -82,11 +72,12 @@ Common:
   update                            Update to the latest version
 
 Terminal:
-  stats [--week|--4weeks|--days N] [--json]  Period aggregates (for insights pipeline)
   usage [--save]                             Plan utilization snapshot (5h/7d)
   usage --history [-s D] [--days N]          Daily token/cost table
-  capsules [--days N] [--json]               Per-session insight capsules
-  entries [--day D|--session ID|--all] [--json]  Perception-layer entries
+  entries [--day D|--session ID|--all] [--json]    Perception-layer entries
+  digest day   [--date D|--yesterday|--today] [--json]    Day digest
+  digest week  [--week D|--last-week|--this-week] [--json]   Week digest
+  digest month [--month YYYY-MM|--last-month|--this-month] [--json]  Month digest
 
 Advanced:
   web [page] [--no-open]            Open dashboard in browser without auto-starting daemon

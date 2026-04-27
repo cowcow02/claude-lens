@@ -13,7 +13,7 @@
     "test:coverage": "turbo test:coverage",
     "version": "node scripts/version-sync.mjs && git add packages/*/package.json apps/*/package.json",
     "smoke": "node scripts/smoke.mjs",
-    "verify": "pnpm typecheck && node scripts/v1-insights-regression.mjs && pnpm smoke",
+    "verify": "pnpm typecheck && pnpm smoke",
     "clean": "turbo clean && rm -rf node_modules"
   },
   "devDependencies": {
