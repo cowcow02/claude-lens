@@ -6,7 +6,7 @@ import {
   summarizeBursts,
   highLevelMetrics,
 } from "@claude-lens/parser";
-import { Heatmap } from "@/components/heatmap";
+import { Heatmap, type DaySummary } from "@/components/heatmap";
 import { ActivityChart } from "@/components/activity-chart";
 import { MetricCard } from "@/components/metric-card";
 import { formatDuration, formatTokens, formatCost, estimateCostMulti } from "@/lib/format";
@@ -29,12 +29,14 @@ import { ListTree, Clock, Zap, DollarSign } from "lucide-react";
 export function DashboardView({
   sessions,
   override,
+  daySummaries,
 }: {
   sessions: SessionMeta[];
   override?: {
     activeTimeMs?: number;
     extraCards?: ReactNode;
   };
+  daySummaries?: Map<string, DaySummary>;
 }) {
   const metrics = highLevelMetrics(sessions);
   const buckets = dailyActivity(sessions);
@@ -182,7 +184,7 @@ export function DashboardView({
               justifyContent: "center",
             }}
           >
-            <Heatmap buckets={buckets} valueKey="sessions" />
+            <Heatmap buckets={buckets} valueKey="sessions" daySummaries={daySummaries} />
           </div>
         </div>
 

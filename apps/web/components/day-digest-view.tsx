@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, type ReactNode } from "react";
 import { DayDigest as DayDigestRender } from "./day-digest";
 import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
 
@@ -17,7 +17,7 @@ export function DayDigestView({
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState<string>("");
 
-  const regenerate = useCallback(async (force = false) => {
+  const generate = useCallback(async (force = false) => {
     setStatus("streaming");
     setProgress("Starting...");
     const url = `/api/digest/day/${date}${force ? "?force=1" : ""}`;
@@ -60,44 +60,119 @@ export function DayDigestView({
 
   const isStreaming = status === "streaming";
 
-  return (
-    <>
-      <div style={{ display: "flex", gap: 10, padding: "14px 40px 0", alignItems: "center" }}>
+  // A digest with a headline means synthesis ran — trust that as "fresh"
+  // even when a few entries are stuck in `pending` (e.g. rate-limited
+  // retries that didn't increment retry_count). Otherwise stuck entries
+  // would trap the user clicking "Generate" forever, since the pipeline
+  // short-circuits to the cached digest without re-enriching anyway.
+  // Users who want to recover stuck entries can use Re-roll narrative
+  // (which forces a fresh pipeline run that retries the pending capsules).
+  const narrativeIsFresh = !!digest?.headline;
+  const allTrivial = useMemo(() => {
+    if (entries.length === 0) return false;
+    return entries.every((e) => e.enrichment.status === "skipped_trivial");
+  }, [entries]);
+  const isEmpty = entries.length === 0;
+  const hasMissingWork = !isEmpty && !allTrivial && !narrativeIsFresh;
+
+  // Build the actions slot for the digest hero meta-row. Returns null
+  // when there's nothing actionable (empty / all-trivial days).
+  let actions: ReactNode = null;
+  if (!isEmpty && !allTrivial) {
+    if (hasMissingWork) {
+      actions = (
         <button
-          onClick={() => regenerate(true)}
+          onClick={() => generate(false)}
           disabled={isStreaming}
           style={{
-            padding: "6px 12px",
-            border: "1px solid var(--af-border-subtle)",
-            borderRadius: 6,
-            background: "transparent",
+            padding: "4px 10px",
+            background: "var(--af-accent)",
+            color: "white",
+            border: "none",
+            borderRadius: 5,
             cursor: isStreaming ? "default" : "pointer",
-            fontSize: 12,
+            fontSize: 11,
+            fontWeight: 600,
             opacity: isStreaming ? 0.6 : 1,
-          }}>
-          🔄 {isStreaming ? "Regenerating..." : "Regenerate"}
+          }}
+        >
+          {isStreaming ? "Generating..." : digest ? "Generate (catch up)" : "Generate digest"}
         </button>
-        {progress && <span style={{ fontSize: 11, color: "var(--af-text-tertiary)" }}>{progress}</span>}
-      </div>
-
-      {digest ? (
-        <DayDigestRender digest={digest} entries={entries} aiEnabled={aiEnabled} />
-      ) : (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--af-text-secondary)" }}>
-          <p>No digest generated yet.</p>
-          <button onClick={() => regenerate(false)} disabled={isStreaming}
+      );
+    } else {
+      actions = (
+        <span
+          style={{
+            fontSize: 10,
+            color: "var(--af-text-tertiary)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          ✓ Up to date
+          <button
+            onClick={() => generate(true)}
+            disabled={isStreaming}
+            title="Re-roll the narrative without re-enriching capsules"
             style={{
-              padding: "8px 16px",
-              marginTop: 10,
-              background: "var(--af-accent)",
-              color: "white",
-              border: "none",
-              borderRadius: 6,
+              padding: "2px 7px",
+              background: "transparent",
+              border: "1px solid var(--af-border-subtle)",
+              borderRadius: 4,
+              fontSize: 10,
+              color: "var(--af-text-secondary)",
               cursor: isStreaming ? "default" : "pointer",
               opacity: isStreaming ? 0.6 : 1,
-            }}>
-            {isStreaming ? "Generating..." : "Generate digest"}
+            }}
+          >
+            {isStreaming ? "..." : "Re-roll"}
           </button>
+        </span>
+      );
+    }
+    if (progress) {
+      actions = (
+        <>
+          {actions}
+          <span style={{ fontSize: 10, color: "var(--af-text-tertiary)" }}>{progress}</span>
+        </>
+      );
+    }
+  }
+
+  if (digest) {
+    return <DayDigestRender digest={digest} entries={entries} aiEnabled={aiEnabled} actions={actions} />;
+  }
+
+  // No digest yet — render a slim row with whatever action applies, then
+  // a one-line empty-state hint.
+  return (
+    <>
+      {actions && (
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            padding: "14px 40px 0",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          {actions}
+        </div>
+      )}
+      {isEmpty ? (
+        <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-tertiary)", fontSize: 13 }}>
+          No entries on this day.
+        </div>
+      ) : allTrivial ? (
+        <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-tertiary)", fontSize: 13 }}>
+          💤 Warm-up only — every session was under a minute. No narrative needed.
+        </div>
+      ) : (
+        <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-secondary)", fontSize: 13 }}>
+          No digest generated yet — click Generate above.
         </div>
       )}
     </>

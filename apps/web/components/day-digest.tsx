@@ -1,25 +1,23 @@
-import type { DayDigest as DayDigestType, DayOutcome, Entry } from "@claude-lens/entries";
+"use client";
 
-const OUTCOME_STYLES: Record<DayOutcome, { bg: string; fg: string; label: string; icon: string }> = {
-  shipped:     { bg: "rgba(72, 187, 120, 0.12)", fg: "#48bb78", label: "Shipped",     icon: "🚀" },
-  partial:     { bg: "rgba(66, 153, 225, 0.12)", fg: "#4299e1", label: "Partial",     icon: "🔨" },
-  blocked:     { bg: "rgba(245, 101, 101, 0.12)", fg: "#f56565", label: "Blocked",     icon: "🚧" },
-  exploratory: { bg: "rgba(160, 174, 192, 0.12)", fg: "#a0aec0", label: "Exploratory", icon: "🧭" },
-  trivial:     { bg: "rgba(203, 213, 224, 0.12)", fg: "#a0aec0", label: "Warmup",      icon: "💤" },
-  idle:        { bg: "rgba(203, 213, 224, 0.12)", fg: "#a0aec0", label: "Idle",        icon: "—"  },
-};
+import { useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
+import { OutcomePill } from "./outcome-pill";
 
 export function DayDigest({
-  digest, entries, aiEnabled,
+  digest, entries, aiEnabled, actions,
 }: {
   digest: DayDigestType;
   entries: Entry[];
   aiEnabled: boolean;
+  /** Optional inline-right cluster (e.g. Generate / Re-roll buttons). */
+  actions?: ReactNode;
 }) {
+  const [showDetails, setShowDetails] = useState(false);
   const fmtDate = new Date(`${digest.key}T12:00:00`).toLocaleDateString("en-US", {
     weekday: "long", month: "short", day: "numeric", year: "numeric",
   });
-  const outcome = OUTCOME_STYLES[digest.outcome_day] ?? OUTCOME_STYLES.idle;
   const hrs = digest.agent_min / 60;
   const timeStr = hrs >= 1 ? `${hrs.toFixed(1)}h` : `${Math.round(digest.agent_min)}m`;
 
@@ -30,36 +28,38 @@ export function DayDigest({
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: "24px 40px" }}>
-      {/* Hero: date + outcome pill + headline + stats */}
+      {/* Hero: date + outcome + stats on one row, headline below */}
       <header style={{ marginBottom: 28 }}>
         <div style={{
-          display: "flex", alignItems: "center", gap: 10, marginBottom: 4,
+          display: "flex", alignItems: "center", gap: 10, marginBottom: 8,
           fontSize: 12, color: "var(--af-text-tertiary)", fontWeight: 500,
+          flexWrap: "wrap",
         }}>
           <span>{fmtDate}</span>
-          <span style={{
-            padding: "2px 8px", borderRadius: 99, fontSize: 10, fontWeight: 600,
-            background: outcome.bg, color: outcome.fg,
-          }}>
-            {outcome.icon} {outcome.label}
+          <OutcomePill outcome={digest.outcome_day} size="lg" />
+          <span style={{ color: "var(--af-text-tertiary)" }}>·</span>
+          <span style={{ fontFamily: "var(--font-mono)", color: "var(--af-text-secondary)" }}>
+            {timeStr} agent time · {digest.projects.length} project{digest.projects.length === 1 ? "" : "s"} · {digest.shipped.length} PR{digest.shipped.length === 1 ? "" : "s"} shipped
+            {digest.concurrency_peak > 1 && ` · peak concurrency ×${digest.concurrency_peak}`}
           </span>
+          {actions && (
+            <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+              {actions}
+            </div>
+          )}
         </div>
         {digest.headline ? (
           <h1 style={{
             fontSize: 26, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-0.02em",
-            margin: "8px 0 14px", maxWidth: 820, color: "var(--af-text)",
+            margin: "0 0 14px", maxWidth: 820, color: "var(--af-text)",
           }}>
             {digest.headline}
           </h1>
         ) : (
-          <h1 style={{ fontSize: 20, color: "var(--af-text-secondary)", margin: "8px 0 14px" }}>
+          <h1 style={{ fontSize: 20, color: "var(--af-text-secondary)", margin: "0 0 14px" }}>
             {aiEnabled ? "No narrative yet — click Regenerate." : `Worked ${timeStr} across ${digest.projects.length} project${digest.projects.length === 1 ? "" : "s"}.`}
           </h1>
         )}
-        <div style={{ fontSize: 13, color: "var(--af-text-secondary)", fontFamily: "var(--font-mono)" }}>
-          {timeStr} agent time · {digest.projects.length} project{digest.projects.length === 1 ? "" : "s"} · {digest.shipped.length} PR{digest.shipped.length === 1 ? "" : "s"} shipped
-          {digest.concurrency_peak > 1 && ` · peak concurrency ×${digest.concurrency_peak}`}
-        </div>
       </header>
 
       {/* AI-off nudge */}
@@ -92,6 +92,34 @@ export function DayDigest({
           {digest.narrative}
         </section>
       )}
+
+      {/* Show-more toggle: by default we keep the page short — only headline,
+          bands, narrative are visible. Suggestion + work breakdown + shipped +
+          sessions + goal-mix collapse behind this button so the timeline section
+          below stays close to the fold. */}
+      <div style={{ marginBottom: 18 }}>
+        <button
+          type="button"
+          onClick={() => setShowDetails((v) => !v)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "5px 10px",
+            background: "transparent",
+            border: "1px solid var(--af-border-subtle)",
+            borderRadius: 6,
+            fontSize: 11,
+            color: "var(--af-text-secondary)",
+            cursor: "pointer",
+          }}
+        >
+          {showDetails ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          {showDetails ? "Hide details" : "Show more details"}
+        </button>
+      </div>
+
+      {showDetails && (<>
 
       {/* Suggestion */}
       {digest.suggestion && (
@@ -180,6 +208,8 @@ export function DayDigest({
           <GoalBar goals={digest.top_goal_categories} total={digest.agent_min} />
         </section>
       )}
+
+      </>)}
     </div>
   );
 }
@@ -197,12 +227,22 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function Band({ glyph, color, text, emptyLabel }: { glyph: string; color: string; text: string | null; emptyLabel: string }) {
   return (
-    <div style={{ fontSize: 14, lineHeight: 1.55 }}>
-      <div style={{ fontSize: 18, color, marginBottom: 4 }}>{glyph}</div>
+    <div
+      style={{
+        fontSize: 14,
+        lineHeight: 1.55,
+        display: "flex",
+        gap: 8,
+        alignItems: "flex-start",
+      }}
+    >
+      <span style={{ fontSize: 16, color, lineHeight: 1.4, flexShrink: 0 }}>
+        {glyph}
+      </span>
       {text ? (
-        <div style={{ color: "var(--af-text)" }}>{text}</div>
+        <span style={{ color: "var(--af-text)" }}>{text}</span>
       ) : (
-        <div style={{ color: "var(--af-text-tertiary)", fontStyle: "italic" }}>{emptyLabel}</div>
+        <span style={{ color: "var(--af-text-tertiary)", fontStyle: "italic" }}>{emptyLabel}</span>
       )}
     </div>
   );
@@ -241,14 +281,7 @@ function SessionRow({ entry }: { entry: Entry }) {
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--af-text-tertiary)", width: 40, textAlign: "right" }}>
           {durMin}m
         </span>
-        {outcome && (
-          <span style={{
-            fontSize: 10, padding: "1px 7px", borderRadius: 99, fontWeight: 600,
-            background: outcomeBadge(outcome).bg, color: outcomeBadge(outcome).fg,
-          }}>
-            {outcome}
-          </span>
-        )}
+        {outcome && <OutcomePill outcome={outcome} size="sm" label="text" />}
       </div>
       {summary && (
         <div style={{
@@ -260,16 +293,6 @@ function SessionRow({ entry }: { entry: Entry }) {
       )}
     </a>
   );
-}
-
-function outcomeBadge(o: string): { bg: string; fg: string } {
-  switch (o) {
-    case "shipped":     return { bg: "rgba(72, 187, 120, 0.12)", fg: "#48bb78" };
-    case "partial":     return { bg: "rgba(66, 153, 225, 0.12)", fg: "#4299e1" };
-    case "blocked":     return { bg: "rgba(245, 101, 101, 0.12)", fg: "#f56565" };
-    case "exploratory": return { bg: "rgba(160, 174, 192, 0.12)", fg: "#a0aec0" };
-    default:            return { bg: "rgba(203, 213, 224, 0.12)", fg: "#a0aec0" };
-  }
 }
 
 const GOAL_COLORS: Record<string, string> = {

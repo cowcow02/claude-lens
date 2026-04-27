@@ -5,6 +5,7 @@ import type { PipelineEvent } from "@claude-lens/entries/node";
 import { readDayDigest } from "@claude-lens/entries/fs";
 import { InflightCoalescer } from "@/lib/inflight-coalesce";
 import { isValidDate, todayLocal } from "@/lib/entries";
+import { registerJob, updateJob, completeJob, failJob } from "@/lib/jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,20 @@ type Params = { params: Promise<{ date: string }> };
 // Keyed by `${date}|${force ? 1 : 0}` — force=1 requests never coalesce
 // with force=0 (different key), matching spec §S2.
 const coalescer = new InflightCoalescer<string, void>();
+
+function updateJobFromEvent(jobId: string, ev: PipelineEvent): void {
+  if (ev.type === "status") {
+    updateJob(jobId, { progress: { phase: ev.phase, text: ev.text } });
+  } else if (ev.type === "entry") {
+    updateJob(jobId, {
+      progress: { phase: "enrich", index: ev.index, total: ev.total },
+    });
+  } else if (ev.type === "progress") {
+    updateJob(jobId, {
+      progress: { phase: ev.phase, bytes: ev.bytes },
+    });
+  }
+}
 
 export async function GET(_req: Request, ctx: Params) {
   const { date } = await ctx.params;
@@ -88,17 +103,27 @@ export async function POST(req: Request, ctx: Params) {
       }
 
       const alreadyInflight = coalescer.inflight(key);
+      let jobId: string | null = null;
 
       try {
         await coalescer.run(key, async () => {
           if (alreadyInflight) return;
+          jobId = registerJob({
+            kind: "digest.day",
+            label: `Day digest · ${date}`,
+            target: date,
+            caller: "user",
+          });
+          updateJob(jobId, { status: "running" });
           for await (const ev of runDayDigestPipeline(date, {
             settings: settings.ai_features,
             force,
             todayLocalDay: todayLocal(),
           })) {
             send(ev);
+            if (jobId) updateJobFromEvent(jobId, ev);
           }
+          if (jobId) completeJob(jobId, `/day/${date}`);
         });
 
         if (alreadyInflight) {
@@ -108,6 +133,7 @@ export async function POST(req: Request, ctx: Params) {
         }
       } catch (err) {
         send({ type: "error", message: (err as Error).message });
+        if (jobId) failJob(jobId, (err as Error).message);
       } finally {
         try { controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`)); } catch { /* ignore */ }
         finish();

@@ -183,11 +183,17 @@ export function Sidebar({
           Projects
         </NavLink>
         <NavLink
-          href="/parallelism"
-          active={pathname === "/parallelism"}
-          icon={<GitBranch size={15} />}
+          href="/day"
+          active={
+            pathname === "/day" ||
+            pathname.startsWith("/day/") ||
+            pathname === "/digest" ||
+            pathname.startsWith("/digest/") ||
+            pathname === "/parallelism"
+          }
+          icon={<CalendarDays size={15} />}
         >
-          Timeline
+          Day
         </NavLink>
         <NavLink
           href="/usage"
@@ -197,25 +203,11 @@ export function Sidebar({
           Usage
         </NavLink>
         <NavLink
-          href="/digest"
-          active={pathname === "/digest" || pathname.startsWith("/digest/")}
-          icon={<CalendarDays size={15} />}
-        >
-          Digest
-        </NavLink>
-        <NavLink
           href="/insights"
           active={pathname === "/insights"}
           icon={<Lightbulb size={15} />}
         >
           Insights
-        </NavLink>
-        <NavLink
-          href="/settings"
-          active={pathname === "/settings"}
-          icon={<Settings size={15} />}
-        >
-          Settings
         </NavLink>
       </nav>
 
@@ -283,6 +275,24 @@ export function Sidebar({
         <span style={{ flex: 1, minWidth: 0 }}>
           {totalSessions} sessions · {projects.length} projects
         </span>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            color: pathname === "/settings" ? "var(--af-text)" : "var(--af-text-tertiary)",
+            background: pathname === "/settings" ? "var(--af-surface-hover)" : "transparent",
+            textDecoration: "none",
+          }}
+        >
+          <Settings size={14} />
+        </Link>
         <ThemeToggle />
       </div>
     </aside>

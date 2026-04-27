@@ -17,6 +17,8 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { prettyProjectName } from "@/lib/format";
 import { TeamBadge } from "@/components/team-badge";
+import { OutcomePill } from "@/components/outcome-pill";
+import type { DayOutcome, EntryEnrichmentStatus } from "@claude-lens/entries";
 
 const LIVE_WINDOW_MS = 45_000;
 const MAX_VISIBLE = 5;
@@ -34,7 +36,19 @@ export type LiveSessionPick = {
   agentName?: string;
 };
 
-export function LiveSessionsWidget({ sessions }: { sessions: LiveSessionPick[] }) {
+export type LiveEntrySummary = {
+  outcome: DayOutcome | null;
+  enrichmentStatus: EntryEnrichmentStatus;
+  localDay: string;
+};
+
+export function LiveSessionsWidget({
+  sessions,
+  entrySummaries = {},
+}: {
+  sessions: LiveSessionPick[];
+  entrySummaries?: Record<string, LiveEntrySummary>;
+}) {
   const pathname = usePathname();
   const [now, setNow] = useState(() => Date.now());
   // Collapsed by default on first render so users who previously
@@ -166,7 +180,9 @@ export function LiveSessionsWidget({ sessions }: { sessions: LiveSessionPick[] }
       )}
 
       {/* Session cards — reverse order so newest is nearest the pill. */}
-      {visible.map((s) => (
+      {visible.map((s) => {
+        const sum = entrySummaries[s.id];
+        return (
         <Link
           key={s.id}
           href={`/sessions/${s.id}`}
@@ -190,6 +206,24 @@ export function LiveSessionsWidget({ sessions }: { sessions: LiveSessionPick[] }
             prettyProjectName(s.projectName)
           }
         >
+          {sum && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ marginBottom: 4 }}
+            >
+              {sum.outcome ? (
+                <OutcomePill outcome={sum.outcome} size="sm" label="text" />
+              ) : sum.enrichmentStatus !== "skipped_trivial" ? (
+                <OutcomePill
+                  outcome={null}
+                  pending
+                  sessionId={s.id}
+                  localDay={sum.localDay}
+                  size="sm"
+                />
+              ) : null}
+            </div>
+          )}
           {/* Title: most recent user message — "what am I working on now". */}
           <div
             style={{
@@ -248,7 +282,8 @@ export function LiveSessionsWidget({ sessions }: { sessions: LiveSessionPick[] }
             {prettyProjectName(s.projectName)}
           </div>
         </Link>
-      ))}
+        );
+      })}
 
       <style>{`
         @keyframes cs-live-pulse {
