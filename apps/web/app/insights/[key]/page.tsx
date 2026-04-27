@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { readSettings, readWeekDigest, readMonthDigest } from "@claude-lens/entries/node";
 import { WeekDigestView } from "@/components/week-digest-view";
 import { MonthDigestView } from "@/components/month-digest-view";
+import { currentWeekMonday, currentYearMonth } from "@/lib/entries";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,9 +22,21 @@ export default async function SavedInsightPage({
   if (weekMatch) {
     const monday = weekMatch[1]!;
     const cached = readWeekDigest(monday);
+
+    const prev = shiftMonday(monday, -7);
+    const nextRaw = shiftMonday(monday, +7);
+    const today = currentWeekMonday();
+    const nextMonday = nextRaw > today ? null : nextRaw;
+    const prevCached = !!readWeekDigest(prev);
+    const nextCached = nextMonday ? !!readWeekDigest(nextMonday) : false;
+
     return (
       <div>
-        <TopNav label={`Week of ${monday}`} />
+        <TopNav
+          label={`Week of ${monday}`}
+          prev={{ key: `week-${prev}`, label: shortLabelMonday(prev), cached: prevCached }}
+          next={nextMonday ? { key: `week-${nextMonday}`, label: shortLabelMonday(nextMonday), cached: nextCached } : null}
+        />
         <WeekDigestView initial={cached} monday={monday} aiEnabled={aiOn} />
       </div>
     );
@@ -33,9 +46,21 @@ export default async function SavedInsightPage({
   if (monthMatch) {
     const yearMonth = monthMatch[1]!;
     const cached = readMonthDigest(yearMonth);
+
+    const prev = shiftYearMonth(yearMonth, -1);
+    const nextRaw = shiftYearMonth(yearMonth, +1);
+    const today = currentYearMonth();
+    const nextYM = nextRaw > today ? null : nextRaw;
+    const prevCached = !!readMonthDigest(prev);
+    const nextCached = nextYM ? !!readMonthDigest(nextYM) : false;
+
     return (
       <div>
-        <TopNav label={yearMonth} />
+        <TopNav
+          label={yearMonth}
+          prev={{ key: `month-${prev}`, label: shortLabelMonth(prev), cached: prevCached }}
+          next={nextYM ? { key: `month-${nextYM}`, label: shortLabelMonth(nextYM), cached: nextCached } : null}
+        />
         <MonthDigestView initial={cached} yearMonth={yearMonth} aiEnabled={aiOn} />
       </div>
     );
@@ -44,7 +69,9 @@ export default async function SavedInsightPage({
   notFound();
 }
 
-function TopNav({ label }: { label: string }) {
+type NavTarget = { key: string; label: string; cached: boolean };
+
+function TopNav({ label, prev, next }: { label: string; prev: NavTarget | null; next: NavTarget | null }) {
   return (
     <div className="no-print" style={topNavStyle}>
       <Link href="/insights" style={backBtnStyle}>
@@ -53,8 +80,52 @@ function TopNav({ label }: { label: string }) {
       <span style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
         {label}
       </span>
+      <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6 }}>
+        {prev && (
+          <Link href={`/insights/${prev.key}`} style={navArrowStyle(prev.cached)} title={prev.cached ? `Saved digest · ${prev.label}` : `No saved digest · ${prev.label} (will prompt to Generate)`}>
+            <ChevronLeft size={12} /> {prev.label}
+          </Link>
+        )}
+        {next ? (
+          <Link href={`/insights/${next.key}`} style={navArrowStyle(next.cached)} title={next.cached ? `Saved digest · ${next.label}` : `No saved digest · ${next.label} (will prompt to Generate)`}>
+            {next.label} <ChevronRight size={12} />
+          </Link>
+        ) : (
+          <span style={{ ...navArrowStyle(false), opacity: 0.4, cursor: "default" }} title="No next period — this would be in the future">
+            — <ChevronRight size={12} />
+          </span>
+        )}
+      </div>
     </div>
   );
+}
+
+function shiftMonday(monday: string, days: number): string {
+  const d = new Date(`${monday}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function shiftYearMonth(yearMonth: string, months: number): string {
+  const [y, m] = yearMonth.split("-");
+  const d = new Date(Number(y), Number(m) - 1 + months, 1);
+  const ny = d.getFullYear();
+  const nm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${ny}-${nm}`;
+}
+
+function shortLabelMonday(monday: string): string {
+  const d = new Date(`${monday}T12:00:00`);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function shortLabelMonth(yearMonth: string): string {
+  const [y, m] = yearMonth.split("-");
+  const d = new Date(Number(y), Number(m) - 1, 1);
+  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
 }
 
 const topNavStyle: React.CSSProperties = {
@@ -68,3 +139,15 @@ const backBtnStyle: React.CSSProperties = {
   background: "var(--af-surface)", color: "var(--af-text)",
   fontSize: 12, fontWeight: 500, textDecoration: "none",
 };
+
+function navArrowStyle(cached: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 4,
+    padding: "5px 10px", borderRadius: 6,
+    border: `1px solid ${cached ? "color-mix(in srgb, var(--af-accent) 28%, var(--af-border))" : "var(--af-border-subtle)"}`,
+    background: cached ? "color-mix(in srgb, var(--af-accent) 6%, var(--af-surface))" : "var(--af-surface)",
+    color: cached ? "var(--af-accent)" : "var(--af-text-secondary)",
+    fontSize: 11, fontWeight: 500, fontFamily: "var(--font-mono)",
+    textDecoration: "none",
+  };
+}
