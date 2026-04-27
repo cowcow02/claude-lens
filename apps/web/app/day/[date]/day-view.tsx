@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { DayDigest, Entry } from "@claude-lens/entries";
 import type { GanttDay, ParallelismBurst } from "@claude-lens/parser";
 import { DayDigestView } from "@/components/day-digest-view";
 import { GanttChart, type SessionEntrySummary } from "../../parallelism/gantt-chart";
-
-type Tab = "narrative" | "timeline";
-
-const VALID_TABS: Tab[] = ["narrative", "timeline"];
 
 export function DayView({
   date,
@@ -27,100 +24,83 @@ export function DayView({
   bursts: ParallelismBurst[];
   sessionEntries: Record<string, SessionEntrySummary>;
 }) {
-  const [tab, setTab] = useState<Tab>("narrative");
-
-  // Read tab from URL hash on mount + on hashchange.
-  useEffect(() => {
-    const readHash = (): Tab => {
-      const h = (typeof window !== "undefined" ? window.location.hash.replace("#", "") : "") as Tab;
-      return VALID_TABS.includes(h) ? h : "narrative";
-    };
-    setTab(readHash());
-    const onHash = () => setTab(readHash());
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
-  const switchTab = (next: Tab) => {
-    setTab(next);
-    if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", `#${next}`);
-    }
-  };
-
+  const hasNarrative = entries.length > 0;
   const hasTimeline = gantt.sessions.length > 0;
 
-  return (
-    <>
-      <div
-        style={{
-          display: "flex",
-          gap: 0,
-          padding: "0 40px",
-          borderBottom: "1px solid var(--af-border-subtle)",
-        }}
-      >
-        <TabBtn active={tab === "narrative"} onClick={() => switchTab("narrative")}>
-          Narrative
-        </TabBtn>
-        <TabBtn
-          active={tab === "timeline"}
-          onClick={() => switchTab("timeline")}
-          disabled={!hasTimeline}
-        >
-          Timeline
-        </TabBtn>
+  // Empty day: nothing to show. Concise panel — no dead CTAs.
+  if (!hasNarrative && !hasTimeline) {
+    const fmtDate = new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
+      weekday: "long", month: "long", day: "numeric", year: "numeric",
+    });
+    return (
+      <div style={{ padding: "60px 40px", textAlign: "center", color: "var(--af-text-secondary)" }}>
+        <div style={{ fontSize: 14, marginBottom: 6 }}>{fmtDate}</div>
+        <div style={{ fontSize: 13, color: "var(--af-text-tertiary)" }}>
+          No Claude Code activity on this day.
+        </div>
       </div>
+    );
+  }
 
-      {tab === "narrative" && (
-        <DayDigestView initial={initial} entries={entries} date={date} aiEnabled={aiEnabled} />
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+      {hasNarrative && (
+        <Section label="Narrative" defaultOpen>
+          <DayDigestView
+            initial={initial}
+            entries={entries}
+            date={date}
+            aiEnabled={aiEnabled}
+          />
+        </Section>
       )}
-
-      {tab === "timeline" && hasTimeline && (
-        <div style={{ padding: "20px 40px" }}>
-          <GanttChart gantt={gantt} bursts={bursts} sessionEntries={sessionEntries} />
-        </div>
+      {hasTimeline && (
+        <Section label="Timeline & concurrency" defaultOpen>
+          <div style={{ padding: "8px 40px 40px" }}>
+            <GanttChart gantt={gantt} bursts={bursts} sessionEntries={sessionEntries} />
+          </div>
+        </Section>
       )}
-
-      {tab === "timeline" && !hasTimeline && (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--af-text-tertiary)" }}>
-          No active sessions on {date}.
-        </div>
-      )}
-    </>
+    </div>
   );
 }
 
-function TabBtn({
-  active,
-  disabled,
-  onClick,
+function Section({
+  label,
+  defaultOpen = true,
   children,
 }: {
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
+  label: string;
+  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        padding: "10px 18px",
-        background: "transparent",
-        border: "none",
-        borderBottom: active ? "2px solid var(--af-accent)" : "2px solid transparent",
-        color: active ? "var(--af-text)" : "var(--af-text-tertiary)",
-        fontSize: 13,
-        fontWeight: 600,
-        cursor: disabled ? "not-allowed" : "pointer",
-        marginBottom: -1,
-        opacity: disabled ? 0.4 : 1,
-      }}
-    >
-      {children}
-    </button>
+    <div style={{ borderBottom: "1px solid var(--af-border-subtle)" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          padding: "12px 40px",
+          background: "transparent",
+          border: "none",
+          textAlign: "left",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          cursor: "pointer",
+          fontSize: 11,
+          fontWeight: 700,
+          color: "var(--af-text-tertiary)",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+        }}
+      >
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        {label}
+      </button>
+      {open && <div>{children}</div>}
+    </div>
   );
 }

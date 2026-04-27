@@ -70,7 +70,9 @@ export function DayDigestView({
     );
   }, [entries]);
   const narrativeIsFresh = !!digest?.headline && allCapsulesDone;
-  const hasMissingWork = !narrativeIsFresh;
+  // No entries at all → there's nothing to generate. Hide all CTAs.
+  const isEmpty = entries.length === 0;
+  const hasMissingWork = !isEmpty && !narrativeIsFresh;
 
   return (
     <>
@@ -78,12 +80,12 @@ export function DayDigestView({
         style={{
           display: "flex",
           gap: 10,
-          padding: "14px 40px 0",
+          padding: isEmpty ? 0 : "14px 40px 0",
           alignItems: "center",
           flexWrap: "wrap",
         }}
       >
-        {hasMissingWork ? (
+        {isEmpty ? null : hasMissingWork ? (
           <button
             onClick={() => generate(false)}
             disabled={isStreaming}
@@ -135,9 +137,13 @@ export function DayDigestView({
 
       {digest ? (
         <DayDigestRender digest={digest} entries={entries} aiEnabled={aiEnabled} />
+      ) : isEmpty ? (
+        <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-tertiary)", fontSize: 13 }}>
+          No entries on this day.
+        </div>
       ) : (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--af-text-secondary)" }}>
-          <p>No digest generated yet — click Generate above.</p>
+        <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-secondary)", fontSize: 13 }}>
+          No digest generated yet — click Generate above.
         </div>
       )}
     </>
