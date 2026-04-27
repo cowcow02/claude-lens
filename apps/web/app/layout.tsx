@@ -7,6 +7,7 @@ import {
   type LiveSessionPick,
   type LiveEntrySummary,
 } from "@/components/live-sessions-widget";
+import { JobQueueWidget } from "@/components/job-queue-widget";
 import { listProjects, listSessions, walkJsonlFiles } from "@claude-lens/parser/fs";
 import { latestUsageSnapshot } from "@/lib/usage-data";
 import { buildEntriesIndex } from "@/lib/entries-index";
@@ -95,6 +96,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </main>
         </div>
         <LiveSessionsWidget sessions={liveSessionPicks} entrySummaries={liveEntrySummaries} />
+        <JobQueueWidget />
       </body>
     </html>
   );
