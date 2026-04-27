@@ -131,13 +131,17 @@ OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence. Schema:
   ],
   "recurring_themes": [
     {
-      "theme": "≤80 chars label, e.g. 'checkpoint after each phase' or 'loop_suspected on long autonomous runs'",
+      "theme": "≤80 chars; plain-English label. Never a raw flag token. E.g. 'checkpoint per chunk came up three times' or 'long autonomous runs on 4 of 6 days'.",
       "days": ["YYYY-MM-DD", "YYYY-MM-DD"],         // ≥ 2 dates required
-      "evidence": "1-2 sentences explaining what these days share + why it deserves attention",
-      "source": "suggestion" | "friction" | "helpfulness_dip"
+      "evidence": "1-2 sentences explaining what these days share + why it deserves attention. Describe the work, not the tooling.",
+      "source": "suggestion" | "friction" | "helpfulness_dip" | "flag_pattern"
     }
-    // 0-4 entries. Look for: same suggestion text appearing on 2+ days; same friction phrase
-    // recurring; helpfulness dipping below the week's median. Empty array if nothing recurred.
+    // 0-4 entries. Sources:
+    //   "suggestion"      — the same day-level \`suggestion\` text appeared on 2+ days.
+    //   "friction"        — the same actual phrase from \`what_hit_friction\` recurred.
+    //   "helpfulness_dip" — helpfulness regressed below the week's median on a specific day.
+    //   "flag_pattern"    — a deterministic flag (long_autonomous / loop_suspected / orchestrated / …) fired on multiple days. Use this NOT \`friction\` for flag-shape observations. Frame as "the SHAPE of work this week", not as a problem.
+    // Empty array if nothing recurred.
   ],
   "outcome_correlations": [
     {
@@ -149,14 +153,14 @@ OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence. Schema:
   ],
   "friction_categories": [
     {
-      "category": "≤80 chars name",
-      "description": "2-3 sentences clustering this kind of friction across days",
+      "category": "≤80 chars; what actually went wrong, in plain English. Don't name flags here — flags are not friction.",
+      "description": "2-3 sentences clustering this kind of friction across days. Describe what the user hit, not what the parser labelled.",
       "examples": [
         { "date": "YYYY-MM-DD", "quote": "verbatim from that day's what_hit_friction (or first_user / final_agent if friction was diagnostic)" }
-        // 1-3 examples per category. EVERY quote MUST be a direct substring of the named day's text fields.
+        // 1-3 examples per category. EVERY quote MUST be a direct substring of the named day's text fields. If you can't find a quote describing real friction in any day's what_hit_friction, the category does not belong here — surface it via recurring_themes.flag_pattern instead.
       ]
     }
-    // 0-4 categories total. Empty array if smooth — DO NOT invent friction.
+    // 0-4 categories total. Empty array if smooth. DO NOT invent friction. DO NOT put flag patterns here — flag patterns describe the SHAPE of work, not friction. The on_the_horizon opportunity may still address a flag pattern via friction_category_addressed → if so, name a real category that exists here, OR set on_the_horizon to null.
   ],
   "suggestions": {
     "claude_md_additions": [
@@ -193,9 +197,21 @@ OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence. Schema:
   } | null   // null if nothing memorable surfaced
 }
 
-FLAG VOCABULARY:
+VOCABULARY RULES (strict):
 
-You will see internal flag tokens like \`loop_suspected\`, \`long_autonomous\`, \`orchestrated\`, \`fast_ship\`, \`plan_used\`, \`interrupt_heavy\`, \`high_errors\` in \`top_flags\` and per-day \`top_flags\`. These are short tokens for code; the reader does NOT know what they mean. The input payload includes a \`flag_glossary\` array translating each token to a plain-English label + threshold. When you reference a flag in any user-facing string (\`headline\`, \`key_pattern\`, \`trajectory[].line\`, \`recurring_themes[].theme\` / \`evidence\`, \`outcome_correlations[].claim\`, \`friction_categories[].category\` / \`description\`, \`suggestions.*\`, \`on_the_horizon.*\`), translate it. Use the \`label\` from the glossary; if the threshold matters to the claim, name it inline (e.g. "consecutive-tool runs of 8+ same tool calls" not "loop_suspected"). Raw flag tokens are forbidden in user-facing prose. They MAY appear inside friction example \`quote\` fields if the verbatim day-text used them.
+The reader is a working developer, not someone who reads parser internals. Write like a coworker recapping the week, not like a monitoring system describing itself.
+
+1. **Don't say "build" when you mean "session" or "run".** A "build" means CI build to a developer. Use "session", "long run", or "block of work".
+
+2. **Don't use "flagged" as a verb.** Sentences like "X flagged Y" / "Y was flagged by X" / "X carried Y as a top flag" are parser-talk. Flags are *attributes* of work, not actors. Describe what the user *did* or what *happened*, not what the parser *labelled*.
+
+3. **Never make a flag the subject of a user-facing sentence.** Wrong: "loop_suspected fired on Tue + Fri." Right: "Tuesday and Friday both ran long enough to trigger the consecutive-tool-run heuristic." Or just describe the actual work pattern: "Tuesday and Friday were the two days you let Claude run autonomously past an hour."
+
+4. **Internal flag tokens (\`loop_suspected\`, \`long_autonomous\`, \`orchestrated\`, \`fast_ship\`, \`plan_used\`, \`interrupt_heavy\`, \`high_errors\`) are forbidden as nouns or subjects in user-facing prose.** The input payload provides a \`flag_glossary\`. If you need to reference a flag, paraphrase what it *observes* (e.g. "8+ consecutive same-tool calls"), not the token. Tokens MAY appear inside friction example \`quote\` fields if the verbatim day-text used them.
+
+5. **Flag patterns are NOT friction.** Use \`recurring_themes\` with \`source: "flag_pattern"\` to surface flag shape (e.g. "long autonomous runs hit on 4 days"). Only put something in \`friction_categories\` if the day-level \`what_hit_friction\` text describes an actual problem the user hit.
+
+6. **Headlines describe outcomes + concrete work.** A good headline names what shipped, what stalled, what surprised. A bad headline names a flag count.
 
 CRITICAL RULES:
 

@@ -21,6 +21,7 @@ const RECURRING_SOURCE_TONE: Record<NonNullable<WeekDigestType["recurring_themes
   suggestion: { tag: "#4299e1", label: "Repeated suggestion" },
   friction: { tag: "#ed8936", label: "Recurring friction" },
   helpfulness_dip: { tag: "#f56565", label: "Helpfulness dip" },
+  flag_pattern: { tag: "#a0aec0", label: "Shape of work" },
 };
 
 export function WeekDigest({

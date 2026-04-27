@@ -275,15 +275,20 @@ export type WeekHorizonOpportunity = {
 /** A signal that appeared on multiple days. Surfaces patterns the per-day
  *  digests already named — the week digest's job is to count + frame. */
 export type WeekRecurringTheme = {
-  /** Short label, e.g. "checkpoint after each phase" or "loop_suspected on long autonomous runs". */
+  /** Short label written in plain English. Never name a raw flag token here.
+   *  E.g. "checkpoint after each phase" or "long sessions on Tue + Wed". */
   theme: string;
   /** Dates where this theme appeared. ≥ 2 dates required (otherwise it's not recurring). */
   days: string[];
   /** 1–2 sentences naming what the days share + why it deserves attention. */
   evidence: string;
-  /** "suggestion" if the day-level suggestion repeated; "friction" if the same friction recurred;
-   *  "helpfulness_dip" if helpfulness regressed below the week's median. */
-  source: "suggestion" | "friction" | "helpfulness_dip";
+  /** "suggestion": the same day-level suggestion text repeated.
+   *  "friction": the same actual user-facing friction (from what_hit_friction) recurred.
+   *  "helpfulness_dip": helpfulness regressed below the week's median.
+   *  "flag_pattern": a deterministic flag fired on multiple days — informative
+   *    *shape* of work, not friction. Use this (not "friction") for flags
+   *    like loop_suspected / long_autonomous / orchestrated. */
+  source: "suggestion" | "friction" | "helpfulness_dip" | "flag_pattern";
 };
 
 /** A cross-day pattern claim that requires both per-day rollups AND aggregate flags
