@@ -25,9 +25,16 @@ export const UsageSnapshotSchema = z.object({
 
 export type UsageSnapshot = z.infer<typeof UsageSnapshotSchema>;
 
+// Mirrors `members.plan_tier` CHECK in 0002_plan_utilization.sql. Daemon
+// either knows the tier (mapped from Anthropic's rate_limit_tier) or omits
+// the field entirely. Server treats anything outside this enum as "skip
+// upsert" so a future Anthropic tier code never silently downgrades us.
+export const PlanTierKeySchema = z.enum(["pro", "pro-max", "pro-max-20x", "custom"]);
+
 // Cap per-request to keep transactions bounded; the daemon batches.
 export const UsageHistoryPayload = z.object({
   snapshots: z.array(UsageSnapshotSchema).min(1).max(1000),
+  planTier: PlanTierKeySchema.optional(),
 });
 
 export const IngestPayload = z.object({
@@ -47,6 +54,7 @@ export const IngestPayload = z.object({
     }).passthrough(),
   }).passthrough(),
   usageSnapshot: UsageSnapshotSchema.optional(),
+  planTier: PlanTierKeySchema.optional(),
 }).passthrough();
 
 export const ClaimPayload = z.object({

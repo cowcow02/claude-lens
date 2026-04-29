@@ -1,4 +1,4 @@
-import { writeTeamConfig } from "./config.js";
+import { writeTeamConfig, type TeamConfig } from "./config.js";
 import { runTeamBackfill } from "./backfill.js";
 import { runTeamSync } from "./sync.js";
 
@@ -29,13 +29,14 @@ export async function joinTeam(args: string[]) {
     user: { email: string; displayName: string | null };
   };
 
-  writeTeamConfig({
+  const config: TeamConfig = {
     serverUrl,
     memberId: data.membership.id,
     bearerToken,
     teamSlug: data.team.slug,
     pairedAt: new Date().toISOString(),
-  });
+  };
+  writeTeamConfig(config);
 
   console.log(`Paired with "${data.team.name}" as ${data.user.displayName || data.user.email}`);
   console.log(`  role: ${data.membership.role}`);
@@ -46,7 +47,9 @@ export async function joinTeam(args: string[]) {
   // for a week), and the daily-rollup sync fills the activity charts that
   // would otherwise show "No activity" until the daemon's next 5-min tick.
   // Both are non-fatal — failures fall back to the daemon's normal cycle.
-  const backfill = await runTeamBackfill();
+  // Threading `config` directly avoids a stale-disk-read race during the
+  // first paired moment.
+  const backfill = await runTeamBackfill(undefined, undefined, config);
   if (backfill.insertedSnapshots > 0) {
     console.log(
       `  Backfilled ${backfill.insertedSnapshots} usage snapshot${backfill.insertedSnapshots === 1 ? "" : "s"} from local history.`,
@@ -55,7 +58,7 @@ export async function joinTeam(args: string[]) {
     console.log(`  Note: usage backfill skipped (${backfill.error}). Run 'fleetlens team backfill' to retry.`);
   }
 
-  const sync = await runTeamSync();
+  const sync = await runTeamSync(undefined, config);
   if (sync.pushed > 0) {
     console.log(`  Synced ${sync.pushed} day${sync.pushed === 1 ? "" : "s"} of session activity.`);
   } else if (sync.error) {

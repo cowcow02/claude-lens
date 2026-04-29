@@ -45,6 +45,10 @@ export type IngestPayload = {
   observedAt: string;
   dailyRollup: DailyRollup;
   usageSnapshot?: WireUsageSnapshot;
+  // Anthropic-detected tier ("pro"|"pro-max"|"pro-max-20x"|"custom"). Server
+  // upserts memberships.plan_tier when this is set so admins don't have to
+  // hand-pick a tier the daemon already knows.
+  planTier?: string;
 };
 
 // Server only cares about a freshly-captured snapshot. A stale one would
@@ -122,12 +126,14 @@ export function buildRollupsForRange(sessions: SessionMeta[], sinceDay?: string)
 export function buildIngestPayload(
   rollup: DailyRollup,
   usageSnapshot?: WireUsageSnapshot,
+  planTier?: string,
 ): IngestPayload {
   return {
     ingestId: randomUUID(),
     observedAt: new Date().toISOString(),
     dailyRollup: rollup,
     ...(usageSnapshot ? { usageSnapshot } : {}),
+    ...(planTier ? { planTier } : {}),
   };
 }
 

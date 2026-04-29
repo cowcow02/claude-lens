@@ -320,4 +320,77 @@ describe("processUsageHistory", () => {
       processUsageHistory({ snapshots: big }, membershipId, teamId, pool),
     ).rejects.toThrow();
   });
+
+  it("upserts memberships.plan_tier and audit-logs when planTier accompanies the batch", async () => {
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max' WHERE id = $1", [membershipId]);
+    await processUsageHistory(
+      {
+        snapshots: [makeSnap("2026-04-23T01:00:00+00:00")],
+        planTier: "pro-max-20x",
+      },
+      membershipId,
+      teamId,
+      pool,
+    );
+    const { rows } = await pool.query(
+      "SELECT plan_tier FROM memberships WHERE id = $1",
+      [membershipId],
+    );
+    expect(rows[0].plan_tier).toBe("pro-max-20x");
+
+    const events = await pool.query(
+      "SELECT payload FROM events WHERE action = 'members.plan_tier_auto_detected' AND team_id = $1 ORDER BY id DESC LIMIT 1",
+      [teamId],
+    );
+    expect(events.rows[0].payload.previousTier).toBe("pro-max");
+    expect(events.rows[0].payload.newTier).toBe("pro-max-20x");
+    expect(events.rows[0].payload.source).toBe("anthropic_profile");
+  });
+
+  it("does not audit-log when daemon-reported tier matches existing", async () => {
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max-20x' WHERE id = $1", [membershipId]);
+    const beforeCount = await pool.query<{ c: string }>(
+      "SELECT COUNT(*)::text AS c FROM events WHERE action = 'members.plan_tier_auto_detected' AND team_id = $1",
+      [teamId],
+    );
+    await processUsageHistory(
+      { snapshots: [makeSnap("2026-04-24T01:00:00+00:00")], planTier: "pro-max-20x" },
+      membershipId,
+      teamId,
+      pool,
+    );
+    const afterCount = await pool.query<{ c: string }>(
+      "SELECT COUNT(*)::text AS c FROM events WHERE action = 'members.plan_tier_auto_detected' AND team_id = $1",
+      [teamId],
+    );
+    expect(afterCount.rows[0].c).toBe(beforeCount.rows[0].c);
+  });
+});
+
+describe("processIngest planTier auto-upsert", () => {
+  it("updates memberships.plan_tier when ingest payload carries planTier", async () => {
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max' WHERE id = $1", [membershipId]);
+    const day = "2025-09-09";
+    await processIngest(
+      makePayload({
+        dailyRollup: {
+          day,
+          agentTimeMs: 100,
+          sessions: 1,
+          toolCalls: 1,
+          turns: 1,
+          tokens: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
+        },
+        planTier: "pro-max-20x",
+      }),
+      membershipId,
+      teamId,
+      pool,
+    );
+    const { rows } = await pool.query(
+      "SELECT plan_tier FROM memberships WHERE id = $1",
+      [membershipId],
+    );
+    expect(rows[0].plan_tier).toBe("pro-max-20x");
+  });
 });

@@ -4,8 +4,10 @@ import { readSnapshots } from "../usage/storage.js";
 import type { UsageSnapshot } from "../usage/api.js";
 import { readTeamConfig, type TeamConfig } from "./config.js";
 import type { WireUsageSnapshot, WireUsageWindow } from "./push.js";
+import { getPlanTier } from "../usage/profile.js";
 
 const USAGE_LOG = join(homedir(), ".cclens", "usage.jsonl");
+const PROFILE_CACHE = join(homedir(), ".cclens", "profile.json");
 
 // Server caps each batch (zod schema). Stay safely under so a few extra
 // header bytes don't tip a payload over.
@@ -57,6 +59,7 @@ export function chunk<T>(items: T[], size: number): T[][] {
 async function postBatch(
   config: TeamConfig,
   snapshots: WireUsageSnapshot[],
+  planTier?: string,
 ): Promise<{ inserted: number; skipped: number; status: number }> {
   const res = await fetch(`${config.serverUrl}/api/ingest/usage-history`, {
     method: "POST",
@@ -64,7 +67,7 @@ async function postBatch(
       "Content-Type": "application/json",
       Authorization: `Bearer ${config.bearerToken}`,
     },
-    body: JSON.stringify({ snapshots }),
+    body: JSON.stringify({ snapshots, ...(planTier ? { planTier } : {}) }),
   });
   if (!res.ok) {
     return { inserted: 0, skipped: snapshots.length, status: res.status };
@@ -95,13 +98,14 @@ export async function runTeamBackfill(
 
   const wire = raw.map(rawToWire);
   const batches = chunk(wire, BATCH_SIZE);
+  const planTier = (await getPlanTier(PROFILE_CACHE).catch(() => null)) ?? undefined;
 
   let inserted = 0;
   let skipped = 0;
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i]!;
     try {
-      const result = await postBatch(config, batch);
+      const result = await postBatch(config, batch, planTier);
       if (result.status >= 400) {
         log("warn", `team backfill: batch ${i + 1}/${batches.length} failed (${result.status})`);
         return {

@@ -9,7 +9,12 @@
  */
 
 import { Activity } from "lucide-react";
-import { readUsageSnapshots, latestUsageSnapshot } from "@/lib/usage-data";
+import {
+  readUsageSnapshots,
+  latestUsageSnapshot,
+  readCachedPlanTier,
+  PLAN_TIER_LABELS,
+} from "@/lib/usage-data";
 import { UsageChartsDashboard } from "@/components/usage-charts-dashboard";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +22,7 @@ export const dynamic = "force-dynamic";
 export default function UsagePage() {
   const snapshots = readUsageSnapshots();
   const latest = latestUsageSnapshot();
+  const tier = readCachedPlanTier();
 
   return (
     <div
@@ -49,6 +55,32 @@ export default function UsagePage() {
         <span style={{ fontSize: 11, color: "var(--af-text-tertiary)" }}>
           historical plan utilization · current usage in sidebar
         </span>
+        {tier && (
+          <span
+            style={{
+              marginLeft: "auto",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: 12,
+              padding: "4px 10px",
+              border: "1px solid var(--af-border-subtle)",
+              borderRadius: 999,
+              fontFamily: "var(--font-mono)",
+            }}
+            title={tier.rateLimitTier ? `Anthropic rate_limit_tier: ${tier.rateLimitTier}` : undefined}
+          >
+            <span style={{ color: "var(--af-text-tertiary)" }}>plan</span>
+            <span style={{ color: "var(--af-text)", fontWeight: 600 }}>
+              {PLAN_TIER_LABELS[tier.planTier].label}
+            </span>
+            {PLAN_TIER_LABELS[tier.planTier].weeklyLimitUsd > 0 && (
+              <span style={{ color: "var(--af-text-tertiary)" }}>
+                · ${PLAN_TIER_LABELS[tier.planTier].weeklyLimitUsd}/wk
+              </span>
+            )}
+          </span>
+        )}
       </header>
 
       {!latest ? (

@@ -43,6 +43,14 @@ export async function processIngest(
     `, [teamId, membershipId, r.day, r.agentTimeMs, r.sessions, r.toolCalls, r.turns,
         r.tokens.input, r.tokens.output, r.tokens.cacheRead, r.tokens.cacheWrite]);
 
+    if (payload.planTier) {
+      // Server-trusted source of truth — the daemon read this directly from
+      // Anthropic's profile endpoint. Admin can still override post-hoc;
+      // the next daemon push will reassert if Anthropic still reports the
+      // same tier.
+      await upsertMembershipPlanTier(client, teamId, membershipId, payload.planTier);
+    }
+
     if (payload.usageSnapshot) {
       const u = payload.usageSnapshot;
       await client.query(`
@@ -96,12 +104,15 @@ export async function processUsageHistory(
   pool?: pg.Pool,
 ) {
   const p = pool || getPool();
-  const { snapshots } = UsageHistoryPayload.parse(raw);
+  const { snapshots, planTier } = UsageHistoryPayload.parse(raw);
 
   let inserted = 0;
   const client = await p.connect();
   try {
     await client.query("BEGIN");
+    if (planTier) {
+      await upsertMembershipPlanTier(client, teamId, membershipId, planTier);
+    }
     for (const u of snapshots) {
       const res = await client.query(
         `INSERT INTO plan_utilization (
@@ -152,4 +163,29 @@ export async function processUsageHistory(
   }
 
   return { accepted: true, received: snapshots.length, inserted, skipped: snapshots.length - inserted };
+}
+
+// Audit-logged upsert. Skips the write when the value already matches so
+// the audit log doesn't fill with no-op ticks every 5 minutes.
+async function upsertMembershipPlanTier(
+  client: pg.PoolClient,
+  teamId: string,
+  membershipId: string,
+  planTier: string,
+): Promise<void> {
+  const cur = await client.query<{ plan_tier: string }>(
+    "SELECT plan_tier FROM memberships WHERE id = $1 AND team_id = $2",
+    [membershipId, teamId],
+  );
+  const previous = cur.rows[0]?.plan_tier ?? null;
+  if (previous === planTier) return;
+
+  await client.query(
+    "UPDATE memberships SET plan_tier = $1 WHERE id = $2 AND team_id = $3",
+    [planTier, membershipId, teamId],
+  );
+  await client.query(
+    "INSERT INTO events (team_id, actor_id, action, payload) VALUES ($1, NULL, 'members.plan_tier_auto_detected', $2)",
+    [teamId, JSON.stringify({ membershipId, previousTier: previous, newTier: planTier, source: "anthropic_profile" })],
+  );
 }

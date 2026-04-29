@@ -55,3 +55,40 @@ export const latestUsageSnapshot = cache((): UsageSnapshot | null => {
   const all = readUsageSnapshots();
   return all.length > 0 ? all[all.length - 1]! : null;
 });
+
+// The CLI's profile cache mirrors what we report to a paired team-server.
+// Reading it here keeps personal and team editions consistent — both show
+// the same "what tier are we?" answer.
+export type CachedPlanTier = {
+  planTier: "pro" | "pro-max" | "pro-max-20x" | "custom";
+  rateLimitTier: string | null;
+  organizationType: string | null;
+  fetchedAtMs: number;
+};
+
+export const readCachedPlanTier = cache((): CachedPlanTier | null => {
+  const path = process.env.CCLENS_PROFILE_CACHE || join(homedir(), ".cclens", "profile.json");
+  if (!existsSync(path)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as {
+      fetchedAtMs?: number;
+      profile?: { planTier?: string; rateLimitTier?: string | null; organizationType?: string | null };
+    };
+    if (!raw.profile?.planTier) return null;
+    return {
+      planTier: raw.profile.planTier as CachedPlanTier["planTier"],
+      rateLimitTier: raw.profile.rateLimitTier ?? null,
+      organizationType: raw.profile.organizationType ?? null,
+      fetchedAtMs: typeof raw.fetchedAtMs === "number" ? raw.fetchedAtMs : 0,
+    };
+  } catch {
+    return null;
+  }
+});
+
+export const PLAN_TIER_LABELS: Record<CachedPlanTier["planTier"], { label: string; weeklyLimitUsd: number }> = {
+  pro: { label: "Claude Pro", weeklyLimitUsd: 20 },
+  "pro-max": { label: "Claude Pro Max", weeklyLimitUsd: 100 },
+  "pro-max-20x": { label: "Claude Pro Max 20x", weeklyLimitUsd: 200 },
+  custom: { label: "Custom plan", weeklyLimitUsd: 0 },
+};

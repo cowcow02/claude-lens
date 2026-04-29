@@ -9,8 +9,10 @@ import {
   type IngestPayload,
 } from "./push.js";
 import { enqueuePayload, dequeuePayloads } from "./queue.js";
+import { getPlanTier } from "../usage/profile.js";
 
 const USAGE_LOG = join(homedir(), ".cclens", "usage.jsonl");
+const PROFILE_CACHE = join(homedir(), ".cclens", "profile.json");
 
 type LogFn = (level: "info" | "warn" | "error", message: string) => void;
 
@@ -25,8 +27,11 @@ export type SyncOutcome = {
   error?: string;
 };
 
-export async function runTeamSync(log: LogFn = noopLog): Promise<SyncOutcome> {
-  const config = readTeamConfig();
+export async function runTeamSync(
+  log: LogFn = noopLog,
+  configOverride?: TeamConfig | null,
+): Promise<SyncOutcome> {
+  const config = configOverride === undefined ? readTeamConfig() : configOverride;
   if (!config) return { paired: false, pushed: 0, queued: 0, queuedDrained: 0 };
 
   try {
@@ -50,11 +55,19 @@ export async function runTeamSync(log: LogFn = noopLog): Promise<SyncOutcome> {
     // only to the most recent rollup so a multi-day backfill doesn't repeat
     // the same captured_at across older days.
     const usageSnapshot = readLatestUsageSnapshotForWire(USAGE_LOG) ?? undefined;
+    // Tier is membership-level metadata; tag every push so the server can
+    // self-correct if it changes (admin upgraded mid-week, etc.). Cached on
+    // disk to avoid hammering Anthropic's profile endpoint.
+    const planTier = (await getPlanTier(PROFILE_CACHE).catch(() => null)) ?? undefined;
 
     for (let i = 0; i < rollups.length; i++) {
       const rollup = rollups[i]!;
       const isLatest = i === rollups.length - 1;
-      const payload = buildIngestPayload(rollup, isLatest ? usageSnapshot : undefined);
+      const payload = buildIngestPayload(
+        rollup,
+        isLatest ? usageSnapshot : undefined,
+        planTier,
+      );
       const result = await pushToTeamServer(config, payload);
       if (!result.ok) {
         log("warn", `team push failed on ${rollup.day} (${result.status}); queueing`);
