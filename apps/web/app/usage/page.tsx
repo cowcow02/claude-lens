@@ -18,11 +18,10 @@ import {
 import {
   readCalibrationDump,
   predictedSeriesFor,
-  lastCompletedCycleSummary,
+  previousCyclesTrend,
 } from "@/lib/calibration-data";
 import { UsageChartsDashboard } from "@/components/usage-charts-dashboard";
-import { CalibrationComparisonChart } from "@/components/calibration-comparison-chart";
-import { LastCycleSummary } from "@/components/last-cycle-summary";
+import { PreviousCyclesTrend } from "@/components/previous-cycles-trend";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +31,7 @@ export default async function UsagePage() {
   const tier = readCachedPlanTier();
   const calibration = await readCalibrationDump();
   const predicted = predictedSeriesFor(calibration);
-  const lastCycle = lastCompletedCycleSummary(calibration);
+  const cycles7d = previousCyclesTrend(calibration, "7d");
 
   return (
     <div
@@ -97,56 +96,7 @@ export default async function UsagePage() {
         <EmptyState />
       ) : (
         <>
-          <LastCycleSummary fiveHour={lastCycle.five_hour} sevenDay={lastCycle.seven_day} />
-          {calibration && (
-            <section
-              style={{
-                border: "1px solid var(--af-border-subtle)",
-                padding: 16,
-                borderRadius: 6,
-              }}
-            >
-              <header style={{ marginBottom: 8 }}>
-                <h2 style={{ fontSize: 14, margin: 0, fontWeight: 700 }}>
-                  Calibration check · real vs JSONL-predicted
-                </h2>
-                <p style={{ fontSize: 11, color: "var(--af-text-tertiary)", margin: "4px 0 0" }}>
-                  Validates that we can reconstruct utilization from local token spend alone — the
-                  foundation for cold-start estimates on team edition.
-                </p>
-              </header>
-              <div style={{ marginBottom: 14 }}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontFamily: "var(--font-mono)",
-                    color: "var(--af-text-tertiary)",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em",
-                    marginBottom: 4,
-                  }}
-                >
-                  5-hour window
-                </div>
-                <CalibrationComparisonChart curve={calibration.curve} window="5h" />
-              </div>
-              <div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontFamily: "var(--font-mono)",
-                    color: "var(--af-text-tertiary)",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em",
-                    marginBottom: 4,
-                  }}
-                >
-                  7-day window
-                </div>
-                <CalibrationComparisonChart curve={calibration.curve} window="7d" />
-              </div>
-            </section>
-          )}
+          <PreviousCyclesTrend windowLabel="7d" cycles={cycles7d} />
           <UsageChartsDashboard snapshots={snapshots} predicted={predicted} />
           <div
             style={{

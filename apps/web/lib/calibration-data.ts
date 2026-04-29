@@ -41,66 +41,52 @@ export type PredictedSeriesByKey = {
   seven_day_sonnet: { capturedAt: number; util: number }[];
 };
 
-// One-line summary of the most recently *completed* cycle, ready to render
-// on the dashboard or a team-edition member card. `source: "real"` means
-// the daemon covered the whole cycle and we report the observed peak.
-// `source: "predicted"` means the cycle predates daemon data and we fall
+// History of recent cycles for trend visuals. Each entry is one full cycle
+// the user lived through — `current: true` flags the live (in-progress)
+// cycle, the rest are completed. `source: "real"` = daemon observed the
+// peak, `source: "predicted"` = cycle predates daemon data and we fall
 // back to the JSONL-derived prediction (cold-start path).
-export type LastCycleSummary = {
-  windowLabel: "5h" | "7d";
+export type CyclePeak = {
+  endsAt: string;
   peakPct: number;
   source: "real" | "predicted";
-  endsAt: string;        // ISO timestamp the cycle ended at
-  startedAt: string;     // ISO timestamp the cycle began at
+  current: boolean;
 };
 
-// For each window, find the most recently *ended* cycle and report its
-// peak utilization. Cycles are bucketed by `cycle_end_*` (= snapshot's
-// resets_at) which is authoritative; the predicted curve alone can't
-// always tell cycle boundaries apart from data drops. Real data wins
-// when available; predicted is the cold-start fallback.
-export function lastCompletedCycleSummary(
+// Per-cycle peak history for a single window (5h or 7d). Used by the
+// dashboard's "previous cycles" trend strip — humans understand "last 4
+// weeks: 86%, 92%, 44%, 34% (current)" much better than a single number.
+// Limited to the last `maxCycles` (most recent) so the visual stays compact.
+export function previousCyclesTrend(
   dump: CalibrationDump | null,
-): { five_hour: LastCycleSummary | null; seven_day: LastCycleSummary | null } {
-  const empty = { five_hour: null, seven_day: null };
-  if (!dump || dump.curve.length < 2) return empty;
-  const curve = dump.curve;
+  window: "5h" | "7d",
+  maxCycles = 6,
+): CyclePeak[] {
+  if (!dump || dump.curve.length < 2) return [];
+  const HOUR = 3_600_000;
+  const cycleKey: "cycle_end_5h" | "cycle_end_7d" = window === "5h" ? "cycle_end_5h" : "cycle_end_7d";
+  const predKey: "pred_5h" | "pred_7d" = window === "5h" ? "pred_5h" : "pred_7d";
+  const realKey: "real_5h" | "real_7d" = window === "5h" ? "real_5h" : "real_7d";
 
-  function summarise(
-    predKey: "pred_5h" | "pred_7d",
-    realKey: "real_5h" | "real_7d",
-    cycleKey: "cycle_end_5h" | "cycle_end_7d",
-    windowLabel: "5h" | "7d",
-  ): LastCycleSummary | null {
-    const nowMs = Date.now();
-    // Anthropic's resets_at jitters by milliseconds across snapshots in
-    // the same cycle (e.g. 19:00:00.495 vs 19:00:00.881). Hour-round the
-    // bucket key so all snapshots in one cycle land in the same bucket.
-    const HOUR = 3_600_000;
-    const byCycle = new Map<number, typeof curve>();
-    for (const p of curve) {
-      const k = p[cycleKey];
-      if (!k) continue;
-      const ms = Date.parse(k);
-      if (Number.isNaN(ms)) continue;
-      const bucket = Math.round(ms / HOUR) * HOUR;
-      const arr = byCycle.get(bucket) ?? [];
-      arr.push(p);
-      byCycle.set(bucket, arr);
-    }
-    if (byCycle.size === 0) return null;
+  // Hour-round the cycle key so millisecond-jittered resets collapse.
+  const byCycle = new Map<number, typeof dump.curve>();
+  for (const p of dump.curve) {
+    const k = p[cycleKey];
+    if (!k) continue;
+    const ms = Date.parse(k);
+    if (Number.isNaN(ms)) continue;
+    const bucket = Math.round(ms / HOUR) * HOUR;
+    const arr = byCycle.get(bucket) ?? [];
+    arr.push(p);
+    byCycle.set(bucket, arr);
+  }
 
-    const completedKeys = Array.from(byCycle.keys())
-      .filter((k) => k <= nowMs)
-      .sort((a, b) => a - b);
-    if (completedKeys.length === 0) return null;
-    const lastKey = completedKeys[completedKeys.length - 1]!;
-    const slice = byCycle.get(lastKey)!;
-    if (slice.length === 0) return null;
-
+  const nowMs = Date.now();
+  const cycles: CyclePeak[] = [];
+  for (const [endMs, points] of Array.from(byCycle.entries()).sort((a, b) => a[0] - b[0])) {
     let peak = 0;
     let source: "real" | "predicted" = "predicted";
-    for (const p of slice) {
+    for (const p of points) {
       const r = p[realKey];
       if (typeof r === "number" && r > peak) {
         peak = r;
@@ -108,25 +94,19 @@ export function lastCompletedCycleSummary(
       }
     }
     if (source === "predicted") {
-      for (const p of slice) {
+      for (const p of points) {
         const v = p[predKey] ?? 0;
         if (v > peak) peak = v;
       }
     }
-
-    return {
-      windowLabel,
+    cycles.push({
+      endsAt: new Date(endMs).toISOString(),
       peakPct: Math.round(peak * 10) / 10,
       source,
-      startedAt: slice[0]!.ts,
-      endsAt: new Date(lastKey).toISOString(),
-    };
+      current: endMs > nowMs,
+    });
   }
-
-  return {
-    five_hour: summarise("pred_5h", "real_5h", "cycle_end_5h", "5h"),
-    seven_day: summarise("pred_7d", "real_7d", "cycle_end_7d", "7d"),
-  };
+  return cycles.slice(-maxCycles);
 }
 
 // Converts the calibration dump into the same shape UsageChart expects to

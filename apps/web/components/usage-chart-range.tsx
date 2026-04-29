@@ -105,12 +105,17 @@ export function UsageChartRange({
     }
     if (valid.length === 0) return null;
 
-    // 2. Group into cycles by resets_at. All snapshots sharing the same
-    //    resets_at belong to the same rolling window.
-    const byReset = new Map<string, typeof valid>();
+    // 2. Group into cycles by resets_at. Anthropic jitters resets_at by
+    //    milliseconds across snapshots in the same cycle, so we hour-round
+    //    the bucket key — without this, "complete cycles" inflates from
+    //    ~4 to ~2000 over a 30-day window.
+    const HOUR = 3_600_000;
+    const byReset = new Map<number, typeof valid>();
     for (const p of valid) {
       if (!p.resetsAt) continue;
-      const key = p.resetsAt;
+      const ms = new Date(p.resetsAt).getTime();
+      if (Number.isNaN(ms)) continue;
+      const key = Math.round(ms / HOUR) * HOUR;
       let bucket = byReset.get(key);
       if (!bucket) {
         bucket = [];
@@ -120,8 +125,7 @@ export function UsageChartRange({
     }
 
     const cycles: CycleData[] = [];
-    for (const [resetsAtIso, points] of byReset) {
-      const resetsAtMs = new Date(resetsAtIso).getTime();
+    for (const [resetsAtMs, points] of byReset) {
       const cycleStartMs = resetsAtMs - windowMs;
       // Sort points by time
       points.sort((a, b) => a.t - b.t);
