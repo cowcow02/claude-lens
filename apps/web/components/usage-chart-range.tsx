@@ -76,6 +76,7 @@ export function UsageChartRange({
   endMs,
   windowMs,
   colorVar,
+  predictedSeries,
 }: {
   snapshots: UsageSnapshot[];
   seriesKey: SeriesKey;
@@ -84,6 +85,10 @@ export function UsageChartRange({
   /** Window duration in ms — 5h or 7d depending on seriesKey */
   windowMs: number;
   colorVar: string;
+  /** JSONL-derived utilization estimates (one per snapshot timestamp).
+   * Drawn per cycle as a dashed overlay so historical cycles can be
+   * compared against the prediction. */
+  predictedSeries?: { capturedAt: number; util: number }[];
 }) {
   const width = 1280;
   const height = 320;
@@ -396,6 +401,37 @@ export function UsageChartRange({
                     strokeLinejoin="round"
                   />
                 )}
+
+                {/* Predicted overlay for THIS cycle — clip to cycle window
+                 * and the visible range. Dashed orange so it can be visually
+                 * compared against the real burndown line. */}
+                {(() => {
+                  const predHere = (predictedSeries ?? [])
+                    .filter(
+                      (p) =>
+                        p.capturedAt >= cycle.startMs &&
+                        p.capturedAt <= cycle.resetsAtMs &&
+                        p.capturedAt >= startMs &&
+                        p.capturedAt <= endMs,
+                    )
+                    .map((p) => ({ t: p.capturedAt, u: p.util, remaining: 100 - p.util }))
+                    .sort((a, b) => a.t - b.t);
+                  if (predHere.length < 2) return null;
+                  const predPath = buildGappedPath(predHere, xScale, yScale);
+                  if (!predPath) return null;
+                  return (
+                    <path
+                      d={predPath}
+                      fill="none"
+                      stroke="#ff7a00"
+                      strokeOpacity="0.85"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeDasharray="5 4"
+                    />
+                  );
+                })()}
 
                 {/* Data point dots — ensures isolated/gap-bounded snapshots
                     remain visible even when the polyline breaks around them. */}

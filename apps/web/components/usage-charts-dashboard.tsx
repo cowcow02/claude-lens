@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import type { UsageSnapshot } from "@/lib/usage-data";
+import type { PredictedSeriesByKey } from "@/lib/calibration-data";
 import { UsageChart } from "@/components/usage-chart";
 import { UsageChartRange } from "@/components/usage-chart-range";
 import { OptionalChart } from "@/components/optional-chart";
@@ -44,8 +45,20 @@ const SONNET_WINDOW: WindowConfig = {
  * component receives them as a prop and handles purely the interaction
  * layer (2-col grid, expand-to-modal).
  */
-export function UsageChartsDashboard({ snapshots }: { snapshots: UsageSnapshot[] }) {
+export function UsageChartsDashboard({
+  snapshots,
+  predicted,
+}: {
+  snapshots: UsageSnapshot[];
+  predicted?: PredictedSeriesByKey;
+}) {
   const [expanded, setExpanded] = useState<WindowConfig | null>(null);
+  const emptyPredicted: PredictedSeriesByKey = {
+    five_hour: [],
+    seven_day: [],
+    seven_day_sonnet: [],
+  };
+  const pred = predicted ?? emptyPredicted;
 
   // Close on Escape.
   useEffect(() => {
@@ -80,6 +93,7 @@ export function UsageChartsDashboard({ snapshots }: { snapshots: UsageSnapshot[]
             seriesKey={w.key}
             windowMs={w.windowMs}
             colorVar={w.colorVar}
+            predictedSeries={pred[w.key]}
             onExpand={() => setExpanded(w)}
           />
         </section>
@@ -93,6 +107,7 @@ export function UsageChartsDashboard({ snapshots }: { snapshots: UsageSnapshot[]
             seriesKey={SONNET_WINDOW.key}
             windowMs={SONNET_WINDOW.windowMs}
             colorVar={SONNET_WINDOW.colorVar}
+            predictedSeries={pred[SONNET_WINDOW.key]}
             onExpand={() => setExpanded(SONNET_WINDOW)}
           />
         </section>
@@ -102,6 +117,7 @@ export function UsageChartsDashboard({ snapshots }: { snapshots: UsageSnapshot[]
         <ExpandedModal
           config={expanded}
           snapshots={snapshots}
+          predictedSeries={pred[expanded.key]}
           onClose={() => setExpanded(null)}
         />
       )}
@@ -112,10 +128,12 @@ export function UsageChartsDashboard({ snapshots }: { snapshots: UsageSnapshot[]
 function ExpandedModal({
   config,
   snapshots,
+  predictedSeries,
   onClose,
 }: {
   config: WindowConfig;
   snapshots: UsageSnapshot[];
+  predictedSeries?: { capturedAt: number; util: number }[];
   onClose: () => void;
 }) {
   const [range, setRange] = useState<DateRange>({ preset: "current" });
@@ -236,6 +254,7 @@ function ExpandedModal({
               endMs={resolved.endMs}
               windowMs={config.windowMs}
               colorVar={config.colorVar}
+              predictedSeries={predictedSeries}
             />
           ) : (
             <div
