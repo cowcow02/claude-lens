@@ -35,13 +35,16 @@ export function CalibrationComparisonChart({
   const predKey = window === "5h" ? "pred_5h" : "pred_7d";
 
   // Keep all points so we can draw a continuous predicted line, including the
-  // pre-daemon back-fill segment where real is null.
+  // pre-daemon back-fill segment where real is null. Clamp predicted to
+  // [0, 100] for display — utilization can't physically exceed the cap, and
+  // un-clamped predictions in cold-start windows have spiked to 700%+ on
+  // bursty users, blowing the y-axis.
   const allPoints = curve
     .filter((c) => Number.isFinite(c[predKey]))
     .map((c) => ({
       ts: new Date(c.ts).getTime(),
       real: c[realKey] !== null && Number.isFinite(c[realKey] as number) ? Number(c[realKey]) : null,
-      pred: Math.max(0, Number(c[predKey])),
+      pred: Math.max(0, Math.min(100, Number(c[predKey]))),
     }))
     .sort((a, b) => a.ts - b.ts);
   const realPoints = allPoints.filter((p) => p.real !== null) as Array<{ ts: number; real: number; pred: number }>;
@@ -58,20 +61,19 @@ export function CalibrationComparisonChart({
 
   const tsMin = allPoints[0]!.ts;
   const tsMax = allPoints[allPoints.length - 1]!.ts;
-  const yMax = Math.max(
-    100,
-    ...allPoints.map((p) => Math.max(p.real ?? 0, p.pred)),
-  );
+  // Y-axis tops out at 100% — predicted is clamped to that ceiling above.
+  const yMax = 100;
 
   const xOf = (ts: number) =>
     padX + ((ts - tsMin) / (tsMax - tsMin)) * (width - padX * 2);
   const yOf = (v: number) =>
     padTop + (1 - v / yMax) * (height - padTop - padBottom);
 
-  // Predicted line spans EVERYTHING (back-fill + real period). Real line
-  // only spans where we have daemon data.
+  // Predicted line spans EVERYTHING (back-fill + real period). Real plotted
+  // as individual dots (one per snapshot) so each datapoint can be eyeballed
+  // against the predicted curve — a line would smooth over the natural gaps
+  // between 5-minute snapshots.
   const predPath = pathFrom(allPoints.map((p) => [xOf(p.ts), yOf(p.pred)] as [number, number]));
-  const realPath = pathFrom(realPoints.map((p) => [xOf(p.ts), yOf(p.real)] as [number, number]));
   // Vertical divider between back-fill region and real region.
   const realStartTs = realPoints[0]?.ts ?? tsMin;
   const showBackfillDivider = realStartTs > tsMin;
@@ -109,7 +111,15 @@ export function CalibrationComparisonChart({
         }}
       >
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <span style={{ display: "inline-block", width: 12, height: 2, background: "var(--af-accent)" }} />
+          <span
+            style={{
+              display: "inline-block",
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: "var(--af-accent)",
+            }}
+          />
           real (daemon)
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -174,7 +184,7 @@ export function CalibrationComparisonChart({
             {l.label}
           </text>
         ))}
-        {/* predicted (drawn first so real is on top) */}
+        {/* predicted line — continuous, drawn first so real dots overlay on top */}
         <path
           d={predPath}
           fill="none"
@@ -183,14 +193,17 @@ export function CalibrationComparisonChart({
           strokeLinejoin="round"
           strokeDasharray="4 3"
         />
-        {/* real */}
-        <path
-          d={realPath}
-          fill="none"
-          stroke="var(--af-accent)"
-          strokeWidth={1.6}
-          strokeLinejoin="round"
-        />
+        {/* real — individual dots so the comparison is per-snapshot */}
+        {realPoints.map((p, i) => (
+          <circle
+            key={i}
+            cx={xOf(p.ts)}
+            cy={yOf(p.real)}
+            r={1.6}
+            fill="var(--af-accent)"
+            fillOpacity={0.9}
+          />
+        ))}
       </svg>
     </div>
   );

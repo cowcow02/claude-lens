@@ -403,8 +403,9 @@ export function UsageChartRange({
                 )}
 
                 {/* Predicted overlay for THIS cycle — clip to cycle window
-                 * and the visible range. Dashed orange so it can be visually
-                 * compared against the real burndown line. */}
+                 * and the visible range. Clamp util to [0, 100] so cold-start
+                 * extrapolations don't blow off-chart. Dashed orange so it
+                 * can be visually compared against the real burndown line. */}
                 {(() => {
                   const predHere = (predictedSeries ?? [])
                     .filter(
@@ -414,7 +415,10 @@ export function UsageChartRange({
                         p.capturedAt >= startMs &&
                         p.capturedAt <= endMs,
                     )
-                    .map((p) => ({ t: p.capturedAt, u: p.util, remaining: 100 - p.util }))
+                    .map((p) => {
+                      const u = Math.max(0, Math.min(100, p.util));
+                      return { t: p.capturedAt, u, remaining: 100 - u };
+                    })
                     .sort((a, b) => a.t - b.t);
                   if (predHere.length < 2) return null;
                   const predPath = buildGappedPath(predHere, xScale, yScale);

@@ -68,11 +68,12 @@ export function UsageChart({
       .filter((x) => x.capturedAt >= windowStart && x.capturedAt <= resetsAt)
       .map((x) => [x.capturedAt, 100 - (x.window.utilization ?? 0)] as const);
 
-    // Predicted series: clip to window, convert util→remaining-budget. Sorted
-    // ascending by capturedAt to make path drawing trivial.
+    // Predicted series: clip to window, clamp util to [0, 100] (model is
+    // unbounded but utilization can't physically exceed the cap), then
+    // convert to remaining-budget. Sorted ascending for path drawing.
     const predicted = (predictedSeries ?? [])
       .filter((p) => p.capturedAt >= windowStart && p.capturedAt <= resetsAt)
-      .map((p) => [p.capturedAt, 100 - p.util] as const)
+      .map((p) => [p.capturedAt, 100 - Math.max(0, Math.min(100, p.util))] as const)
       .sort((a, b) => a[0] - b[0]);
 
     return { points, predicted, windowStart, windowEnd: resetsAt, now, currentRemaining, latest };
