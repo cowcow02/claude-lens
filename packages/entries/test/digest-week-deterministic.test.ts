@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDeterministicWeekDigest, weekDates } from "../src/digest-week.js";
-import type { DayDigest } from "../src/types.js";
+import type { DayDigest, Entry } from "../src/types.js";
 import { CURRENT_DAY_DIGEST_SCHEMA_VERSION } from "../src/types.js";
 
 function mkDay(overrides: Partial<DayDigest>): DayDigest {
@@ -127,5 +127,92 @@ describe("buildDeterministicWeekDigest", () => {
     ];
     const w = buildDeterministicWeekDigest("2026-04-20", days);
     expect(w.day_refs).toEqual(["2026-04-20", "2026-04-22", "2026-04-25"]);
+  });
+
+  it("propagates dominant_shape from day_signals into days_active", () => {
+    const days = [
+      mkDay({
+        key: "2026-04-20", agent_min: 60, outcome_day: "shipped",
+        day_signals: {
+          dominant_shape: "spec-review-loop", shape_distribution: { "spec-review-loop": 2 },
+          skills_loaded: [], user_authored_skills_used: [], user_authored_subagents_used: [],
+          prompt_frames: [],
+          comm_style: {
+            verbosity_distribution: { short: 0, medium: 0, long: 0, very_long: 0 },
+            external_refs: [],
+            steering: { interrupts: 0, frustrated: 0, dissatisfied: 0, sessions_with_mid_run_redirect: 0 },
+          },
+          brainstorm_warmup_session_count: 0, todo_ops_total: 0, plan_mode_used: false,
+        },
+      }),
+    ];
+    const w = buildDeterministicWeekDigest("2026-04-20", days);
+    expect(w.days_active[0]?.dominant_shape).toBe("spec-review-loop");
+  });
+
+  it("computes working_shapes from day_signals (no entries needed)", () => {
+    const days = [
+      mkDay({
+        key: "2026-04-20", agent_min: 60, outcome_day: "shipped",
+        day_signature: "spec-review-loop on x: shipped clean",
+        day_signals: {
+          dominant_shape: "spec-review-loop",
+          shape_distribution: { "spec-review-loop": 1 },
+          skills_loaded: [], user_authored_skills_used: [], user_authored_subagents_used: [],
+          prompt_frames: [],
+          comm_style: {
+            verbosity_distribution: { short: 0, medium: 0, long: 0, very_long: 0 },
+            external_refs: [],
+            steering: { interrupts: 0, frustrated: 0, dissatisfied: 0, sessions_with_mid_run_redirect: 0 },
+          },
+          brainstorm_warmup_session_count: 0, todo_ops_total: 0, plan_mode_used: false,
+        },
+      }),
+    ];
+    const w = buildDeterministicWeekDigest("2026-04-20", days);
+    expect(w.working_shapes).not.toBeNull();
+    const row = w.working_shapes!.find(r => r.shape === "spec-review-loop");
+    expect(row).toBeDefined();
+    expect(row!.occurrences[0]?.day_signature).toBe("spec-review-loop on x: shipped clean");
+  });
+
+  it("falls back to on-the-fly day_signals when DayDigest lacks them (cached pre-refactor digest)", () => {
+    // DayDigest with no day_signals; entries provided through entriesByDay map.
+    const day = mkDay({ key: "2026-04-20", agent_min: 60, outcome_day: "shipped" });
+    const entry: Entry = {
+      version: 2, session_id: "s1", local_day: "2026-04-20",
+      project: "/x", start_iso: "2026-04-20T10:00:00Z", end_iso: "2026-04-20T11:00:00Z",
+      numbers: {
+        active_min: 60, turn_count: 10, tools_total: 20, subagent_calls: 2,
+        skill_calls: 0, task_ops: 0, interrupts: 0, tool_errors: 0,
+        consec_same_tool_max: 0, exit_plan_calls: 0, prs: 0, commits: 0,
+        pushes: 0, tokens_total: 0,
+      },
+      flags: [], primary_model: null, model_mix: {}, first_user: "", final_agent: "",
+      pr_titles: [], top_tools: [], skills: {},
+      subagents: [
+        { type: "general-purpose", description: "review the spec", background: false, prompt_preview: "review pass" },
+        { type: "general-purpose", description: "re-review the spec", background: false, prompt_preview: "second review" },
+      ],
+      satisfaction_signals: { happy: 0, satisfied: 0, dissatisfied: 0, frustrated: 0 },
+      user_input_sources: { human: 0, teammate: 0, skill_load: 0, slash_command: 0 },
+      enrichment: {
+        status: "pending", generated_at: null, model: null, cost_usd: null,
+        error: null, brief_summary: null, underlying_goal: null,
+        friction_detail: null, user_instructions: [], outcome: null,
+        claude_helpfulness: null, goal_categories: {}, retry_count: 0,
+      },
+      generated_at: "2026-04-20T11:00:00Z", source_jsonl: "/",
+      source_checkpoint: { byte_offset: 0, last_event_ts: null },
+    };
+    const entriesByDay = new Map<string, Entry[]>([["2026-04-20", [entry]]]);
+    const w = buildDeterministicWeekDigest("2026-04-20", [day], { entriesByDay });
+    // Falls back to inferWorkingShape via computeDaySignals; the entry's two
+    // reviewer dispatches yield spec-review-loop.
+    expect(w.working_shapes).not.toBeNull();
+    expect(w.working_shapes!.find(r => r.shape === "spec-review-loop")).toBeDefined();
+    // days_active uses the same fallback so the per-day shape stripe renders
+    // for cached pre-refactor day digests once entries are passed in.
+    expect(w.days_active[0]?.dominant_shape).toBe("spec-review-loop");
   });
 });

@@ -64,7 +64,26 @@ describe("generateDayDigest", () => {
     expect(r.digest.headline).toBe("You shipped x.");
     expect(r.digest.narrative).toBe("You refactored.");
     expect(r.digest.what_went_well).toBe("Clean diff.");
+    expect(r.digest.day_signature).toBeNull();
     expect(r.usage).toEqual({ input_tokens: 500, output_tokens: 200 });
+  });
+
+  it("captures day_signature when LLM emits one", async () => {
+    const entries = [mkEntry()];
+    const sig = "spec-review-loop on x: shipped clean";
+    const mockLLM = async (): Promise<LLMResponse> => ({
+      content: JSON.stringify({
+        headline: "You shipped x.",
+        narrative: null,
+        what_went_well: null,
+        what_hit_friction: null,
+        suggestion: null,
+        day_signature: sig,
+      }),
+      input_tokens: 500, output_tokens: 200, model: "claude-sonnet-4-6",
+    });
+    const r = await generateDayDigest("2026-04-23", entries, { callLLM: mockLLM });
+    expect(r.digest.day_signature).toBe(sig);
   });
 
   it("retries once on parse failure then succeeds", async () => {
