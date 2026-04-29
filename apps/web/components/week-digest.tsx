@@ -254,63 +254,111 @@ function LegacyNarrativeFallback({ digest }: { digest: WeekDigestType }) {
 
 // ─── Sub-components ──────────────────────────────────────────────────────
 
+type StatCard = {
+  label: string;
+  primary: string;
+  detail: string;
+  href?: string;
+  title?: string;
+  visual?: ReactNode;
+};
+
 function WeekStatsStrip({ digest }: { digest: WeekDigestType }) {
   const totalHrs = digest.agent_min_total / 60;
   const totalStr = totalHrs >= 1 ? `${totalHrs.toFixed(1)}h` : `${Math.round(digest.agent_min_total)}m`;
   const peakHourBucket = peakHour(digest.hours_distribution);
-  const stats: Array<{ label: string; value: ReactNode; href?: string; title?: string }> = [
-    {
-      label: "Agent time",
-      value: `${totalStr} across ${digest.days_active.length} day${digest.days_active.length === 1 ? "" : "s"}`,
-    },
-  ];
+
+  // Per-day agent_min for the mini-bar in Agent time / Busiest day cards
+  const dayMap = new Map(digest.days_active.map(d => [d.date, d]));
+  const weekDates = weekDateLabels(digest.window.start);
+  const perDayAgent = weekDates.map(d => dayMap.get(d)?.agent_min ?? 0);
+  const maxAgent = Math.max(...perDayAgent, 1);
+
+  // Busiest day index for highlight
+  const busiestIdx = digest.busiest_day
+    ? weekDates.indexOf(digest.busiest_day.date)
+    : -1;
+
+  // Longest run vs busiest day's total (for the bar visual)
+  const longestRunRatio = digest.longest_run && digest.busiest_day
+    ? Math.min(1, digest.longest_run.active_min / Math.max(1, digest.busiest_day.agent_min))
+    : 0;
+
+  const cards: StatCard[] = [];
+
+  cards.push({
+    label: "Agent time",
+    primary: totalStr,
+    detail: `across ${digest.days_active.length} day${digest.days_active.length === 1 ? "" : "s"}`,
+    visual: <MiniDayBars values={perDayAgent} max={maxAgent} highlight={-1} />,
+  });
+
   if (digest.busiest_day) {
-    stats.push({
+    cards.push({
       label: "Busiest day",
       href: `/digest/${digest.busiest_day.date}`,
-      value: `${dayName(digest.busiest_day.date)} ${digest.busiest_day.date.slice(5)} · ${Math.round(digest.busiest_day.agent_min)}m · ${digest.busiest_day.shipped_count} PR`,
+      primary: `${dayName(digest.busiest_day.date)} ${digest.busiest_day.date.slice(5)}`,
+      detail: `${Math.round(digest.busiest_day.agent_min)}m · ${digest.busiest_day.shipped_count} PR${digest.busiest_day.shipped_count === 1 ? "" : "s"}`,
+      visual: <MiniDayBars values={perDayAgent} max={maxAgent} highlight={busiestIdx} />,
     });
   }
+
   if (digest.longest_run) {
-    stats.push({
+    cards.push({
       label: "Longest single run",
       href: `/sessions/${digest.longest_run.session_id}`,
       title: `Session ${digest.longest_run.session_id.slice(0, 8)}`,
-      value: `${Math.round(digest.longest_run.active_min)}m · ${digest.longest_run.project_display} · ${dayName(digest.longest_run.date)} ${digest.longest_run.date.slice(5)}`,
+      primary: `${Math.round(digest.longest_run.active_min)}m`,
+      detail: `${digest.longest_run.project_display} · ${dayName(digest.longest_run.date)} ${digest.longest_run.date.slice(5)}`,
+      visual: <MiniRatioBar ratio={longestRunRatio} caption="vs busiest day" />,
     });
   }
+
   if (peakHourBucket) {
-    stats.push({
+    cards.push({
       label: "Peak hours",
       title: `${formatHourRange(peakHourBucket.start, peakHourBucket.end)} carried ${peakHourBucket.share_pct.toFixed(0)}% of the week's agent time`,
-      value: `${formatHourRange(peakHourBucket.start, peakHourBucket.end)} · ${peakHourBucket.share_pct.toFixed(0)}%`,
+      primary: formatHourRange(peakHourBucket.start, peakHourBucket.end),
+      detail: `${peakHourBucket.share_pct.toFixed(0)}% of agent time`,
+      visual: <MiniHoursSparkline hours={digest.hours_distribution} peakStart={peakHourBucket.start} peakEnd={peakHourBucket.end} />,
     });
   }
+
+  if (cards.length === 0) return null;
 
   return (
     <section style={{
       display: "grid",
-      gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-      gap: 8,
+      gridTemplateColumns: `repeat(${Math.min(cards.length, 4)}, minmax(0, 1fr))`,
+      gap: 10,
       marginBottom: 20,
     }}>
-      {stats.map((s, i) => {
+      {cards.map((s, i) => {
         const inner = (
           <div style={{
-            padding: "10px 12px", borderRadius: 8,
+            padding: "12px 14px", borderRadius: 10,
             background: "var(--af-surface)",
             border: "1px solid var(--af-border-subtle)",
             height: "100%",
+            display: "flex", flexDirection: "column", justifyContent: "space-between",
+            minHeight: 90,
           }} title={s.title}>
-            <div style={{
-              fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
-              textTransform: "uppercase", color: "var(--af-text-tertiary)",
-              marginBottom: 4,
-            }}>{s.label}</div>
-            <div style={{
-              fontSize: 12, color: "var(--af-text)", lineHeight: 1.45,
-              fontFamily: "var(--font-mono)",
-            }}>{s.value}</div>
+            <div>
+              <div style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+                textTransform: "uppercase", color: "var(--af-text-tertiary)",
+                marginBottom: 6,
+              }}>{s.label}</div>
+              <div style={{
+                fontSize: 17, fontWeight: 600, color: "var(--af-text)",
+                letterSpacing: "-0.01em", lineHeight: 1.2,
+              }}>{s.primary}</div>
+              <div style={{
+                fontSize: 10.5, color: "var(--af-text-tertiary)",
+                fontFamily: "var(--font-mono)", marginTop: 3,
+              }}>{s.detail}</div>
+            </div>
+            {s.visual && <div style={{ marginTop: 10 }}>{s.visual}</div>}
           </div>
         );
         return s.href ? (
@@ -320,6 +368,78 @@ function WeekStatsStrip({ digest }: { digest: WeekDigestType }) {
         );
       })}
     </section>
+  );
+}
+
+/** 7-day mini-bar — shows daily agent_min distribution. When highlight≥0
+ *  that day glows in accent; others stay subtle. */
+function MiniDayBars({ values, max, highlight }: { values: number[]; max: number; highlight: number }) {
+  return (
+    <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 18 }}>
+      {values.map((v, i) => {
+        const h = max > 0 ? Math.max(1, (v / max) * 18) : 1;
+        const isHi = i === highlight;
+        return (
+          <div key={i} style={{
+            flex: 1,
+            height: h,
+            borderRadius: 1,
+            background: isHi
+              ? "var(--af-accent)"
+              : v > 0
+                ? "color-mix(in srgb, var(--af-accent) 30%, transparent)"
+                : "var(--af-border-subtle)",
+          }} />
+        );
+      })}
+    </div>
+  );
+}
+
+/** Single horizontal bar showing a 0..1 ratio with a caption underneath. */
+function MiniRatioBar({ ratio, caption }: { ratio: number; caption: string }) {
+  const pct = Math.max(0, Math.min(1, ratio)) * 100;
+  return (
+    <div>
+      <div style={{
+        height: 6, borderRadius: 99, overflow: "hidden",
+        background: "var(--af-border-subtle)",
+      }}>
+        <div style={{
+          width: `${pct}%`, height: "100%",
+          background: "var(--af-accent)",
+        }} />
+      </div>
+      <div style={{
+        fontSize: 9, color: "var(--af-text-tertiary)",
+        fontFamily: "var(--font-mono)", marginTop: 3,
+      }}>{Math.round(pct)}% {caption}</div>
+    </div>
+  );
+}
+
+/** 24-bar sparkline of hours_distribution with the peak window glowing. */
+function MiniHoursSparkline({ hours, peakStart, peakEnd }: { hours: number[]; peakStart: number; peakEnd: number }) {
+  const max = Math.max(...hours, 1);
+  return (
+    <div style={{ display: "flex", gap: 1, alignItems: "flex-end", height: 18 }}>
+      {hours.map((v, h) => {
+        const inPeak = h >= peakStart && h <= peakEnd;
+        const height = max > 0 ? Math.max(1, (v / max) * 18) : 1;
+        return (
+          <div key={h} style={{
+            flex: 1,
+            height,
+            borderRadius: 1,
+            background: inPeak
+              ? "var(--af-accent)"
+              : v > 0
+                ? "color-mix(in srgb, var(--af-accent) 22%, transparent)"
+                : "var(--af-border-subtle)",
+          }} />
+        );
+      })}
+    </div>
   );
 }
 
