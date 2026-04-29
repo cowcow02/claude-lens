@@ -462,7 +462,12 @@ export function UsageChartRange({
               const remaining = 100 - u;
               const drop = prevUtil - u;
               const isReset = i > 0 && drop >= 50;
-              const isGap = i > 0 && p.capturedAt - pred[i - 1]!.capturedAt > GAP_THRESHOLD_MS;
+              // Predicted series is sampled at 30-min granularity by the
+              // calibrator (vs 5-min for daemon snapshots), so the snapshot
+              // gap threshold rejects every adjacent pair as a "gap" and the
+              // line never connects. Use 60 min instead — anything beyond
+              // that is a genuine missing range.
+              const isGap = i > 0 && p.capturedAt - pred[i - 1]!.capturedAt > 60 * 60 * 1000;
               const cmd = !inSeg || isReset || isGap ? "M" : "L";
               parts.push(`${cmd} ${xScale(p.capturedAt).toFixed(1)} ${yScale(remaining).toFixed(1)}`);
               inSeg = true;
