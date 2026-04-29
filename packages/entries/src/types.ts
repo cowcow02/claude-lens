@@ -637,6 +637,86 @@ export type WeekOutcomeCorrelation = {
   supporting_dates: string[];
 };
 
+/** A single annotated moment on a session timeline. Pin kinds map to the
+ *  detection rules in top-sessions.ts. */
+export type SessionPinKind =
+  | "user-steering"
+  | "subagent-burst"
+  | "long-autonomous"
+  | "plan-mode"
+  | "pr-ship"
+  | "harness-chain"
+  | "interrupt"
+  | "brainstorm-loop"
+  | "agent-loop";
+
+export type SessionPin = {
+  /** Minutes from session start when the moment begins. */
+  start_min: number;
+  /** Optional — for span pins (long-autonomous, brainstorm-loop). */
+  end_min?: number;
+  kind: SessionPinKind;
+  /** LLM-produced editorial sentence, ≤120 chars, second-person. */
+  label: string;
+};
+
+/** A picked session worth a deep timeline view in the week digest. Replaces
+ *  abstract working_shapes/interaction_grammar narrative with a concrete
+ *  per-session story grounded in the actual transcript. */
+export type WeekTopSession = {
+  session_id: string;
+  /** Local day this session is anchored to (the entry's local_day). */
+  date: string;
+  project: string;
+  project_display: string;
+
+  // ── Timing ──
+  start_iso: string;
+  /** Wall-clock duration in minutes (end - start). */
+  wall_min: number;
+  /** Gap-filtered active duration (3-min idle threshold). */
+  active_min: number;
+  /** wall_min - active_min. Visible on the minimap as gap segments. */
+  idle_min: number;
+  turn_count: number;
+
+  // ── Outcome + classification (pre-existing signals) ──
+  outcome: DayOutcome | null;
+  shipped_prs: string[];
+  working_shape: NonNullable<WorkingShape> | null;
+  /** Quoted from the day digest. Optional — null when the day didn't ship one. */
+  day_signature: string | null;
+
+  // ── Harness signature (deterministic blend — folded in from former
+  //    interaction_grammar section) ──
+  user_authored_skills: string[];
+  user_authored_subagents: Array<{ type: string; count: number }>;
+  stock_skills: string[];
+  /** Top tools by use, with Bash sub-verbs ("Bash×33 (docker×19, ./compose.sh×5)"). */
+  top_tools: string[];
+
+  // ── Steering snapshot (deterministic) ──
+  steering: {
+    user_msg_count: number;
+    long_user_msg_count: number;       // ≥800 chars
+    median_user_msg_chars: number;
+    interrupts: number;
+  };
+
+  // ── Timeline minimap data ──
+  timeline: {
+    duration_min: number;              // session active span
+    active_intervals: Array<{ start_min: number; end_min: number }>;
+  };
+
+  // ── LLM-produced narrative ──
+  /** 1-2 sentences tying the pins into a story. Null if synth declined. */
+  session_summary: string | null;
+  /** 1 sentence on steering style — verbosity, framing, mid-flight redirects. */
+  steering_summary: string | null;
+  pins: SessionPin[];
+};
+
 export type WeekDigest = DigestEnvelope & {
   scope: "week";
   /** ISO Monday in server local TZ, e.g. "2026-04-20" — same value as envelope.key. */
@@ -698,6 +778,11 @@ export type WeekDigest = DigestEnvelope & {
    *  multi-day threads. Surfaces meta-tools the user has built around stock
    *  Claude Code that the count layer can't see. */
   interaction_grammar: WeekInteractionGrammar | null;
+
+  /** 1–3 sessions picked as the most worthy to dive into, each with a
+   *  per-session story, timeline minimap, and pin annotations.
+   *  Optional — added in the day-first refactor. Null on legacy digests. */
+  top_sessions?: WeekTopSession[];
 
   // ── LLM narrative (null when ai_features.enabled === false or synth failed) ──
 

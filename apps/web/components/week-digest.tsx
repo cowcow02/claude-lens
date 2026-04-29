@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
-import type { WeekDigest as WeekDigestType, DayHelpfulness } from "@claude-lens/entries";
+import type { WeekDigest as WeekDigestType, DayHelpfulness, WeekTopSession, SessionPin } from "@claude-lens/entries";
 import { renderWithFlagChips } from "./flag-chip";
 import { GoalBar } from "./goal-bar";
 
@@ -168,12 +168,8 @@ export function WeekDigest({
 
       <DaysActiveBars digest={digest} />
 
-      {digest.working_shapes && digest.working_shapes.length > 0 && (
-        <WorkingShapesSection shapes={digest.working_shapes} />
-      )}
-
-      {digest.interaction_grammar && (
-        <InteractionGrammarSection grammar={digest.interaction_grammar} />
+      {digest.top_sessions && digest.top_sessions.length > 0 && (
+        <TopSessionsSection sessions={digest.top_sessions} />
       )}
 
       {digest.standout_days && digest.standout_days.length > 0 && (
@@ -250,6 +246,16 @@ export function WeekDigest({
         <Section title="Goal mix" anchor="goals">
           <GoalBar goals={digest.top_goal_categories} total={digest.agent_min_total} />
         </Section>
+      )}
+
+      {/* Weekly pattern rollups — folded down because per-session cards now
+          carry the qualitative narrative. Kept for power users who want the
+          week-level aggregates. */}
+      {(digest.working_shapes || digest.interaction_grammar) && (
+        <PatternRollupsFold
+          shapes={digest.working_shapes}
+          grammar={digest.interaction_grammar}
+        />
       )}
 
       {digest.interaction_modes && (
@@ -1515,4 +1521,376 @@ function formatRange(startIso: string, endIso: string): string {
   const e = new Date(endIso);
   const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return `${fmt(s)} – ${fmt(e)}`;
+}
+
+// ─── Top sessions section ─────────────────────────────────────────────────
+
+const PIN_COLORS: Record<string, string> = {
+  "user-steering":     "#ed8936",
+  "subagent-burst":    "#9f7aea",
+  "long-autonomous":   "#4299e1",
+  "plan-mode":         "#38b2ac",
+  "pr-ship":           "#48bb78",
+  "harness-chain":     "#ed64a6",
+  "interrupt":         "#f56565",
+  "brainstorm-loop":   "#9f7aea",
+  "agent-loop":        "#f56565",
+};
+
+const PIN_LABELS: Record<string, string> = {
+  "user-steering":     "Steering",
+  "subagent-burst":    "Subagents",
+  "long-autonomous":   "Autonomous",
+  "plan-mode":         "Plan",
+  "pr-ship":           "Shipped",
+  "harness-chain":     "Harness",
+  "interrupt":         "Interrupt",
+  "brainstorm-loop":   "Brainstorm",
+  "agent-loop":        "Loop",
+};
+
+function TopSessionsSection({ sessions }: { sessions: WeekTopSession[] }) {
+  return (
+    <Section title={`Top ${sessions.length} session${sessions.length === 1 ? "" : "s"} this week`} anchor="top-sessions">
+      <p style={{
+        fontSize: 12, color: "var(--af-text-tertiary)", marginTop: -4,
+        marginBottom: 14, fontStyle: "italic", lineHeight: 1.5, maxWidth: 720,
+      }}>
+        Picked by significance — active time × subagents × ships, capped to one per project. Each card walks the timeline with annotated moments to surface the texture of how you drove the agent.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {sessions.map(s => <TopSessionCard key={s.session_id} session={s} />)}
+      </div>
+    </Section>
+  );
+}
+
+function TopSessionCard({ session }: { session: WeekTopSession }) {
+  const shapeLabel = session.working_shape ? (SHAPE_LABELS[session.working_shape] ?? session.working_shape) : null;
+  const shapeColor = session.working_shape ? (SHAPE_COLORS[session.working_shape] ?? "var(--af-text-tertiary)") : "var(--af-text-tertiary)";
+  const wallH = session.wall_min / 60;
+  const activeH = session.active_min / 60;
+  const wallStr = wallH >= 1 ? `${wallH.toFixed(1)}h wall` : `${Math.round(session.wall_min)}m wall`;
+  const activeStr = activeH >= 1 ? `${activeH.toFixed(1)}h active` : `${Math.round(session.active_min)}m active`;
+
+  return (
+    <div style={{
+      borderRadius: 10,
+      background: "var(--af-surface)",
+      border: "1px solid var(--af-border-subtle)",
+      borderTop: `3px solid ${shapeColor}`,
+      overflow: "hidden",
+    }}>
+      <div style={{ padding: "16px 18px" }}>
+        {/* Header row */}
+        <div style={{
+          display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap",
+          marginBottom: 6,
+        }}>
+          <Link
+            href={`/sessions/${session.session_id}`}
+            style={{
+              fontSize: 14, fontWeight: 600, color: "var(--af-text)",
+              letterSpacing: "-0.01em", textDecoration: "none",
+            }}
+          >
+            {session.project_display}
+          </Link>
+          <Link
+            href={`/digest/${session.date}`}
+            style={{
+              fontSize: 11, fontFamily: "var(--font-mono)",
+              color: "var(--af-accent)", textDecoration: "none",
+            }}
+          >
+            {dayName(session.date)} {session.date.slice(5)}
+          </Link>
+          <span style={{
+            fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)",
+          }}>
+            {activeStr} · {wallStr} · {session.turn_count} turns
+          </span>
+          {shapeLabel && (
+            <span style={{
+              padding: "2px 9px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+              background: `color-mix(in srgb, ${shapeColor} 14%, transparent)`,
+              color: shapeColor,
+            }}>
+              {shapeLabel}
+            </span>
+          )}
+          {session.outcome === "shipped" && session.shipped_prs.length > 0 && (
+            <span style={{
+              padding: "2px 9px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+              background: "color-mix(in srgb, #48bb78 14%, transparent)",
+              color: "#48bb78",
+            }}>
+              ✓ {session.shipped_prs.length} PR{session.shipped_prs.length === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
+
+        {/* day_signature italic subhead */}
+        {session.day_signature && (
+          <p style={{
+            fontSize: 12, fontStyle: "italic", color: "var(--af-text-secondary)",
+            margin: "0 0 10px", lineHeight: 1.5, maxWidth: 760,
+          }}>
+            “{session.day_signature}”
+          </p>
+        )}
+
+        {/* Session summary */}
+        {session.session_summary && (
+          <p style={{
+            fontSize: 13, lineHeight: 1.55, margin: "0 0 8px",
+            color: "var(--af-text)", maxWidth: 780,
+          }}>
+            {session.session_summary}
+          </p>
+        )}
+
+        {/* Steering summary */}
+        {session.steering_summary && (
+          <p style={{
+            fontSize: 12, lineHeight: 1.55, margin: "0 0 10px",
+            color: "var(--af-text-secondary)", maxWidth: 780,
+            paddingLeft: 10, borderLeft: "2px solid var(--af-border-subtle)",
+          }}>
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+              textTransform: "uppercase", color: "var(--af-text-tertiary)",
+              marginRight: 6,
+            }}>steering</span>
+            {session.steering_summary}
+          </p>
+        )}
+
+        {/* Harness signature chips */}
+        <HarnessChips session={session} />
+
+        {/* Timeline minimap */}
+        <SessionTimelineMinimap session={session} />
+
+        {/* Pin list */}
+        {session.pins.length > 0 && (
+          <ol style={{
+            listStyle: "none", padding: 0, margin: "12px 0 0",
+            display: "flex", flexDirection: "column", gap: 6,
+          }}>
+            {session.pins.map((pin, i) => <PinRow key={i} pin={pin} />)}
+          </ol>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HarnessChips({ session }: { session: WeekTopSession }) {
+  const { user_authored_skills, user_authored_subagents, stock_skills, top_tools } = session;
+  const hasAny = user_authored_skills.length > 0 || user_authored_subagents.length > 0
+    || stock_skills.length > 0 || top_tools.length > 0;
+  if (!hasAny) return null;
+  return (
+    <div style={{ marginBottom: 4 }}>
+      {user_authored_subagents.length > 0 && (
+        <ChipRow label="Your subagents">
+          {user_authored_subagents.map(sa => (
+            <Chip key={sa.type} tone="user">
+              {sa.type}{sa.count > 1 ? ` ×${sa.count}` : ""}
+            </Chip>
+          ))}
+        </ChipRow>
+      )}
+      {(user_authored_skills.length > 0 || stock_skills.length > 0) && (
+        <ChipRow label="Skills loaded">
+          {user_authored_skills.map(s => (<Chip key={s} tone="user">{s}</Chip>))}
+          {stock_skills.slice(0, 6).map(s => (<Chip key={s} tone="stock">{s}</Chip>))}
+        </ChipRow>
+      )}
+      {top_tools.length > 0 && (
+        <ChipRow label="Top tools">
+          {top_tools.slice(0, 4).map((t, i) => (<Chip key={i}>{t}</Chip>))}
+        </ChipRow>
+      )}
+    </div>
+  );
+}
+
+function ChipRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+      padding: "3px 0", fontSize: 11,
+    }}>
+      <span style={{
+        minWidth: 96, color: "var(--af-text-tertiary)", fontWeight: 500,
+        fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em",
+      }}>
+        {label}
+      </span>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", flex: 1 }}>{children}</div>
+    </div>
+  );
+}
+
+function Chip({ children, tone, title }: { children: ReactNode; tone?: "user" | "stock"; title?: string }) {
+  const bg = tone === "user" ? "var(--af-accent-subtle)" : "var(--af-border-subtle)";
+  const fg = tone === "user" ? "var(--af-accent)" : "var(--af-text-secondary)";
+  return (
+    <span title={title} style={{
+      display: "inline-flex", alignItems: "center", padding: "2px 8px",
+      borderRadius: 999, fontSize: 10, fontFamily: "var(--font-mono)",
+      background: bg, color: fg, whiteSpace: "nowrap",
+      maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis",
+    }}>
+      {children}
+    </span>
+  );
+}
+
+function SessionTimelineMinimap({ session }: { session: WeekTopSession }) {
+  const duration = Math.max(1, session.timeline.duration_min);
+  const intervals = session.timeline.active_intervals;
+  return (
+    <div style={{ marginTop: 10, marginBottom: 4 }}>
+      <div style={{
+        position: "relative", width: "100%", height: 28,
+        background: "var(--af-border-subtle)", borderRadius: 4,
+      }}>
+        {/* Active intervals */}
+        {intervals.map((iv, i) => {
+          const left = (iv.start_min / duration) * 100;
+          const width = Math.max(0.6, ((iv.end_min - iv.start_min) / duration) * 100);
+          return (
+            <div key={i} style={{
+              position: "absolute", top: 6, bottom: 6,
+              left: `${left}%`, width: `${width}%`,
+              background: "color-mix(in srgb, var(--af-accent) 30%, transparent)",
+              borderRadius: 2,
+            }} />
+          );
+        })}
+        {/* Pins */}
+        {session.pins.map((pin, i) => {
+          const left = Math.max(0, Math.min(100, (pin.start_min / duration) * 100));
+          const right = pin.end_min !== undefined
+            ? Math.max(left + 0.5, Math.min(100, (pin.end_min / duration) * 100))
+            : left;
+          const isSpan = pin.end_min !== undefined && right > left + 0.5;
+          const color = PIN_COLORS[pin.kind] ?? "var(--af-accent)";
+          return (
+            <div key={i}>
+              {isSpan && (
+                <div style={{
+                  position: "absolute", top: 4, bottom: 4,
+                  left: `${left}%`, width: `${right - left}%`,
+                  background: `color-mix(in srgb, ${color} 35%, transparent)`,
+                  border: `1px solid ${color}`,
+                  borderRadius: 3,
+                }} title={`${PIN_LABELS[pin.kind]}: ${pin.label}`} />
+              )}
+              <div style={{
+                position: "absolute", top: -3, bottom: -3,
+                left: `${left}%`, width: 3,
+                background: color,
+                borderRadius: 1,
+                transform: "translateX(-1.5px)",
+              }} title={`${PIN_LABELS[pin.kind]}: ${pin.label}`} />
+            </div>
+          );
+        })}
+      </div>
+      {/* Min markers */}
+      <div style={{
+        display: "flex", justifyContent: "space-between",
+        fontSize: 9, fontFamily: "var(--font-mono)",
+        color: "var(--af-text-tertiary)",
+        marginTop: 3,
+      }}>
+        <span>0m</span>
+        <span>{Math.round(duration / 2)}m</span>
+        <span>{Math.round(duration)}m active</span>
+      </div>
+    </div>
+  );
+}
+
+function PinRow({ pin }: { pin: SessionPin }) {
+  const color = PIN_COLORS[pin.kind] ?? "var(--af-accent)";
+  const isSpan = pin.end_min !== undefined && pin.end_min > pin.start_min + 0.5;
+  const t = isSpan
+    ? `${formatMin(pin.start_min)}–${formatMin(pin.end_min!)}`
+    : formatMin(pin.start_min);
+  return (
+    <li style={{
+      display: "flex", gap: 10, alignItems: "flex-start",
+      fontSize: 12, lineHeight: 1.5,
+    }}>
+      <span style={{
+        flexShrink: 0, width: 3, height: 3, marginTop: 7,
+        borderRadius: 999, background: color,
+      }} />
+      <span style={{
+        flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 10,
+        color: "var(--af-text-tertiary)", paddingTop: 1, minWidth: 60,
+      }}>
+        {t}
+      </span>
+      <span style={{
+        flexShrink: 0, padding: "1px 7px", borderRadius: 999, fontSize: 9,
+        fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
+        background: `color-mix(in srgb, ${color} 15%, transparent)`,
+        color: color, marginTop: 1,
+      }}>
+        {PIN_LABELS[pin.kind] ?? pin.kind}
+      </span>
+      <span style={{ color: "var(--af-text)", maxWidth: 640 }}>
+        {pin.label}
+      </span>
+    </li>
+  );
+}
+
+function formatMin(m: number): string {
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    const min = Math.round(m % 60);
+    return `${h}h${min > 0 ? ` ${min}m` : ""}`;
+  }
+  return `${Math.round(m * 10) / 10}m`;
+}
+
+// ─── Pattern rollups fold-down (replaces inline working_shapes + grammar) ─
+
+function PatternRollupsFold({
+  shapes, grammar,
+}: {
+  shapes: WeekDigestType["working_shapes"];
+  grammar: WeekDigestType["interaction_grammar"];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section style={{ marginBottom: 28 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          background: "transparent", border: "none", cursor: "pointer",
+          padding: "6px 0", color: "var(--af-text-tertiary)",
+          fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
+          textTransform: "uppercase",
+        }}
+      >
+        {open ? "▾" : "▸"} Weekly pattern rollups
+      </button>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {shapes && shapes.length > 0 && <WorkingShapesSection shapes={shapes} />}
+          {grammar && <InteractionGrammarSection grammar={grammar} />}
+        </div>
+      )}
+    </section>
+  );
 }
