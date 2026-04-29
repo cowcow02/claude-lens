@@ -7,6 +7,7 @@ import {
   loadOptimizerSettings,
   loadLatestSnapshotsPerMember,
   loadMembershipSparklines,
+  loadMembership7dCyclePeaks,
 } from "../../../../lib/plan-queries";
 import { recommend } from "../../../../lib/plan-optimizer";
 import { tierEntry } from "../../../../lib/plan-tiers";
@@ -14,6 +15,7 @@ import { computeBurndown } from "../../../../lib/capacity-burndown";
 import { OptimizerCard } from "../../../../components/optimizer-card";
 import { BurndownCard } from "../../../../components/burndown-card";
 import { UtilizationSparkline } from "../../../../components/utilization-sparkline";
+import { CyclePeaksStrip } from "../../../../components/cycle-peaks-strip";
 import { PlanTuningForm } from "../../../../components/plan-tuning-form";
 
 export default async function PlanPage({
@@ -48,11 +50,12 @@ export default async function PlanPage({
     );
   }
 
-  const [inputs, settings, snapshots, sparklines] = await Promise.all([
+  const [inputs, settings, snapshots, sparklines, cyclePeaks] = await Promise.all([
     loadOptimizerInputs(team.id, pool),
     loadOptimizerSettings(team.id, pool),
     loadLatestSnapshotsPerMember(team.id, pool),
     loadMembershipSparklines(team.id, pool),
+    loadMembership7dCyclePeaks(team.id, pool),
   ]);
 
   const recommendations = inputs.map((i) => {
@@ -197,33 +200,47 @@ export default async function PlanPage({
 
       <section className="settings-section">
         <div className="subsection-head">
-          <h2>Per-member trail</h2>
-          <span className="kicker">Last 12 weeks · peak 7-day utilization</span>
+          <h2>Previous cycles</h2>
+          <span className="kicker">
+            Per-member 7d peak utilization · oldest → newest · same data the
+            personal /usage page shows
+          </span>
         </div>
         <table className="member-table">
           <thead>
             <tr>
               <th>Member</th>
               <th>Plan</th>
-              <th>Trail</th>
+              <th style={{ minWidth: 320 }}>Last cycles</th>
             </tr>
           </thead>
           <tbody>
-            {recommendations.map(({ input, tier }) => (
-              <tr key={input.membershipId}>
-                <td>{input.memberName}</td>
-                <td className="mono" style={{ fontSize: 12, color: "var(--mute)" }}>
-                  {tier.label}
-                </td>
-                <td>
-                  <UtilizationSparkline
-                    values={sparklines.get(input.membershipId) ?? []}
-                  />
-                </td>
-              </tr>
-            ))}
+            {recommendations.map(({ input, tier }) => {
+              const peaks = cyclePeaks.get(input.membershipId) ?? [];
+              return (
+                <tr key={input.membershipId}>
+                  <td>{input.memberName}</td>
+                  <td className="mono" style={{ fontSize: 12, color: "var(--mute)" }}>
+                    {tier.label}
+                  </td>
+                  <td>
+                    {peaks.length > 0 ? (
+                      <CyclePeaksStrip cycles={peaks} maxBars={8} />
+                    ) : (
+                      <UtilizationSparkline
+                        values={sparklines.get(input.membershipId) ?? []}
+                      />
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+        <p style={{ fontSize: 11, color: "var(--mute)", marginTop: 8, fontStyle: "italic" }}>
+          Bars with a striped fill are estimated from local JSONL spend (cold-start, before daemon coverage).
+          Solid fills are measured from daemon snapshots. The dashed-border bar on the right is the in-progress cycle.
+        </p>
       </section>
 
       <section className="settings-section">

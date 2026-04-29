@@ -3,9 +3,10 @@ import { redirect } from "next/navigation";
 import { getPool } from "../../../../../db/pool";
 import { validateSession } from "../../../../../lib/auth";
 import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
-import { loadMemberPlanSummary } from "../../../../../lib/plan-queries";
+import { loadMemberPlanSummary, loadMembership7dCyclePeaks } from "../../../../../lib/plan-queries";
 import { MemberProfile } from "../../../../../components/member-profile";
 import { MemberPlanBlock } from "../../../../../components/member-plan-block";
+import { CyclePeaksStrip } from "../../../../../components/cycle-peaks-strip";
 
 export default async function MemberPage({
   params,
@@ -41,10 +42,12 @@ export default async function MemberPage({
     );
   }
 
-  const [rollups, planSummary] = await Promise.all([
+  const [rollups, planSummary, allCyclePeaks] = await Promise.all([
     loadMemberRollups(member.team_id, id, 30, pool),
     loadMemberPlanSummary(member.team_id, id, pool),
+    loadMembership7dCyclePeaks(member.team_id, pool),
   ]);
+  const cyclePeaks = allCyclePeaks.get(id) ?? [];
   const canSeeRoster = myMembership.role === "admin";
 
   return (
@@ -59,6 +62,17 @@ export default async function MemberPage({
         </div>
       )}
       <MemberProfile member={member} rollups={rollups} />
+      {cyclePeaks.length > 0 && (
+        <section className="settings-section">
+          <div className="subsection-head">
+            <h2>Previous 7d cycles</h2>
+            <span className="kicker">
+              Same data the member sees on their personal /usage page
+            </span>
+          </div>
+          <CyclePeaksStrip cycles={cyclePeaks} maxBars={12} />
+        </section>
+      )}
       <MemberPlanBlock summary={planSummary} />
     </>
   );

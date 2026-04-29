@@ -131,6 +131,52 @@ export async function loadMembershipSparklines(
   return out;
 }
 
+export type MembershipCyclePeak = {
+  endsAt: Date;
+  peakPct: number;
+  source: "real" | "predicted";
+  isCurrent: boolean;
+};
+
+// Per-member 7d cycle history. Source data comes straight from the daemon's
+// computed cyclePeaks payload — single source of truth shared with the
+// personal /usage trend strip. Server doesn't re-derive.
+export async function loadMembership7dCyclePeaks(
+  teamId: string,
+  pool: pg.Pool,
+  maxCyclesPerMember = 12,
+): Promise<Map<string, MembershipCyclePeak[]>> {
+  const res = await pool.query<{
+    membership_id: string;
+    ends_at: string;
+    peak_pct: number;
+    source: string;
+    is_current: boolean;
+  }>(
+    `SELECT membership_id, ends_at, peak_pct, source, is_current
+     FROM membership_cycle_peaks
+     WHERE team_id = $1 AND window = '7d'
+     ORDER BY membership_id, ends_at DESC`,
+    [teamId],
+  );
+  const out = new Map<string, MembershipCyclePeak[]>();
+  for (const r of res.rows) {
+    const arr = out.get(r.membership_id) ?? [];
+    if (arr.length >= maxCyclesPerMember) continue;
+    arr.push({
+      endsAt: new Date(r.ends_at),
+      peakPct: Number(r.peak_pct),
+      source: r.source === "real" ? "real" : "predicted",
+      isCurrent: r.is_current,
+    });
+    out.set(r.membership_id, arr);
+  }
+  // Order each member's array oldest → newest so the bar chart reads
+  // chronologically left-to-right.
+  for (const [k, v] of out) out.set(k, v.slice().reverse());
+  return out;
+}
+
 export async function loadMembersWithTier(
   teamId: string,
   pool: pg.Pool,
