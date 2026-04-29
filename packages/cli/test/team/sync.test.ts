@@ -29,9 +29,12 @@ function makeSession(dayISO: string, overrides: Partial<SessionMeta> = {}): Sess
 
 // ---------- module mocks ----------
 
-// Mock parser/fs so listSessions returns our fixture
+// Mock parser/fs so listSessions returns our fixture. loadCalibrationCurve
+// returns null in tests — sync is meant to handle missing JSONL gracefully
+// (cold-start, no daemon data) so this also exercises that branch.
 vi.mock("@claude-lens/parser/fs", () => ({
   listSessions: vi.fn(),
+  loadCalibrationCurve: async () => null,
 }));
 
 // Mock config module so readTeamConfig / writeTeamConfig don't touch real disk

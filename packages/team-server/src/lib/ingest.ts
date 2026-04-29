@@ -79,6 +79,10 @@ export async function processIngest(
       ]);
     }
 
+    if (payload.cyclePeaks) {
+      await upsertMembershipCyclePeaks(client, teamId, membershipId, payload.cyclePeaks);
+    }
+
     await client.query("UPDATE memberships SET last_seen_at = now() WHERE id = $1", [membershipId]);
     await client.query("COMMIT");
   } catch (err) {
@@ -90,6 +94,52 @@ export async function processIngest(
 
   broadcastEvent(teamId, "roster-updated", { membershipId });
   return { accepted: true, nextSyncAfter: new Date(Date.now() + 5 * 60 * 1000).toISOString() };
+}
+
+// Upsert per-cycle peak utilization values computed by the daemon. We
+// replace the entire snapshot per push (delete-then-insert) so that
+// `is_current` flips correctly when cycles roll over and old `current`
+// rows don't linger as ghosts.
+async function upsertMembershipCyclePeaks(
+  client: pg.PoolClient,
+  teamId: string,
+  membershipId: string,
+  payload: { fiveHour: Array<{ endsAt: string; peakPct: number; source: "real" | "predicted"; current: boolean }>;
+             sevenDay: Array<{ endsAt: string; peakPct: number; source: "real" | "predicted"; current: boolean }> },
+): Promise<void> {
+  const all: Array<{ window: "5h" | "7d"; endsAt: string; peakPct: number; source: string; current: boolean }> = [
+    ...payload.fiveHour.map((c) => ({ window: "5h" as const, ...c })),
+    ...payload.sevenDay.map((c) => ({ window: "7d" as const, ...c })),
+  ];
+  if (all.length === 0) return;
+
+  // Replace the visible window — a daemon push is the freshest snapshot of
+  // the user's recent cycles, so older rows for cycles outside the pushed
+  // set are safe to drop. We keep entries beyond the pushed range so a
+  // historical view isn't lost between pushes.
+  const minEndsAt = all.reduce(
+    (min, c) => (Date.parse(c.endsAt) < min ? Date.parse(c.endsAt) : min),
+    Date.parse(all[0]!.endsAt),
+  );
+  await client.query(
+    `DELETE FROM membership_cycle_peaks
+     WHERE team_id = $1 AND membership_id = $2 AND ends_at >= $3`,
+    [teamId, membershipId, new Date(minEndsAt).toISOString()],
+  );
+
+  for (const c of all) {
+    await client.query(
+      `INSERT INTO membership_cycle_peaks
+         (team_id, membership_id, window, ends_at, peak_pct, source, is_current, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+       ON CONFLICT (team_id, membership_id, window, ends_at) DO UPDATE
+         SET peak_pct = EXCLUDED.peak_pct,
+             source = EXCLUDED.source,
+             is_current = EXCLUDED.is_current,
+             updated_at = now()`,
+      [teamId, membershipId, c.window, c.endsAt, c.peakPct, c.source, c.current],
+    );
+  }
 }
 
 // Bulk-loads historical UsageSnapshot rows from the daemon's local

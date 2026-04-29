@@ -31,6 +31,21 @@ export type UsageSnapshot = z.infer<typeof UsageSnapshotSchema>;
 // upsert" so a future Anthropic tier code never silently downgrades us.
 export const PlanTierKeySchema = z.enum(["pro", "pro-max", "pro-max-20x", "custom"]);
 
+// Per-cycle peak utilization computed by the daemon (using the same parser
+// logic that drives the personal /usage page). One entry per completed
+// cycle plus the in-progress one. Server stores as-is; never recomputes.
+export const WireCyclePeakSchema = z.object({
+  endsAt: z.string().datetime({ offset: true }),
+  peakPct: z.number().min(0).max(200),
+  source: z.enum(["real", "predicted"]),
+  current: z.boolean(),
+});
+
+export const WireCyclePeaksSchema = z.object({
+  fiveHour: z.array(WireCyclePeakSchema).max(60),
+  sevenDay: z.array(WireCyclePeakSchema).max(60),
+});
+
 // Cap per-request to keep transactions bounded; the daemon batches.
 export const UsageHistoryPayload = z.object({
   snapshots: z.array(UsageSnapshotSchema).min(1).max(1000),
@@ -55,6 +70,7 @@ export const IngestPayload = z.object({
   }).passthrough(),
   usageSnapshot: UsageSnapshotSchema.optional(),
   planTier: PlanTierKeySchema.optional(),
+  cyclePeaks: WireCyclePeaksSchema.optional(),
 }).passthrough();
 
 export const ClaimPayload = z.object({

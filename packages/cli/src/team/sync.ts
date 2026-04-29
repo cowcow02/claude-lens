@@ -35,7 +35,7 @@ export async function runTeamSync(
   if (!config) return { paired: false, pushed: 0, queued: 0, queuedDrained: 0 };
 
   try {
-    const { listSessions } = await import("@claude-lens/parser/fs");
+    const { listSessions, loadCalibrationCurve } = await import("@claude-lens/parser/fs");
     const { toLocalDay } = await import("@claude-lens/parser");
     const today = toLocalDay(Date.now());
 
@@ -59,6 +59,10 @@ export async function runTeamSync(
     // self-correct if it changes (admin upgraded mid-week, etc.). Cached on
     // disk to avoid hammering Anthropic's profile endpoint.
     const planTier = (await getPlanTier(PROFILE_CACHE).catch(() => null)) ?? undefined;
+    // Per-cycle peaks computed locally — same logic that drives the personal
+    // /usage trend strip. Pushing the COMPUTED OUTCOME keeps the team server
+    // free of any prediction math: it stores and renders, never derives.
+    const cyclePeaks = await buildCyclePeaksForPush(planTier, loadCalibrationCurve);
 
     for (let i = 0; i < rollups.length; i++) {
       const rollup = rollups[i]!;
@@ -67,6 +71,9 @@ export async function runTeamSync(
         rollup,
         isLatest ? usageSnapshot : undefined,
         planTier,
+        // Same rationale as usageSnapshot — current cycle data only on the
+        // latest rollup so older days don't get tagged with today's peaks.
+        isLatest ? cyclePeaks : undefined,
       );
       const result = await pushToTeamServer(config, payload);
       if (!result.ok) {
@@ -107,4 +114,69 @@ export async function runTeamSync(
     log("warn", `team push error: ${message}`);
     return { paired: true, pushed: 0, queued: 0, queuedDrained: 0, error: message };
   }
+}
+
+// Build the cycle-peaks block in the same shape the server expects. Wraps
+// loadCalibrationCurve so the import stays in one place; tier-aware so the
+// rate constants match the user's actual subscription. Returns undefined
+// when no JSONL data is available (cold-start before any session exists).
+async function buildCyclePeaksForPush(
+  planTier: string | undefined,
+  loadCurve: typeof import("@claude-lens/parser/fs").loadCalibrationCurve,
+): Promise<import("./push.js").WireCyclePeaks | undefined> {
+  const validTiers = ["pro", "pro-max", "pro-max-20x", "custom"] as const;
+  const tier = validTiers.find((t) => t === planTier) ?? "pro-max-20x";
+  const dump = await loadCurve(tier).catch(() => null);
+  if (!dump || dump.curve.length === 0) return undefined;
+
+  const HOUR = 3_600_000;
+  const nowMs = Date.now();
+  const peaksFor = (
+    cycleKey: "cycle_end_5h" | "cycle_end_7d",
+    realKey: "real_5h" | "real_7d",
+    predKey: "pred_5h" | "pred_7d",
+    maxCycles: number,
+  ): import("./push.js").WireCyclePeak[] => {
+    const byCycle = new Map<number, typeof dump.curve>();
+    for (const p of dump.curve) {
+      const k = p[cycleKey];
+      if (!k) continue;
+      const ms = Date.parse(k);
+      if (Number.isNaN(ms)) continue;
+      const bucket = Math.round(ms / HOUR) * HOUR;
+      const arr = byCycle.get(bucket) ?? [];
+      arr.push(p);
+      byCycle.set(bucket, arr);
+    }
+    const out: import("./push.js").WireCyclePeak[] = [];
+    for (const [endMs, points] of Array.from(byCycle.entries()).sort((a, b) => a[0] - b[0])) {
+      let peak = 0;
+      let source: "real" | "predicted" = "predicted";
+      for (const p of points) {
+        const r = p[realKey];
+        if (typeof r === "number" && r > peak) {
+          peak = r;
+          source = "real";
+        }
+      }
+      if (source === "predicted") {
+        for (const p of points) {
+          const v = p[predKey] ?? 0;
+          if (v > peak) peak = v;
+        }
+      }
+      out.push({
+        endsAt: new Date(endMs).toISOString(),
+        peakPct: Math.round(peak * 10) / 10,
+        source,
+        current: endMs > nowMs,
+      });
+    }
+    return out.slice(-maxCycles);
+  };
+
+  return {
+    fiveHour: peaksFor("cycle_end_5h", "real_5h", "pred_5h", 24),
+    sevenDay: peaksFor("cycle_end_7d", "real_7d", "pred_7d", 12),
+  };
 }

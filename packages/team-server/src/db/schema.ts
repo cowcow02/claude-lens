@@ -164,6 +164,39 @@ export const updateCheckCache = pgTable("update_check_cache", {
   lastUpdateAttempt: jsonb("last_update_attempt"),
 });
 
+export const membershipCyclePeaks = pgTable(
+  "membership_cycle_peaks",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id")
+      .notNull()
+      .references(() => memberships.id, { onDelete: "cascade" }),
+    // '5h' or '7d'. Constraint enforced at SQL level.
+    window: text("window").notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    peakPct: real("peak_pct").notNull(),
+    // 'real' = daemon observed the cycle; 'predicted' = JSONL-derived estimate
+    // (cold-start path). Constraint enforced at SQL level.
+    source: text("source").notNull(),
+    isCurrent: boolean("is_current").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("membership_cycle_peaks_pk").on(
+      t.teamId,
+      t.membershipId,
+      t.window,
+      t.endsAt,
+    ),
+    teamWindow: index("idx_membership_cycle_peaks_team_window").on(
+      t.teamId,
+      t.window,
+      sql`${t.endsAt} DESC`,
+    ),
+  }),
+);
+
 export const planUtilization = pgTable(
   "plan_utilization",
   {

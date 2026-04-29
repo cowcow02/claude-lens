@@ -40,6 +40,18 @@ export type WireUsageSnapshot = {
   extraUsage: WireExtraUsage | null;
 };
 
+export type WireCyclePeak = {
+  endsAt: string;
+  peakPct: number;
+  source: "real" | "predicted";
+  current: boolean;
+};
+
+export type WireCyclePeaks = {
+  fiveHour: WireCyclePeak[];
+  sevenDay: WireCyclePeak[];
+};
+
 export type IngestPayload = {
   ingestId: string;
   observedAt: string;
@@ -49,6 +61,11 @@ export type IngestPayload = {
   // upserts memberships.plan_tier when this is set so admins don't have to
   // hand-pick a tier the daemon already knows.
   planTier?: string;
+  // Per-cycle peak utilization, computed locally by the daemon using the
+  // SAME parser logic that drives the personal /usage trend strip. Pushing
+  // the computed outcome (rather than raw events) keeps a single source of
+  // truth and means team server never re-runs the math.
+  cyclePeaks?: WireCyclePeaks;
 };
 
 // Server only cares about a freshly-captured snapshot. A stale one would
@@ -127,6 +144,7 @@ export function buildIngestPayload(
   rollup: DailyRollup,
   usageSnapshot?: WireUsageSnapshot,
   planTier?: string,
+  cyclePeaks?: WireCyclePeaks,
 ): IngestPayload {
   return {
     ingestId: randomUUID(),
@@ -134,6 +152,7 @@ export function buildIngestPayload(
     dailyRollup: rollup,
     ...(usageSnapshot ? { usageSnapshot } : {}),
     ...(planTier ? { planTier } : {}),
+    ...(cyclePeaks ? { cyclePeaks } : {}),
   };
 }
 
