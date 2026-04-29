@@ -146,18 +146,61 @@ export async function* runWeekDigestPipeline(
   if (aiOn) writeInteractiveLock();
   try {
     let digest: WeekDigest;
+
+    // ── Top-session prep (deterministic — runs even without AI on) ─────
+    // We pick + load slices upfront so when AI is on we can fire the
+    // per-session LLM calls in parallel WITH the week-narrative call,
+    // not sequentially after it. Picks are independent of the week
+    // synth result.
+    const dayDigestByDate = new Map(dayDigests.map(dd => [dd.key, dd]));
+    const picks = aiOn ? pickTopSessions(entriesByDay) : [];
+    const topSlicesPrep = await Promise.all(picks.map(async (entry) => {
+      try {
+        const sessionDetail = await getSession(entry.session_id);
+        if (!sessionDetail) return null;
+        const events = sessionDetail.events as unknown as RawSessionEvent[];
+        const dd = dayDigestByDate.get(entry.local_day);
+        return {
+          entry,
+          slice: buildSessionSlice(entry, events, dd?.day_signature ?? null),
+        };
+      } catch (err) {
+        console.warn(`[top-session] slice prep failed for ${entry.session_id}: ${(err as Error).message}`);
+        return null;
+      }
+    }));
+    const topSlices = topSlicesPrep.filter((x): x is NonNullable<typeof x> => x !== null);
+
     if (aiOn) {
-      yield { type: "status", phase: "synth", text: "Synthesizing week narrative" };
+      // Fire week narrative + all top-session deep-dives concurrently.
+      // The week LLM has no input dependency on top-sessions and vice
+      // versa; running in parallel cuts wall-clock by ~3-5 min on a
+      // typical week.
+      yield {
+        type: "status", phase: "synth",
+        text: topSlices.length > 0
+          ? `Synthesizing week narrative + diving into ${topSlices.length} top session${topSlices.length === 1 ? "" : "s"} in parallel`
+          : "Synthesizing week narrative",
+      };
       const progressQueue: Array<{ bytes: number; elapsed_ms: number }> = [];
-      const synthPromise = generateWeekDigest(monday, dayDigests, {
+      const weekPromise = generateWeekDigest(monday, dayDigests, {
         model: opts.settings.model, callLLM: opts.callLLM,
         entriesByDay,
         onProgress: info => { progressQueue.push({ bytes: info.bytes, elapsed_ms: info.elapsedMs }); },
       });
+      const topSessionsPromise = Promise.all(topSlices.map(({ entry, slice }) =>
+        generateTopSession(slice, {
+          model: opts.settings.model, callLLM: opts.callLLM,
+        }).then(r => ({ entry, ...r })).catch(err => {
+          console.warn(`[top-session] LLM failed for ${entry.session_id}: ${(err as Error).message}`);
+          return null;
+        }),
+      ));
 
-      let done = false;
-      synthPromise.finally(() => { done = true; });
-      while (!done) {
+      let weekDone = false, topDone = false;
+      weekPromise.finally(() => { weekDone = true; });
+      topSessionsPromise.finally(() => { topDone = true; });
+      while (!weekDone || !topDone) {
         await new Promise(r => setTimeout(r, 500));
         if (progressQueue.length > 0) {
           const latest = progressQueue[progressQueue.length - 1]!;
@@ -165,65 +208,42 @@ export async function* runWeekDigestPipeline(
           progressQueue.length = 0;
         }
       }
-      const r = await synthPromise;
-      digest = r.digest;
-      if (r.usage) {
+      const weekR = await weekPromise;
+      const topResults = await topSessionsPromise;
+      digest = weekR.digest;
+      if (weekR.usage) {
         appendSpend({
           ts: new Date().toISOString(), caller: opts.caller ?? "web",
           model: digest.model ?? opts.settings.model,
-          input_tokens: r.usage.input_tokens,
-          output_tokens: r.usage.output_tokens,
+          input_tokens: weekR.usage.input_tokens,
+          output_tokens: weekR.usage.output_tokens,
           cost_usd: digest.cost_usd ?? 0,
           kind: "week_digest", ref: monday,
         });
       }
+      // Persist top sessions onto the digest in pick order, attribute spend.
+      const topSessions: WeekTopSession[] = [];
+      for (const r of topResults) {
+        if (!r) continue;
+        topSessions.push(r.topSession);
+        if (r.usage) {
+          appendSpend({
+            ts: new Date().toISOString(), caller: opts.caller ?? "web",
+            model: opts.settings.model,
+            input_tokens: r.usage.input_tokens,
+            output_tokens: r.usage.output_tokens,
+            cost_usd: 0,
+            kind: "top_session", ref: `${monday}/${r.entry.session_id}`,
+          });
+        }
+      }
+      // Only attach top_sessions when the week LLM succeeded — otherwise the
+      // cards would float without the surrounding narrative scaffolding.
+      if (digest.headline && topSessions.length > 0) {
+        digest.top_sessions = topSessions;
+      }
     } else {
       digest = buildDeterministicWeekDigest(monday, dayDigests, { entriesByDay });
-    }
-
-    // ── Top sessions (per-session deep dives with timeline pins) ──────
-    // Picks 3 entries by score, loads their raw event timelines, runs a
-    // focused per-session LLM call. Runs only when AI is on AND the week
-    // already has a usable narrative (otherwise the deep-dive cards have
-    // no story scaffolding). Failures degrade gracefully to deterministic-
-    // only base data.
-    if (aiOn && digest.headline) {
-      const picks = pickTopSessions(entriesByDay);
-      if (picks.length > 0) {
-        yield { type: "status", phase: "synth", text: `Diving into ${picks.length} top session${picks.length === 1 ? "" : "s"}` };
-        const dayDigestByDate = new Map(dayDigests.map(dd => [dd.key, dd]));
-        const topSessions: WeekTopSession[] = [];
-        let topSessionsCost = 0;
-        for (const entry of picks) {
-          try {
-            const sessionDetail = await getSession(entry.session_id);
-            if (!sessionDetail) continue;
-            const events = sessionDetail.events as unknown as RawSessionEvent[];
-            const dd = dayDigestByDate.get(entry.local_day);
-            const slice = buildSessionSlice(entry, events, dd?.day_signature ?? null);
-            const r = await generateTopSession(slice, {
-              model: opts.settings.model, callLLM: opts.callLLM,
-            });
-            topSessions.push(r.topSession);
-            if (r.usage) {
-              const costForCall = 0;
-              topSessionsCost += costForCall;
-              appendSpend({
-                ts: new Date().toISOString(), caller: opts.caller ?? "web",
-                model: opts.settings.model,
-                input_tokens: r.usage.input_tokens,
-                output_tokens: r.usage.output_tokens,
-                cost_usd: 0,
-                kind: "top_session", ref: `${monday}/${entry.session_id}`,
-              });
-            }
-          } catch (err) {
-            console.warn(`[top-session] failed for ${entry.session_id}: ${(err as Error).message}`);
-          }
-        }
-        digest.top_sessions = topSessions;
-        void topSessionsCost;
-      }
     }
 
     if (!isCurrentWeek) {
