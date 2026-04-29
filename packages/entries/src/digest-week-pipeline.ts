@@ -132,11 +132,13 @@ export async function* runWeekDigestPipeline(
     return;
   }
 
-  // Load entries for all dates in the week (cheap: filesystem read filtered by local_day).
-  const weekEntries: Entry[] = [];
+  // Load entries indexed by local_day. Used for longest_run / hours_distribution /
+  // interaction_modes / threads, plus on-the-fly DaySignals fallback for cached
+  // pre-refactor day digests that lack day_signals.
+  const entriesByDay = new Map<string, Entry[]>();
   for (const date of dates) {
     if (date > opts.todayLocalDay) continue;
-    weekEntries.push(...(listEntriesForDay(date) as Entry[]));
+    entriesByDay.set(date, listEntriesForDay(date) as Entry[]);
   }
 
   if (aiOn) writeInteractiveLock();
@@ -147,7 +149,7 @@ export async function* runWeekDigestPipeline(
       const progressQueue: Array<{ bytes: number; elapsed_ms: number }> = [];
       const synthPromise = generateWeekDigest(monday, dayDigests, {
         model: opts.settings.model, callLLM: opts.callLLM,
-        entries: weekEntries,
+        entriesByDay,
         onProgress: info => { progressQueue.push({ bytes: info.bytes, elapsed_ms: info.elapsedMs }); },
       });
 
@@ -174,7 +176,7 @@ export async function* runWeekDigestPipeline(
         });
       }
     } else {
-      digest = buildDeterministicWeekDigest(monday, dayDigests, { entries: weekEntries });
+      digest = buildDeterministicWeekDigest(monday, dayDigests, { entriesByDay });
     }
 
     if (!isCurrentWeek) {

@@ -28,6 +28,19 @@ const SHAPE_LABELS: Record<string, string> = {
   "solo-continuation": "Solo continuation",
   "solo-design": "Solo design",
   "solo-build": "Solo build",
+  "mixed": "Mixed",
+};
+
+const SHAPE_COLORS: Record<string, string> = {
+  "spec-review-loop": "#9f7aea",
+  "chunk-implementation": "#4299e1",
+  "research-then-build": "#38b2ac",
+  "reviewer-triad": "#ed64a6",
+  "background-coordinated": "#ecc94b",
+  "solo-continuation": "#a0aec0",
+  "solo-design": "#48bb78",
+  "solo-build": "#ed8936",
+  "mixed": "#a0aec0",
 };
 
 const SHAPE_DESCRIPTIONS: Record<string, string> = {
@@ -391,6 +404,16 @@ function DaysActiveBars({ digest }: { digest: WeekDigestType }) {
                   background: `color-mix(in srgb, ${tone} 28%, transparent)`,
                 }} />
               )}
+              {d?.dominant_shape && SHAPE_COLORS[d.dominant_shape] && (
+                <div
+                  title={`${SHAPE_LABELS[d.dominant_shape] ?? d.dominant_shape}`}
+                  style={{
+                    position: "absolute", top: 0, left: 0, right: 0,
+                    height: 3,
+                    background: SHAPE_COLORS[d.dominant_shape],
+                  }}
+                />
+              )}
               {helpTone && (
                 <div style={{
                   position: "absolute", top: 4, right: 4,
@@ -734,7 +757,11 @@ function WorkingShapesSection({
           const description = SHAPE_DESCRIPTIONS[row.shape] ?? "";
           const dayCount = new Set(row.occurrences.map(o => o.date)).size;
           const outcomeStr = formatOutcomeMix(row.outcome_distribution);
-          const sample = row.occurrences.find(o => o.evidence_subagent !== null) ?? row.occurrences[0]!;
+          // Prefer the occurrence whose day carries a day_signature for evidence —
+          // that's the new day-first signal, more readable than a subagent prompt.
+          const sample = row.occurrences.find(o => o.day_signature)
+            ?? row.occurrences.find(o => o.evidence_subagent !== null)
+            ?? row.occurrences[0]!;
           return (
             <li key={i} style={{
               padding: "14px 16px", borderRadius: 10,
@@ -759,7 +786,29 @@ function WorkingShapesSection({
                   color: "var(--af-text-secondary)",
                 }}>{description}</p>
               )}
-              {sample.evidence_subagent && (
+              {sample.day_signature ? (
+                <div style={{
+                  marginBottom: 8, padding: "8px 10px", borderRadius: 6,
+                  background: "var(--af-surface-raised)",
+                  borderLeft: "2px solid var(--af-accent)",
+                }}>
+                  <div style={{
+                    fontSize: 9, fontWeight: 600, letterSpacing: "0.04em",
+                    color: "var(--af-accent)", fontFamily: "var(--font-mono)",
+                    marginBottom: 3,
+                  }}>
+                    {dayName(sample.date)} {sample.date.slice(5)}{sample.project_display ? ` · ${sample.project_display}` : ""}
+                  </div>
+                  <div style={{
+                    fontSize: 11, lineHeight: 1.5,
+                    color: "var(--af-text)", fontStyle: "italic",
+                  }}>
+                    <span style={{ color: "var(--af-text-tertiary)" }}>“</span>
+                    {sample.day_signature}
+                    <span style={{ color: "var(--af-text-tertiary)" }}>”</span>
+                  </div>
+                </div>
+              ) : sample.evidence_subagent ? (
                 <div style={{
                   marginBottom: 8, padding: "8px 10px", borderRadius: 6,
                   background: "var(--af-surface-raised)",
@@ -781,8 +830,7 @@ function WorkingShapesSection({
                     <span style={{ color: "var(--af-text-tertiary)" }}>”</span>
                   </div>
                 </div>
-              )}
-              {!sample.evidence_subagent && sample.evidence_first_user && (
+              ) : sample.evidence_first_user ? (
                 <div style={{
                   marginBottom: 8, padding: "8px 10px", borderRadius: 6,
                   background: "var(--af-surface-raised)",
@@ -804,7 +852,7 @@ function WorkingShapesSection({
                     <span style={{ color: "var(--af-text-tertiary)" }}>”</span>
                   </div>
                 </div>
-              )}
+              ) : null}
               {row.occurrences.length > 1 && (
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                   {row.occurrences.map((o, j) => (

@@ -1,11 +1,13 @@
 import {
   CURRENT_WEEK_DIGEST_SCHEMA_VERSION,
   PROMPT_FRAME_ORIGIN,
-  type DayDigest, type DayHelpfulness, type DayOutcome, type Entry, type EntrySubagent,
-  type WeekDigest, type WeekInteractionModes, type WeekWorkingShapeRow,
-  type WeekInteractionGrammar, type WorkingShape, type SubagentRole,
-  type PromptFrame, type SkillOrigin,
+  type DayDigest, type DayHelpfulness, type DayOutcome, type DaySignals,
+  type Entry, type WeekDigest, type WeekInteractionModes,
+  type WeekWorkingShapeRow, type WeekInteractionGrammar, type WorkingShape,
+  type PromptFrame,
 } from "./types.js";
+import { detectPromptFrames, inferWorkingShape } from "./signals.js";
+import { computeDaySignals } from "./digest-day.js";
 import {
   DIGEST_WEEK_SYSTEM_PROMPT,
   WeekDigestResponseSchema,
@@ -193,154 +195,27 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1).trimEnd() + "…";
 }
 
-// ─── Subagent role classification ────────────────────────────────────────
-
-/** Map a subagent's description + prompt_preview to a role label. Order
- *  matters: more specific verbs win. */
-export function classifySubagentRole(sa: EntrySubagent): SubagentRole {
-  const text = `${sa.description} ${sa.prompt_preview}`.toLowerCase();
-  if (/\b(re-?review|review[s]?|verify|audit|spec[- ]review|code[- ]quality|code[- ]reuse|efficiency review|sanity check|quick test)\b/.test(text)) {
-    return "reviewer";
-  }
-  if (/\b(implement|build chunk|build task|initialize|create the|add the)\b/.test(text)) {
-    return "implementer";
-  }
-  if (/\bexplore\b|\binventory\b|\bmap\b.*\b(codebase|repo|branch)\b|\baudit\b.*coverage/.test(text)) {
-    return "explorer";
-  }
-  if (/\b(investigate|research|reverse[- ]engineer|study|analy[sz]e|look up|tell me|brief me on|find out)\b/.test(text)) {
-    return "researcher";
-  }
-  if (/\b(env(?:ironment)? setup|configure|setup|bootstrap)\b/.test(text)) {
-    return "env-setup";
-  }
-  if (/\b(polish|cleanup|fix|refactor)\b/.test(text)) {
-    return "polish";
-  }
-  return "other";
-}
-
-/** Subagent types shipped with Claude Code or the public superpowers / mcp /
- *  codex / frontend-design / code-review / claude-code-guide / playwright-qa-verifier
- *  / statusline-setup / Plan / Explore / general-purpose set. Anything else is
- *  treated as user-authored. */
-const STOCK_SUBAGENT_PREFIXES = /^(general-purpose|Explore|Plan|claude-code-guide|playwright-qa-verifier|statusline-setup|frontend-design:|code-review:|code-simplifier:|codex:|superpowers:)/;
-
-export function isStockSubagentType(type: string): boolean {
-  return STOCK_SUBAGENT_PREFIXES.test(type);
-}
-
-// ─── Working-shape inference ─────────────────────────────────────────────
-
-/** Map a single Entry's session-shape from its subagent dispatches + first_user
- *  + skills. Returns null when the entry is too small to characterize (trivial
- *  outcomes, < 1 turn). */
-export function inferWorkingShape(entry: Entry): WorkingShape {
-  if (entry.numbers.turn_count < 2) return null;
-
-  const subagents = entry.subagents ?? [];
-  const roles = subagents.map(classifySubagentRole);
-  const reviewerCount = roles.filter(r => r === "reviewer").length;
-  const implementerCount = roles.filter(r => r === "implementer").length;
-  const explorerOrResearcher = roles.filter(r => r === "explorer" || r === "researcher").length;
-  const hasBackground = subagents.some(sa => sa.background);
-
-  // 1. Chunk implementation — 2+ implementer dispatches against numbered
-  //    chunks/tasks. Checked first because chunk-implementation sessions
-  //    often ALSO carry per-chunk reviewer dispatches; we don't want those
-  //    to trip reviewer-triad detection.
-  if (implementerCount >= 2) {
-    const chunkRefs = subagents.filter(sa => /\b(chunk|task)\s*\d+/i.test(`${sa.description} ${sa.prompt_preview}`));
-    if (chunkRefs.length >= 2) return "chunk-implementation";
-  }
-
-  // 2. Reviewer triad — 3+ reviewers with distinct lens descriptions, AND
-  //    no implementer dispatches in the same session (pure review mode on
-  //    a single diff, not chunked work). The defining shape is: same diff
-  //    going through 3 different review lenses.
-  if (reviewerCount >= 3 && implementerCount === 0) {
-    const lensSigs = new Set<string>();
-    for (let i = 0; i < subagents.length; i++) {
-      if (roles[i] !== "reviewer") continue;
-      // Lens signature = first 3 distinctive words from description.
-      const sig = subagents[i]!.description.toLowerCase()
-        .replace(/[^a-z0-9 ]/g, "")
-        .split(/\s+/)
-        .filter(w => w.length > 2)
-        .slice(0, 3)
-        .join("|");
-      lensSigs.add(sig);
-    }
-    if (lensSigs.size >= 3) return "reviewer-triad";
-  }
-
-  // 3. Spec-review loop — 2+ reviewer dispatches (against the same target,
-  //    or with re-review markers).
-  if (reviewerCount >= 2) return "spec-review-loop";
-
-  // 4. Research-then-build — explorer/researcher dispatches present AND
-  //    implementer dispatches OR substantial post-research work.
-  if (explorerOrResearcher >= 2 || (explorerOrResearcher >= 1 && implementerCount >= 1)) {
-    return "research-then-build";
-  }
-
-  // 5. Background-coordinated — any background:true subagent + foreground work.
-  if (hasBackground && subagents.length >= 1) return "background-coordinated";
-
-  // 6. Solo shapes (no subagents).
-  if (subagents.length === 0) {
-    const first = (entry.first_user || "").trim().toLowerCase();
-    if (/^continue\b/.test(first) || first === "continue.") return "solo-continuation";
-    const skills = Object.keys(entry.skills ?? {});
-    if (skills.some(s => /brainstorm|writing-plans|brainstorming/i.test(s))) return "solo-design";
-    return "solo-build";
-  }
-
-  // Mixed but doesn't match a named pattern — fall through to solo-build.
-  return "solo-build";
-}
-
-// ─── Prompt-frame detection ──────────────────────────────────────────────
-
-export function detectPromptFrames(text: string | null | undefined): PromptFrame[] {
-  if (!text) return [];
-  const out: PromptFrame[] = [];
-  if (/<teammate-message\b/i.test(text)) out.push("teammate");
-  if (/<task-notification\b/i.test(text)) out.push("task-notification");
-  if (/<local-command-caveat\b/i.test(text)) out.push("local-command-caveat");
-  if (/<command-(message|name)\b/i.test(text)) out.push("slash-command");
-  if (/\[Image #\d+\]/.test(text)) out.push("image-attached");
-  // Broadened handoff-prose: cross-session compaction patterns the user
-  // adopted as a personal habit. Catches "Here's the handoff prompt",
-  // "Here's the handover prompt", "session-close summary", "wrap-up summary",
-  // "all wrapped up", "all captured." in addition to the original markdown
-  // headers.
-  if (
-    /\b(here'?s the (handoff|handover) prompt|session-close summary|wrap-up summary|all wrapped up|all captured\.)\b/i.test(text)
-    || /^##? (Wrap-up|Session conclusion|Handoff)\b/m.test(text)
-    || /^# Handoff:/m.test(text)
-  ) {
-    out.push("handoff-prose");
-  }
-  return out;
-}
-
-// ─── Skill origin classification ─────────────────────────────────────────
-
-const STOCK_PREFIXES = /^(superpowers|mcp__|frontend-design|code-review|codex|claude-code-guide|claude-api):/i;
-
-export function classifySkill(name: string): SkillOrigin {
-  if (name.startsWith("(ToolSearch:")) return "infra";
-  if (STOCK_PREFIXES.test(name)) return "stock";
-  if (name === "using-superpowers") return "stock";
-  return "user";
-}
-
 // ─── Working-shapes week aggregator ──────────────────────────────────────
 
+/** Resolve day_signals for a given DayDigest, falling back to on-the-fly
+ *  computation from entries when a cached pre-refactor digest lacks them. */
+function getOrComputeDaySignals(dd: DayDigest, entries: Entry[]): DaySignals {
+  return dd.day_signals ?? computeDaySignals(entries);
+}
+
+const SHAPE_ORDER: Array<NonNullable<WorkingShape>> = [
+  "spec-review-loop", "chunk-implementation", "reviewer-triad",
+  "research-then-build", "background-coordinated",
+  "solo-continuation", "solo-design", "solo-build",
+];
+
+/** Aggregate per-day shape classifications into a per-week shape rollup. Reads
+ *  ONLY DayDigest.day_signals (with on-the-fly fallback from entriesByDay).
+ *  Each (date × shape) yields one occurrence; entries of that day matching the
+ *  shape contribute the representative subagent / first_user evidence. */
 export function computeWorkingShapes(
-  entries: Entry[],
   dayDigests: DayDigest[],
+  entriesByDay: Map<string, Entry[]> = new Map(),
 ): WeekWorkingShapeRow[] {
   const dayOutcome = new Map<string, DayOutcome>();
   const dayHelp = new Map<string, DayHelpfulness>();
@@ -349,38 +224,45 @@ export function computeWorkingShapes(
     dayHelp.set(dd.key, dd.helpfulness_day);
   }
 
-  // Group entries by inferred shape.
-  const byShape = new Map<NonNullable<WorkingShape>, Entry[]>();
-  for (const e of entries) {
-    const shape = inferWorkingShape(e);
-    if (!shape) continue;
-    const arr = byShape.get(shape) ?? [];
-    arr.push(e);
-    byShape.set(shape, arr);
+  // Walk dayDigests; for each, get day_signals and emit one occurrence per
+  // shape that appeared on that day.
+  const byShape = new Map<NonNullable<WorkingShape>, Array<{ dd: DayDigest; entries: Entry[] }>>();
+  for (const dd of dayDigests) {
+    const entries = entriesByDay.get(dd.key) ?? [];
+    const signals = getOrComputeDaySignals(dd, entries);
+    for (const shape of Object.keys(signals.shape_distribution) as Array<NonNullable<WorkingShape>>) {
+      const arr = byShape.get(shape) ?? [];
+      arr.push({ dd, entries });
+      byShape.set(shape, arr);
+    }
   }
 
-  // Order shapes by frequency (ties broken by load-bearing-ness — orchestrated
-  // shapes first because they describe the dominant orchestration mode).
-  const shapeOrder: Array<NonNullable<WorkingShape>> = [
-    "spec-review-loop", "chunk-implementation", "reviewer-triad",
-    "research-then-build", "background-coordinated",
-    "solo-continuation", "solo-design", "solo-build",
-  ];
   const ordered: WeekWorkingShapeRow[] = [];
+  for (const shape of SHAPE_ORDER) {
+    const days = byShape.get(shape);
+    if (!days || days.length === 0) continue;
 
-  for (const shape of shapeOrder) {
-    const shapeEntries = byShape.get(shape);
-    if (!shapeEntries || shapeEntries.length === 0) continue;
+    const occurrences = days
+      .sort((a, b) => a.dd.key.localeCompare(b.dd.key))
+      .map(({ dd, entries }) => {
+        // Find a representative entry on this day whose shape matches.
+        const matching = entries.filter(e => {
+          const s = e.signals?.working_shape ?? inferWorkingShape(e);
+          return s === shape;
+        });
+        // Prefer the entry with the longest representative subagent prompt.
+        const repEntry = matching
+          .sort((a, b) => {
+            const aLen = (a.subagents ?? []).reduce((m, sa) => Math.max(m, sa.prompt_preview.length), 0);
+            const bLen = (b.subagents ?? []).reduce((m, sa) => Math.max(m, sa.prompt_preview.length), 0);
+            return bLen - aLen;
+          })[0]
+          ?? matching[0]
+          ?? null;
 
-    const occurrences = shapeEntries
-      .sort((a, b) => a.local_day.localeCompare(b.local_day))
-      .map(e => {
-        // Pick a representative subagent — for orchestrated shapes prefer the
-        // longest prompt_preview that matches a relevant role; for solo shapes
-        // there's no subagent.
-        let evidence_subagent: WeekWorkingShapeRow["occurrences"][0]["evidence_subagent"] = null;
-        if (e.subagents && e.subagents.length > 0) {
-          const sorted = [...e.subagents].sort((a, b) => b.prompt_preview.length - a.prompt_preview.length);
+        let evidence_subagent: WeekWorkingShapeRow["occurrences"][number]["evidence_subagent"] = null;
+        if (repEntry?.subagents && repEntry.subagents.length > 0) {
+          const sorted = [...repEntry.subagents].sort((a, b) => b.prompt_preview.length - a.prompt_preview.length);
           const sa = sorted[0]!;
           evidence_subagent = {
             type: sa.type,
@@ -388,14 +270,18 @@ export function computeWorkingShapes(
             prompt_preview: truncate(sa.prompt_preview, 200),
           };
         }
+        const project_display = repEntry
+          ? prettyProject(repEntry.project)
+          : (dd.projects[0]?.display_name ?? "");
         return {
-          date: e.local_day,
-          session_id: e.session_id,
-          project_display: prettyProject(e.project),
-          outcome: dayOutcome.get(e.local_day) ?? null,
-          helpfulness: dayHelp.get(e.local_day) ?? null,
+          date: dd.key,
+          session_id: repEntry?.session_id ?? "",
+          project_display,
+          outcome: dayOutcome.get(dd.key) ?? null,
+          helpfulness: dayHelp.get(dd.key) ?? null,
           evidence_subagent,
-          evidence_first_user: e.first_user ? truncate(e.first_user, 200) : null,
+          evidence_first_user: repEntry?.first_user ? truncate(repEntry.first_user, 200) : null,
+          day_signature: dd.day_signature ?? null,
         };
       });
 
@@ -413,123 +299,104 @@ export function computeWorkingShapes(
 
 // ─── Interaction grammar aggregator ──────────────────────────────────────
 
-const BRAINSTORM_PATTERN = /brainstorm|writing-plans/i;
-
-const EXTERNAL_REF_PATTERNS: Array<{
-  kind: "linear-kip" | "github-issue-pr" | "branch-ref" | "url";
-  re: RegExp;
-}> = [
-  { kind: "linear-kip", re: /\bKIP-\d+\b/i },
-  { kind: "github-issue-pr", re: /\b(issue|pr|pull request)\s*#\d+\b|github\.com\/[^\s]+\/(issues|pull)\/\d+/i },
-  { kind: "branch-ref", re: /\b(branch|feat|fix|chore|refactor)[\/:]\s*[\w./-]+|on `[\w./-]+`/i },
-  { kind: "url", re: /https?:\/\/\S+/ },
-];
-
-function detectExternalRef(text: string | null | undefined): { kind: "linear-kip" | "github-issue-pr" | "branch-ref" | "url"; preview: string } | null {
-  if (!text) return null;
-  // Skip cases where the text is JUST a Claude-feature framing — those aren't
-  // user delegating to external context, they're harness handoffs.
-  if (/<teammate-message|<task-notification|<local-command-caveat/i.test(text.slice(0, 400))) return null;
-  for (const { kind, re } of EXTERNAL_REF_PATTERNS) {
-    const m = text.match(re);
-    if (m) return { kind, preview: text.slice(0, 160) };
-  }
-  return null;
-}
-
-function bucketLength(n: number): "short" | "medium" | "long" | "very_long" {
-  if (n < 100) return "short";
-  if (n < 500) return "medium";
-  if (n < 2000) return "long";
-  return "very_long";
-}
-
-export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGrammar {
+/** Aggregate per-day signals into a per-week interaction-grammar rollup.
+ *  Per-day fields come from `day_signals` (with on-the-fly fallback from
+ *  entriesByDay). `threads` (multi-day session continuity) and `total_turns`
+ *  + `exit_plan_calls` (raw counters not in day_signals) come from entries
+ *  when available, otherwise default to empty/zero. */
+export function computeInteractionGrammar(
+  dayDigests: DayDigest[],
+  entriesByDay: Map<string, Entry[]> = new Map(),
+): WeekInteractionGrammar {
   const brainstormDays = new Set<string>();
   const frameMap = new Map<PromptFrame, { count: number; days: Set<string> }>();
   const userSkillMap = new Map<string, { count: number; days: Set<string> }>();
   const userSubagentMap = new Map<string, { count: number; days: Set<string>; sample_description: string; sample_prompt_preview: string }>();
 
-  // Communication style accumulators.
   const verbosity = { short: 0, medium: 0, long: 0, very_long: 0 };
   const externalRefs: WeekInteractionGrammar["communication_style"]["external_context_refs"] = [];
   let total_interrupts = 0;
   let total_frustrated = 0;
   let total_dissatisfied = 0;
-  let total_turns = 0;
   let sessions_with_mid_run_redirect = 0;
 
   let todo_ops_total = 0;
-  let exit_plan_calls = 0;
   const planDays = new Set<string>();
 
-  // Group entries by session for thread detection.
-  const bySession = new Map<string, Entry[]>();
+  for (const dd of dayDigests) {
+    const day = dd.key;
+    const entries = entriesByDay.get(day) ?? [];
+    const signals = getOrComputeDaySignals(dd, entries);
 
-  for (const e of entries) {
-    const day = e.local_day;
-    todo_ops_total += e.numbers.task_ops;
-    exit_plan_calls += e.numbers.exit_plan_calls;
-    if (e.numbers.exit_plan_calls > 0 || (e.flags ?? []).includes("plan_used")) planDays.add(day);
+    if (signals.brainstorm_warmup_session_count > 0) brainstormDays.add(day);
+    todo_ops_total += signals.todo_ops_total;
+    if (signals.plan_mode_used) planDays.add(day);
 
-    // Skills.
-    for (const skill of Object.keys(e.skills ?? {})) {
-      if (BRAINSTORM_PATTERN.test(skill)) brainstormDays.add(day);
-      if (classifySkill(skill) === "user") {
-        const cur = userSkillMap.get(skill) ?? { count: 0, days: new Set<string>() };
-        cur.count += e.skills[skill] ?? 1;
-        cur.days.add(day);
-        userSkillMap.set(skill, cur);
-      }
+    for (const f of signals.prompt_frames) {
+      const cur = frameMap.get(f.frame) ?? { count: 0, days: new Set<string>() };
+      cur.count += f.count;
+      cur.days.add(day);
+      frameMap.set(f.frame, cur);
     }
 
-    // Subagents — surface user-authored types separately.
-    for (const sa of e.subagents ?? []) {
-      if (isStockSubagentType(sa.type)) continue;
+    for (const s of signals.skills_loaded) {
+      if (s.origin !== "user") continue;
+      const cur = userSkillMap.get(s.skill) ?? { count: 0, days: new Set<string>() };
+      cur.count += s.count;
+      cur.days.add(day);
+      userSkillMap.set(s.skill, cur);
+    }
+
+    for (const sa of signals.user_authored_subagents_used) {
       const cur = userSubagentMap.get(sa.type) ?? {
         count: 0, days: new Set<string>(),
-        sample_description: sa.description, sample_prompt_preview: sa.prompt_preview,
+        sample_description: sa.sample_description,
+        sample_prompt_preview: sa.sample_prompt_preview,
       };
-      cur.count += 1;
+      cur.count += sa.count;
       cur.days.add(day);
-      // Keep the longest prompt_preview as sample.
-      if (sa.prompt_preview.length > cur.sample_prompt_preview.length) {
-        cur.sample_description = sa.description;
-        cur.sample_prompt_preview = sa.prompt_preview;
+      if (sa.sample_prompt_preview.length > cur.sample_prompt_preview.length) {
+        cur.sample_description = sa.sample_description;
+        cur.sample_prompt_preview = sa.sample_prompt_preview;
       }
       userSubagentMap.set(sa.type, cur);
     }
 
-    // Prompt frames.
-    for (const frame of detectPromptFrames(e.first_user)) {
-      const cur = frameMap.get(frame) ?? { count: 0, days: new Set<string>() };
-      cur.count += 1;
-      cur.days.add(day);
-      frameMap.set(frame, cur);
+    const v = signals.comm_style.verbosity_distribution;
+    verbosity.short += v.short;
+    verbosity.medium += v.medium;
+    verbosity.long += v.long;
+    verbosity.very_long += v.very_long;
+
+    for (const ref of signals.comm_style.external_refs) {
+      externalRefs.push({
+        date: day, session_id: ref.session_id, ref_kind: ref.kind,
+        preview: truncate(ref.preview, 200),
+      });
     }
 
-    // Communication style — verbosity.
-    const fuLen = (e.first_user || "").length;
-    if (fuLen > 0) verbosity[bucketLength(fuLen)] += 1;
-
-    // External context refs in first_user.
-    const ext = detectExternalRef(e.first_user);
-    if (ext) externalRefs.push({ date: day, session_id: e.session_id, ref_kind: ext.kind, preview: truncate(ext.preview, 200) });
-
-    // Steering — interrupts + frustrated/dissatisfied.
-    const ints = e.numbers.interrupts ?? 0;
-    total_interrupts += ints;
-    total_turns += e.numbers.turn_count ?? 0;
-    total_frustrated += e.satisfaction_signals?.frustrated ?? 0;
-    total_dissatisfied += e.satisfaction_signals?.dissatisfied ?? 0;
-    if (ints >= 2) sessions_with_mid_run_redirect += 1;
-
-    const arr = bySession.get(e.session_id) ?? [];
-    arr.push(e);
-    bySession.set(e.session_id, arr);
+    total_interrupts += signals.comm_style.steering.interrupts;
+    total_frustrated += signals.comm_style.steering.frustrated;
+    total_dissatisfied += signals.comm_style.steering.dissatisfied;
+    sessions_with_mid_run_redirect += signals.comm_style.steering.sessions_with_mid_run_redirect;
   }
 
-  // Threads: sessions whose entries span 2+ days.
+  // Threads + total_turns + exit_plan_calls — require entries when present;
+  // when absent (no entries provided) fall back to empty/zero. Pre-refactor
+  // cached digests reading the new path see: empty threads + zeroed counters
+  // until they're re-rolled with entries available.
+  const bySession = new Map<string, Entry[]>();
+  let total_turns = 0;
+  let exit_plan_calls = 0;
+  for (const [, entries] of entriesByDay) {
+    for (const e of entries) {
+      total_turns += e.numbers.turn_count ?? 0;
+      exit_plan_calls += e.numbers.exit_plan_calls ?? 0;
+      const arr = bySession.get(e.session_id) ?? [];
+      arr.push(e);
+      bySession.set(e.session_id, arr);
+    }
+  }
   const threads: WeekInteractionGrammar["threads"] = [];
   for (const [sid, arr] of bySession.entries()) {
     const distinctDays = new Set(arr.map(e => e.local_day));
@@ -612,9 +479,14 @@ export function computeInteractionGrammar(entries: Entry[]): WeekInteractionGram
 }
 
 export type BuildDeterministicWeekOptions = {
-  /** Optional entries — needed for longest_run + hours_distribution.
-   *  When omitted both fields are null/empty and the renderer hides those slices. */
-  entries?: Entry[];
+  /** Entries indexed by local_day. Used for:
+   *   - longest_run + hours_distribution (per-Entry start_iso + active_min)
+   *   - by-the-numbers interaction_modes (per-Entry tool / skill / subagent counts)
+   *   - thread detection across days (multi-day session continuity)
+   *   - on-the-fly DaySignals fallback for cached pre-refactor day digests
+   *  When omitted, longest_run/hours_distribution/threads stay null/empty and
+   *  pre-refactor cached day digests carry zeroed shape/grammar contributions. */
+  entriesByDay?: Map<string, Entry[]>;
 };
 
 export function buildDeterministicWeekDigest(
@@ -710,16 +582,22 @@ export function buildDeterministicWeekDigest(
   }
 
   // ── days_active strip + busiest_day ──
+  const entriesByDay = opts.entriesByDay ?? new Map<string, Entry[]>();
   const days_active: WeekDigest["days_active"] = dayDigests
     .filter(d => d.agent_min > 0)
     .sort((a, b) => a.key.localeCompare(b.key))
-    .map(d => ({
-      date: d.key,
-      agent_min: d.agent_min,
-      shipped_count: d.shipped.length,
-      outcome_day: d.outcome_day,
-      helpfulness_day: d.helpfulness_day,
-    }));
+    .map(d => {
+      const dayEntries = entriesByDay.get(d.key) ?? [];
+      const signals = d.day_signals ?? (dayEntries.length > 0 ? computeDaySignals(dayEntries) : null);
+      return {
+        date: d.key,
+        agent_min: d.agent_min,
+        shipped_count: d.shipped.length,
+        outcome_day: d.outcome_day,
+        helpfulness_day: d.helpfulness_day,
+        dominant_shape: signals?.dominant_shape ?? null,
+      };
+    });
 
   let busiest_day: WeekDigest["busiest_day"] = null;
   for (const d of days_active) {
@@ -728,11 +606,13 @@ export function buildDeterministicWeekDigest(
     }
   }
 
-  // ── longest_run + hours_distribution from entries ──
+  // ── longest_run + hours_distribution + interaction_modes from entries ──
+  const flatEntries: Entry[] = [];
+  for (const arr of entriesByDay.values()) flatEntries.push(...arr);
+
   let longest_run: WeekDigest["longest_run"] = null;
   const hours_distribution = new Array<number>(24).fill(0);
-  const entries = opts.entries ?? [];
-  for (const e of entries) {
+  for (const e of flatEntries) {
     if (!longest_run || e.numbers.active_min > longest_run.active_min) {
       longest_run = {
         session_id: e.session_id,
@@ -748,9 +628,12 @@ export function buildDeterministicWeekDigest(
     }
   }
 
-  const interaction_modes = entries.length > 0 ? computeInteractionModes(entries) : null;
-  const working_shapes = entries.length > 0 ? computeWorkingShapes(entries, dayDigests) : null;
-  const interaction_grammar = entries.length > 0 ? computeInteractionGrammar(entries) : null;
+  // Working shapes + grammar derive from dayDigests (with on-the-fly fallback
+  // when day_signals is absent). Modes still aggregate from entries — the
+  // by-the-numbers fold-down is inherently per-Entry.
+  const working_shapes = dayDigests.length > 0 ? computeWorkingShapes(dayDigests, entriesByDay) : null;
+  const interaction_grammar = dayDigests.length > 0 ? computeInteractionGrammar(dayDigests, entriesByDay) : null;
+  const interaction_modes = flatEntries.length > 0 ? computeInteractionModes(flatEntries) : null;
 
   const sunday = dates[6]!;
   const window = { start: `${monday}T00:00:00`, end: `${sunday}T23:59:59` };
@@ -806,8 +689,10 @@ export type GenerateWeekOptions = {
   model?: string;
   callLLM?: CallLLM;
   onProgress?: (info: { bytes: number; elapsedMs: number }) => void;
-  /** Entries for the week — used to compute longest_run + hours_distribution. */
-  entries?: Entry[];
+  /** Entries indexed by local_day. Same shape as BuildDeterministicWeekOptions —
+   *  used for longest_run / hours_distribution / interaction_modes / threads
+   *  and for on-the-fly DaySignals fallback on cached pre-refactor day digests. */
+  entriesByDay?: Map<string, Entry[]>;
 };
 
 export type GenerateWeekResult = {
@@ -874,7 +759,7 @@ export async function generateWeekDigest(
   dayDigests: DayDigest[],
   opts: GenerateWeekOptions = {},
 ): Promise<GenerateWeekResult> {
-  const base = buildDeterministicWeekDigest(monday, dayDigests, { entries: opts.entries });
+  const base = buildDeterministicWeekDigest(monday, dayDigests, { entriesByDay: opts.entriesByDay });
   // Need at least 2 LLM-enriched day digests (headline populated) to produce a
   // grounded weekly narrative. A deterministic-only day digest has null prose
   // fields, so synth would run on empty `day_summaries` and hallucinate.
@@ -887,7 +772,8 @@ export async function generateWeekDigest(
   let inT = 0, outT = 0;
   let lastModel = model;
 
-  const entriesArr = opts.entries ?? [];
+  const entriesArr: Entry[] = [];
+  for (const arr of (opts.entriesByDay ?? new Map<string, Entry[]>()).values()) entriesArr.push(...arr);
 
   function mergeNarrative(value: import("./prompts/digest-week.js").WeekDigestResponse): WeekDigest {
     const enrichedProjects = base.projects.map(p => {

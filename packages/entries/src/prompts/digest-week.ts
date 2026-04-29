@@ -96,7 +96,7 @@ INPUT shape (JSON payload):
             — Corrections during execution. Normalize against total_turns to estimate steering intensity.
     - todo_ops_total
     - plan_mode: { exit_plan_calls, days_with_plan }
-- day_summaries: per-day { date, day_name, headline, what_went_well, what_hit_friction, suggestion, agent_min, outcome_day, helpfulness_day, top_flags }
+- day_summaries: per-day { date, day_name, headline, what_went_well, what_hit_friction, suggestion, agent_min, outcome_day, helpfulness_day, top_flags, day_signature (≤120 chars LLM-produced shape sentence — quotable verbatim), dominant_shape (named working shape OR "mixed" OR null), shape_distribution (per-shape session counts), day_signals_summary (compact: skills_loaded with origin, user_authored_subagents, prompt_frames with origin, verbosity histogram, external_refs_count, steering counts, brainstorm_warmup_session_count, plan_mode_used, todo_ops_total) }
 - flag_glossary
 
 OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence.
@@ -107,7 +107,7 @@ OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence.
   "key_pattern": "≤80 chars; ONE sentence subhead. Names the dominant working_shape + the grammar element that defined the week (skill ritual / harness frame / thread / plan-mode absence). Reference at least two anchors.",
 
   "trajectory": [
-    { "date": "YYYY-MM-DD", "line": "≤30 words; describe that day's work AS AN INSTANCE of the shape it was classified into. E.g. 'Wed: spec-review-loop on Phase 1b — 3 reviewer dispatches before code, shipped clean.'" }
+    { "date": "YYYY-MM-DD", "line": "≤30 words; describe that day's work AS AN INSTANCE of the shape it was classified into. When the day's day_signature is present, you MAY quote it verbatim (it is concise and already grounded) instead of re-deriving. E.g. 'Wed: spec-review-loop on Phase 1b — 3 reviewer dispatches before code, shipped clean.'" }
     // one per day_summary, chronological
   ],
 
@@ -170,6 +170,7 @@ ANCHORING RULES (critical — every finding must pass these):
 1. **Every what_worked / what_stalled / what_surprised / where_to_lean MUST set anchor** to a value that exists in the input:
    - A working_shapes[].shape value the user actually used this week, OR
    - "interaction_grammar.<key>" where key is one of: brainstorming_warmup_days, prompt_frames, user_authored_skills, skill_families, user_authored_subagents, threads, communication_style.verbosity, communication_style.external_refs, communication_style.steering, OR
+   - "day_signals.<key>" where key is one of: dominant_shape, shape_distribution, comm_style, user_authored_skills_used, user_authored_subagents_used, prompt_frames, plan_mode_used, brainstorm_warmup_session_count — use these when the finding is grounded in a single day's classification rather than a week-level rollup, OR
    - "plan-mode-gap" (only valid when interaction_grammar.plan_mode.exit_plan_calls === 0)
 
 2. **Every evidence.quote MUST appear verbatim** somewhere in the input — day_summary.headline / what_went_well / what_hit_friction, working_shapes[].occurrences[].evidence_subagent.prompt_preview, working_shapes[].occurrences[].evidence_first_user, or interaction_grammar fields. The harness will substring-check; ungrounded findings are dropped automatically.
@@ -248,6 +249,24 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
       outcome_day: d.outcome_day,
       helpfulness_day: d.helpfulness_day,
       top_flags: d.top_flags.slice(0, 5),
+      // Per-day pattern detection — already-classified signal that the LLM
+      // anchors against and quotes verbatim instead of re-deriving.
+      day_signature: d.day_signature ?? null,
+      dominant_shape: d.day_signals?.dominant_shape ?? null,
+      shape_distribution: d.day_signals?.shape_distribution ?? {},
+      day_signals_summary: d.day_signals ? {
+        skills_loaded: d.day_signals.skills_loaded.slice(0, 6).map(s => `${s.skill} (${s.origin})${s.count > 1 ? `×${s.count}` : ""}`),
+        user_authored_subagents: d.day_signals.user_authored_subagents_used.slice(0, 4).map(sa =>
+          `${sa.type}${sa.count > 1 ? `×${sa.count}` : ""}`,
+        ),
+        prompt_frames: d.day_signals.prompt_frames.map(f => `${f.frame}(${f.origin})${f.count > 1 ? `×${f.count}` : ""}`),
+        verbosity: d.day_signals.comm_style.verbosity_distribution,
+        external_refs_count: d.day_signals.comm_style.external_refs.length,
+        steering: d.day_signals.comm_style.steering,
+        brainstorm_warmup_session_count: d.day_signals.brainstorm_warmup_session_count,
+        plan_mode_used: d.day_signals.plan_mode_used,
+        todo_ops_total: d.day_signals.todo_ops_total,
+      } : null,
     }));
 
   const outcome_mix: Record<DayOutcome, number> = {
@@ -322,6 +341,16 @@ export function buildWeekDigestUserPrompt(base: WeekDigest, dayDigests: DayDiges
         "interaction_grammar.communication_style.verbosity",
         "interaction_grammar.communication_style.external_refs",
         "interaction_grammar.communication_style.steering",
+      ],
+      day_level: [
+        "day_signals.dominant_shape",
+        "day_signals.shape_distribution",
+        "day_signals.comm_style",
+        "day_signals.user_authored_skills_used",
+        "day_signals.user_authored_subagents_used",
+        "day_signals.prompt_frames",
+        "day_signals.plan_mode_used",
+        "day_signals.brainstorm_warmup_session_count",
       ],
       decision: ["plan-mode-gap"],
     },
