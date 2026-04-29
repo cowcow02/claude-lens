@@ -8,6 +8,7 @@ import {
 } from "./types.js";
 import {
   classifyUserInputSource,
+  computeEntrySignals,
   countSatisfactionSignals,
   extractUserInstructions,
 } from "./signals.js";
@@ -560,6 +561,7 @@ export function buildEntries(sessionDetail: SessionDetail): Entry[] {
       source_jsonl: sessionDetail.filePath ?? "",
       source_checkpoint: { byte_offset: 0, last_event_ts: agg.end_iso || null },
     };
+    entry.signals = computeEntrySignals(entry);
     entries.push(entry);
   }
 

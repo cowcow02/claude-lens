@@ -38,6 +38,28 @@ export type EntrySubagent = {
   prompt_preview: string;
 };
 
+/** External-system reference kinds detected in first_user. */
+export type ExternalRefKind = "linear-kip" | "github-issue-pr" | "branch-ref" | "url";
+
+/** Deterministic per-Entry classification — computed at Entry-build time. */
+export type EntrySignals = {
+  /** Session shape inferred from subagent dispatches + first_user + skills.
+   *  Null when too small to characterize. */
+  working_shape: WorkingShape;
+  /** Prompt frames detected on first_user. */
+  prompt_frames: PromptFrame[];
+  /** Role per dispatched subagent, parallel index to entry.subagents[]. */
+  subagent_roles: SubagentRole[];
+  /** Length bucket of first_user. */
+  verbosity: "short" | "medium" | "long" | "very_long";
+  /** External-system references parsed out of first_user. */
+  external_refs: Array<{ kind: ExternalRefKind; preview: string }>;
+  /** Did this session open with a brainstorming/writing-plans skill load? */
+  brainstorm_warmup: boolean;
+  /** Was this session a continuation? */
+  continuation_kind: "none" | "literal-continue" | "handoff-prose";
+};
+
 export type Entry = {
   version: typeof CURRENT_ENTRY_SCHEMA_VERSION;
   session_id: string;
@@ -86,6 +108,10 @@ export type Entry = {
   };
   /** Always an object, never null. */
   enrichment: EntryEnrichment;
+  /** Deterministic classification — populated at build time. Optional for
+   *  backward compat with cached pre-refactor entries; consumers fall back
+   *  to on-the-fly computeEntrySignals when absent. */
+  signals?: EntrySignals;
   generated_at: string;
   source_jsonl: string;
   /** Provenance-only — not used for rendering. */
@@ -180,6 +206,52 @@ export type DayOutcome = "shipped" | "partial" | "blocked" | "exploratory" | "tr
  *  so a weekly digest can spot regressions early. `null` if no entries are enriched. */
 export type DayHelpfulness = "essential" | "helpful" | "neutral" | "unhelpful" | null;
 
+/** Deterministic per-day classification — aggregated from Entry.signals. */
+export type DaySignals = {
+  /** Dominant shape across the day, weighted by active_min. "mixed" when no
+   *  single shape exceeds 60% of the day's active_min. null on trivial days. */
+  dominant_shape: NonNullable<WorkingShape> | "mixed" | null;
+  /** Per-shape session count for the day. */
+  shape_distribution: Partial<Record<NonNullable<WorkingShape>, number>>;
+
+  /** Skills loaded today, with origin classification. */
+  skills_loaded: Array<{ skill: string; origin: SkillOrigin; count: number }>;
+  /** User-authored skill names (bare); the week aggregates families. */
+  user_authored_skills_used: string[];
+  /** User-authored Task subagent types dispatched today, with sample evidence. */
+  user_authored_subagents_used: Array<{
+    type: string;
+    count: number;
+    sample_description: string;
+    sample_prompt_preview: string;
+  }>;
+
+  /** Prompt frames detected today, with origin labels. */
+  prompt_frames: Array<{
+    frame: PromptFrame;
+    origin: "claude-feature" | "personal-habit";
+    count: number;
+  }>;
+
+  /** Communication style for the day. */
+  comm_style: {
+    verbosity_distribution: { short: number; medium: number; long: number; very_long: number };
+    external_refs: Array<{ session_id: string; kind: ExternalRefKind; preview: string }>;
+    steering: {
+      interrupts: number;
+      frustrated: number;
+      dissatisfied: number;
+      sessions_with_mid_run_redirect: number;
+    };
+  };
+
+  /** Number of sessions that opened with a brainstorming/writing-plans skill. */
+  brainstorm_warmup_session_count: number;
+  todo_ops_total: number;
+  /** Any entry today had exit_plan_calls > 0 or plan_used flag. */
+  plan_mode_used: boolean;
+};
+
 export type DayDigest = DigestEnvelope & {
   scope: "day";
   /** "{session_id}__{YYYY-MM-DD}" keys of contributing entries. */
@@ -197,6 +269,10 @@ export type DayDigest = DigestEnvelope & {
   outcome_day: DayOutcome;
   /** Day-level helpfulness signal — mode across enriched entries. Phase 2.1 — feeds weekly trajectory. */
   helpfulness_day: DayHelpfulness;
+  /** Deterministic per-day classification. Optional for backward compat with
+   *  cached pre-refactor digests; week aggregation falls back to on-the-fly
+   *  computation from entries when absent. */
+  day_signals?: DaySignals;
 
   // LLM narrative (null when ai_features.enabled === false or synth failed)
   headline: string | null;
@@ -204,6 +280,11 @@ export type DayDigest = DigestEnvelope & {
   what_went_well: string | null;
   what_hit_friction: string | null;
   suggestion: { headline: string; body: string } | null;
+  /** One LLM-produced sentence (≤120 chars) characterizing today's shape —
+   *  quotable verbatim by the week digest. Optional for backward compat;
+   *  null when ai_features.enabled === false, synth declined, or
+   *  day_signals.dominant_shape is null (trivial day). */
+  day_signature?: string | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -335,10 +416,14 @@ export type WeekWorkingShapeRow = {
     outcome: DayOutcome | null;
     helpfulness: DayHelpfulness;
     /** A representative subagent dispatch for this shape's evidence. null
-     *  for solo shapes. */
+     *  for solo shapes or when day-level data is the only source. */
     evidence_subagent: { type: string; description: string; prompt_preview: string } | null;
     /** Truncated first_user for solo shapes or as supporting context. */
     evidence_first_user: string | null;
+    /** Day-level signature line (LLM-produced) — replaces subagent prompt as
+     *  the primary evidence in the new day-first pattern detection.
+     *  Optional for backward compat with cached pre-refactor week digests. */
+    day_signature?: string | null;
   }>;
   outcome_distribution: Partial<Record<DayOutcome, number>>;
 };
@@ -578,6 +663,9 @@ export type WeekDigest = DigestEnvelope & {
     shipped_count: number;
     outcome_day: DayOutcome;
     helpfulness_day: DayHelpfulness;
+    /** Optional — present when the day's DayDigest carries day_signals.
+     *  Drives the per-day shape stripe on DaysActiveBars. */
+    dominant_shape?: NonNullable<WorkingShape> | "mixed" | null;
   }>;
   /** The single day with the most agent-min. null if zero active days. */
   busiest_day: { date: string; agent_min: number; shipped_count: number } | null;
