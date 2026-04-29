@@ -1,28 +1,35 @@
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
  * `fleetlens runs` — inspect live LLM call activity + recent token spend.
  *
- * Sources:
- *   - `ps` for currently-running `claude -p ... --append-system-prompt …`
- *     subprocesses. The system-prompt cmdline tells us which kind of digest
- *     each call is for (week / top-session / day / entry-enrich).
- *   - `~/.cclens/llm-spend.jsonl` for completed calls — input/output tokens
- *     and per-call cost.
+ * Modes:
+ *   (default)              snapshot of active runs + recent spend
+ *   --watch                live snapshot, redraw every 2s
+ *   --inspect <run_id>     dump a specific run's full event timeline
+ *                          (or "latest" for the most recent run)
+ *   --follow               with --inspect, tail new events as they arrive
  *
- * Flags:
- *   --json          machine-readable output
- *   --watch         redraw every 2s until ctrl-c
- *   --since <ISO|N> only count spend records since this timestamp (default 24h)
+ * Sources:
+ *   - `ps` for currently-running `claude -p` subprocesses
+ *   - `~/.cclens/llm-spend.jsonl` for completed-call totals
+ *   - `~/.cclens/llm-runs/<run_id>.jsonl` for per-run event traces
  */
 export async function runs(args: string[]): Promise<void> {
   const json = args.includes("--json");
   const watch = args.includes("--watch");
+  const follow = args.includes("--follow");
   const sinceIdx = args.indexOf("--since");
   const sinceArg = sinceIdx >= 0 ? args[sinceIdx + 1] : null;
+  const inspectIdx = args.indexOf("--inspect");
+  const inspectArg = inspectIdx >= 0 ? args[inspectIdx + 1] : null;
+
+  if (inspectArg) {
+    return inspect(inspectArg, follow, json);
+  }
 
   const sinceMs = parseSince(sinceArg ?? "24h");
 
@@ -31,7 +38,6 @@ export async function runs(args: string[]): Promise<void> {
       console.error("--json and --watch are mutually exclusive");
       process.exit(2);
     }
-    // Hide cursor + clear-screen redraw loop. Ctrl-C exits.
     process.stdout.write("\x1B[?25l");
     process.on("SIGINT", () => {
       process.stdout.write("\x1B[?25h\n");
@@ -39,7 +45,7 @@ export async function runs(args: string[]): Promise<void> {
     });
     while (true) {
       const snap = collect(sinceMs);
-      process.stdout.write("\x1B[2J\x1B[H");  // clear + home
+      process.stdout.write("\x1B[2J\x1B[H");
       printText(snap);
       console.log("\n  refreshing every 2s · ^C to quit");
       await new Promise(r => setTimeout(r, 2000));
@@ -266,6 +272,19 @@ function printText(snap: RunsSnapshot): void {
       console.log(`  ${t}  ${r.kind.padEnd(15)}${ref.padEnd(30)}out=${fmtTokens(r.output_tokens).padStart(7)}  $${r.cost_usd.toFixed(4)}`);
     }
   }
+
+  // ── Trace files (latest 5) — for --inspect targeting ──
+  const traces = listTraceFiles().slice(0, 5);
+  if (traces.length > 0) {
+    console.log("\nLatest trace files (run --inspect <run_id> to view)");
+    console.log("─".repeat(64));
+    for (const t of traces) {
+      const age = Math.floor((Date.now() - t.mtimeMs) / 1000);
+      const ageStr = age < 60 ? `${age}s` : age < 3600 ? `${Math.floor(age / 60)}m` : `${Math.floor(age / 3600)}h`;
+      console.log(`  ${ageStr.padEnd(6)}  ${t.runId}`);
+    }
+    console.log("\n  example: fleetlens runs --inspect latest --follow");
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -290,4 +309,152 @@ function ageLabel(ms: number): string {
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
   return `${Math.floor(ms / 86_400_000)}d`;
+}
+
+// ── Trace-file readers + inspect command ─────────────────────────────────
+
+const RUNS_DIR = join(homedir(), ".cclens", "llm-runs");
+
+function listTraceFiles(): { runId: string; path: string; mtimeMs: number }[] {
+  if (!existsSync(RUNS_DIR)) return [];
+  const entries = readdirSync(RUNS_DIR).filter(f => f.endsWith(".jsonl"));
+  return entries.map(f => {
+    const path = join(RUNS_DIR, f);
+    const st = statSync(path);
+    return { runId: f.replace(/\.jsonl$/, ""), path, mtimeMs: st.mtimeMs };
+  }).sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+function resolveRunId(arg: string): { runId: string; path: string } | null {
+  if (!existsSync(RUNS_DIR)) return null;
+  if (arg === "latest") {
+    const all = listTraceFiles();
+    if (all.length === 0) return null;
+    return { runId: all[0]!.runId, path: all[0]!.path };
+  }
+  // Exact match by run_id (or file basename)
+  const exact = join(RUNS_DIR, `${arg}.jsonl`);
+  if (existsSync(exact)) return { runId: arg, path: exact };
+  // Prefix match — useful for short forms
+  const all = listTraceFiles();
+  const matches = all.filter(r => r.runId.includes(arg));
+  if (matches.length === 1) return { runId: matches[0]!.runId, path: matches[0]!.path };
+  if (matches.length > 1) {
+    console.error(`ambiguous: ${matches.length} runs match "${arg}":`);
+    for (const m of matches.slice(0, 5)) console.error(`  ${m.runId}`);
+    return null;
+  }
+  return null;
+}
+
+function readTrace(path: string): unknown[] {
+  return readFileSync(path, "utf-8").split("\n").filter(l => l.trim()).map(l => {
+    try { return JSON.parse(l); } catch { return { _raw: l }; }
+  });
+}
+
+async function inspect(arg: string, follow: boolean, json: boolean): Promise<void> {
+  const r = resolveRunId(arg);
+  if (!r) {
+    console.error(`run not found: ${arg}`);
+    if (existsSync(RUNS_DIR)) {
+      const all = listTraceFiles().slice(0, 5);
+      if (all.length > 0) {
+        console.error(`\nrecent runs:`);
+        for (const x of all) console.error(`  ${x.runId}`);
+      }
+    } else {
+      console.error(`(no trace dir at ${RUNS_DIR})`);
+    }
+    process.exit(2);
+  }
+
+  if (json) {
+    const events = readTrace(r.path);
+    console.log(JSON.stringify({ run_id: r.runId, events }, null, 2));
+    return;
+  }
+
+  // Human-readable timeline + optional follow
+  const events = readTrace(r.path);
+  printTrace(r.runId, events);
+  if (!follow) return;
+
+  // Follow mode: re-print only the new tail when the file grows.
+  let lastSize = statSync(r.path).size;
+  let lastIdx = events.length;
+  console.log("\n  ⟶ following · ^C to quit\n");
+  process.on("SIGINT", () => process.exit(0));
+  // Use chokidar-free watch: poll mtime every 500ms.
+  while (true) {
+    await new Promise(res => setTimeout(res, 500));
+    const st = statSync(r.path);
+    if (st.size === lastSize) continue;
+    lastSize = st.size;
+    const all = readTrace(r.path);
+    const newOnes = all.slice(lastIdx);
+    lastIdx = all.length;
+    for (const ev of newOnes) printTraceEvent(ev as Record<string, unknown>);
+    // If end record arrived, stop following.
+    if (newOnes.some(e => (e as { _meta?: { type?: string } })._meta?.type === "end")) {
+      console.log("\n  ⟶ run completed");
+      return;
+    }
+  }
+}
+
+function printTrace(runId: string, events: unknown[]): void {
+  console.log(`Run ${runId}`);
+  console.log("─".repeat(76));
+  for (const ev of events) printTraceEvent(ev as Record<string, unknown>);
+}
+
+function printTraceEvent(ev: Record<string, unknown>): void {
+  const meta = ev._meta as Record<string, unknown> | undefined;
+  if (meta) {
+    const mtype = meta.type as string;
+    if (mtype === "start") {
+      console.log(`  [${(meta.ts as string ?? "").slice(11, 19)}] START   kind=${meta.kind}  model=${meta.model}  user_chars=${meta.user_prompt_chars}`);
+    } else if (mtype === "spawned") {
+      console.log(`  [        ] PID ${meta.pid}`);
+    } else if (mtype === "end") {
+      const elapsed = (meta.elapsed_ms as number) / 1000;
+      console.log(`  [${(meta.ts as string ?? "").slice(11, 19)}] END     exit=${meta.exit_code}  elapsed=${elapsed.toFixed(1)}s  output=${meta.content_chars} chars  in=${meta.input_tokens} out=${meta.output_tokens}`);
+      if (meta.stderr_tail) {
+        console.log(`             stderr: ${(meta.stderr_tail as string).slice(0, 200)}`);
+      }
+    } else if (mtype === "spawn_error") {
+      console.log(`  [${(meta.ts as string ?? "").slice(11, 19)}] SPAWN_ERROR  ${meta.error}`);
+    }
+    return;
+  }
+  // claude stream-json events
+  const t = ev.type as string;
+  if (t === "system" && ev.subtype === "init") {
+    console.log(`  · system init`);
+    return;
+  }
+  if (t === "assistant") {
+    const msg = ev.message as { content?: Array<Record<string, unknown>> } | undefined;
+    if (msg?.content) {
+      for (const block of msg.content) {
+        if (block.type === "text" && typeof block.text === "string") {
+          const chars = block.text.length;
+          const preview = block.text.replace(/\s+/g, " ").slice(0, 100);
+          console.log(`  · text (${chars} chars): ${preview}${block.text.length > 100 ? "…" : ""}`);
+        } else if (block.type === "tool_use") {
+          console.log(`  · tool_use: ${block.name ?? "?"}`);
+        }
+      }
+    }
+    return;
+  }
+  if (t === "result") {
+    const usage = ev.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+    if (usage) console.log(`  · result: in=${usage.input_tokens} out=${usage.output_tokens}`);
+    else console.log(`  · result`);
+    return;
+  }
+  // Unknown / passthrough — terse one-liner
+  console.log(`  · ${t ?? "raw"}`);
 }
