@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const UsageWindowSchema = z.object({
   utilization: z.number().nullable(),
-  resetsAt: z.string().datetime().nullable(),
+  resetsAt: z.string().datetime({ offset: true }).nullable(),
 }).passthrough();
 
 const ExtraUsageSchema = z.object({
@@ -13,7 +13,7 @@ const ExtraUsageSchema = z.object({
 }).passthrough();
 
 export const UsageSnapshotSchema = z.object({
-  capturedAt: z.string().datetime(),
+  capturedAt: z.string().datetime({ offset: true }),
   fiveHour: UsageWindowSchema,
   sevenDay: UsageWindowSchema,
   sevenDayOpus: UsageWindowSchema.nullable(),
@@ -24,6 +24,11 @@ export const UsageSnapshotSchema = z.object({
 }).passthrough();
 
 export type UsageSnapshot = z.infer<typeof UsageSnapshotSchema>;
+
+// Cap per-request to keep transactions bounded; the daemon batches.
+export const UsageHistoryPayload = z.object({
+  snapshots: z.array(UsageSnapshotSchema).min(1).max(1000),
+});
 
 export const IngestPayload = z.object({
   ingestId: z.string(),

@@ -1,4 +1,5 @@
 import { writeTeamConfig } from "./config.js";
+import { runTeamBackfill } from "./backfill.js";
 
 export async function joinTeam(args: string[]) {
   const [serverUrl, bearerToken] = args;
@@ -37,5 +38,17 @@ export async function joinTeam(args: string[]) {
 
   console.log(`Paired with "${data.team.name}" as ${data.user.displayName || data.user.email}`);
   console.log(`  role: ${data.membership.role}`);
+
+  // Without this, the team dashboard sits at "insufficient_data" for a week
+  // even though the local daemon already has weeks of history. Failures here
+  // are non-fatal — the daily-rollup sync still runs at the next 5-min tick.
+  const backfill = await runTeamBackfill();
+  if (backfill.insertedSnapshots > 0) {
+    console.log(
+      `  Backfilled ${backfill.insertedSnapshots} usage snapshot${backfill.insertedSnapshots === 1 ? "" : "s"} from local history.`,
+    );
+  } else if (backfill.error) {
+    console.log(`  Note: usage backfill skipped (${backfill.error}). Run 'fleetlens team backfill' to retry.`);
+  }
   console.log("  Your daemon will push metrics on the next 5-minute cycle.");
 }

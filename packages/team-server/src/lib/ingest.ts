@@ -1,6 +1,7 @@
 import pg from "pg";
 import { getPool } from "../db/pool";
-import { IngestPayload } from "./zod-schemas";
+import { IngestPayload, UsageHistoryPayload } from "./zod-schemas";
+import { refreshMembershipWeeklyUtilization } from "./scheduler";
 import { broadcastEvent } from "./sse";
 
 export async function processIngest(
@@ -81,4 +82,74 @@ export async function processIngest(
 
   broadcastEvent(teamId, "roster-updated", { membershipId });
   return { accepted: true, nextSyncAfter: new Date(Date.now() + 5 * 60 * 1000).toISOString() };
+}
+
+// Bulk-loads historical UsageSnapshot rows from the daemon's local
+// usage.jsonl. Called once on first `team join` so the dashboard reflects
+// pre-pairing data instead of waiting 7+ days to leave "insufficient_data".
+// Idempotent via the (team_id, membership_id, captured_at) unique key, so
+// it's safe to re-run.
+export async function processUsageHistory(
+  raw: unknown,
+  membershipId: string,
+  teamId: string,
+  pool?: pg.Pool,
+) {
+  const p = pool || getPool();
+  const { snapshots } = UsageHistoryPayload.parse(raw);
+
+  let inserted = 0;
+  const client = await p.connect();
+  try {
+    await client.query("BEGIN");
+    for (const u of snapshots) {
+      const res = await client.query(
+        `INSERT INTO plan_utilization (
+           team_id, membership_id, captured_at,
+           five_hour_utilization, five_hour_resets_at,
+           seven_day_utilization, seven_day_resets_at,
+           seven_day_opus_utilization, seven_day_sonnet_utilization,
+           seven_day_oauth_apps_utilization, seven_day_cowork_utilization,
+           extra_usage_enabled, extra_usage_monthly_limit_usd,
+           extra_usage_used_credits_usd, extra_usage_utilization
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (team_id, membership_id, captured_at) DO NOTHING`,
+        [
+          teamId, membershipId, u.capturedAt,
+          u.fiveHour.utilization, u.fiveHour.resetsAt,
+          u.sevenDay.utilization, u.sevenDay.resetsAt,
+          u.sevenDayOpus?.utilization ?? null,
+          u.sevenDaySonnet?.utilization ?? null,
+          u.sevenDayOauthApps?.utilization ?? null,
+          u.sevenDayCowork?.utilization ?? null,
+          u.extraUsage?.isEnabled ?? false,
+          u.extraUsage?.monthlyLimitUsd ?? null,
+          u.extraUsage?.usedCreditsUsd ?? null,
+          u.extraUsage?.utilization ?? null,
+        ],
+      );
+      if (res.rowCount === 1) inserted++;
+    }
+    await client.query("UPDATE memberships SET last_seen_at = now() WHERE id = $1", [membershipId]);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // Surface backfilled data on the dashboard immediately rather than waiting
+  // for the hourly scheduler tick.
+  if (inserted > 0) {
+    try {
+      await refreshMembershipWeeklyUtilization();
+    } catch {
+      // Refresh races with the scheduler are non-fatal — the next hourly
+      // tick will correct any missed concurrent refresh.
+    }
+    broadcastEvent(teamId, "roster-updated", { membershipId });
+  }
+
+  return { accepted: true, received: snapshots.length, inserted, skipped: snapshots.length - inserted };
 }

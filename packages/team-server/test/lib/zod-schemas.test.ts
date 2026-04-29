@@ -148,4 +148,25 @@ describe("UsageSnapshotSchema", () => {
     const withSnapshot = { ...validIngest, usageSnapshot: validSnapshot };
     expect(() => IngestPayload.parse(withSnapshot)).not.toThrow();
   });
+
+  // Anthropic's /api/oauth/usage returns timestamps with explicit `+00:00`
+  // offsets, not the `Z` shorthand. The daemon forwards them verbatim, so
+  // the schema must accept both. Without `{ offset: true }` zod rejects
+  // every real-world payload — see PR #23 review for the regression.
+  it("accepts offset-form timestamps from Anthropic's API", () => {
+    expect(() =>
+      UsageSnapshotSchema.parse({
+        ...validSnapshot,
+        capturedAt: "2026-04-29T02:58:41.717+00:00",
+        fiveHour: {
+          utilization: 19,
+          resetsAt: "2026-04-29T07:10:00.207984+00:00",
+        },
+        sevenDay: {
+          utilization: 18,
+          resetsAt: "2026-05-04T12:00:00.208003+00:00",
+        },
+      }),
+    ).not.toThrow();
+  });
 });

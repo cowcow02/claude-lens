@@ -36,13 +36,28 @@ export async function team(args: string[]) {
       );
       break;
     }
+    case "backfill": {
+      const { runTeamBackfill } = await import("../team/backfill.js");
+      const outcome = await runTeamBackfill((level, msg) => console.log(`[${level}] ${msg}`));
+      if (!outcome.paired) {
+        console.error("Not paired. Run 'fleetlens team join <url> <device-token>' first.");
+        process.exit(1);
+      }
+      if (outcome.error) process.exit(1);
+      console.log(
+        `✓ ${outcome.insertedSnapshots} new snapshot${outcome.insertedSnapshots === 1 ? "" : "s"} loaded` +
+        (outcome.skippedSnapshots ? `, ${outcome.skippedSnapshots} already-known` : "")
+      );
+      break;
+    }
     default:
-      console.log(`Usage: fleetlens team <join|status|leave|logs|sync>
+      console.log(`Usage: fleetlens team <join|status|leave|logs|sync|backfill>
 
-  join <url> <device-token>    Pair daemon with a team server
+  join <url> <device-token>    Pair daemon with a team server (auto-backfills usage history)
   status                       Show team pairing state and sync info
   leave                        Unpair from the team server
   logs                         Show recent team-related daemon log entries
-  sync                         Push any un-synced days now (skip 5-min wait)`);
+  sync                         Push any un-synced days now (skip 5-min wait)
+  backfill                     Re-upload local usage history to populate the team dashboard`);
   }
 }

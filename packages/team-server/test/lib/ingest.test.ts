@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { resetDb } from "../helpers/db.js";
 import { getPool } from "../../src/db/pool.js";
-import { processIngest } from "../../src/lib/ingest.js";
+import { processIngest, processUsageHistory } from "../../src/lib/ingest.js";
 import { addClient } from "../../src/lib/sse.js";
 import { createUserAccount } from "../../src/lib/auth.js";
 import { createTeamWithAdmin } from "../../src/lib/teams.js";
@@ -233,5 +233,91 @@ describe("processIngest", () => {
     expect(rows[0].extra_usage_enabled).toBe(true);
     expect(rows[0].extra_usage_monthly_limit_usd).toBeCloseTo(50, 4);
     expect(rows[0].extra_usage_used_credits_usd).toBeCloseTo(12.5, 4);
+  });
+
+  // Anthropic's API serializes `+00:00` rather than `Z`. Without
+  // datetime({offset:true}) the schema rejected every real payload, leaving
+  // plan_utilization permanently empty. See PR #23 review.
+  it("accepts usage timestamps with +00:00 offsets (real Anthropic shape)", async () => {
+    const capturedAt = "2026-04-29T03:00:00.000+00:00";
+    await processIngest(
+      makePayload({
+        usageSnapshot: {
+          capturedAt,
+          fiveHour: { utilization: 19, resetsAt: "2026-04-29T07:10:00.207984+00:00" },
+          sevenDay: { utilization: 18, resetsAt: "2026-05-04T12:00:00.208003+00:00" },
+          sevenDayOpus: null,
+          sevenDaySonnet: null,
+          sevenDayOauthApps: null,
+          sevenDayCowork: null,
+          extraUsage: null,
+        },
+      }),
+      membershipId,
+      teamId,
+      pool,
+    );
+    const { rows } = await pool.query(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id = $1 AND captured_at = $2",
+      [membershipId, capturedAt],
+    );
+    expect(rows[0].count).toBe("1");
+  });
+});
+
+describe("processUsageHistory", () => {
+  function makeSnap(capturedAt: string, fiveHourPct = 25, sevenDayPct = 40) {
+    return {
+      capturedAt,
+      fiveHour: { utilization: fiveHourPct, resetsAt: "2026-05-04T12:00:00+00:00" },
+      sevenDay: { utilization: sevenDayPct, resetsAt: "2026-05-04T12:00:00+00:00" },
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      sevenDayOauthApps: null,
+      sevenDayCowork: null,
+      extraUsage: null,
+    };
+  }
+
+  it("bulk-inserts snapshots and reports counts", async () => {
+    const result = await processUsageHistory(
+      {
+        snapshots: [
+          makeSnap("2026-04-20T01:00:00+00:00", 10, 20),
+          makeSnap("2026-04-20T02:00:00+00:00", 15, 22),
+          makeSnap("2026-04-20T03:00:00+00:00", 17, 25),
+        ],
+      },
+      membershipId,
+      teamId,
+      pool,
+    );
+    expect(result.received).toBe(3);
+    expect(result.inserted).toBe(3);
+    expect(result.skipped).toBe(0);
+  });
+
+  it("is idempotent on (team, membership, captured_at)", async () => {
+    const snap = makeSnap("2026-04-21T01:00:00+00:00");
+    const first = await processUsageHistory({ snapshots: [snap] }, membershipId, teamId, pool);
+    expect(first.inserted).toBe(1);
+    const again = await processUsageHistory({ snapshots: [snap] }, membershipId, teamId, pool);
+    expect(again.inserted).toBe(0);
+    expect(again.skipped).toBe(1);
+  });
+
+  it("rejects empty snapshot arrays", async () => {
+    await expect(
+      processUsageHistory({ snapshots: [] }, membershipId, teamId, pool),
+    ).rejects.toThrow();
+  });
+
+  it("rejects oversized batches above the 1000-row cap", async () => {
+    const big = Array.from({ length: 1001 }, (_, i) =>
+      makeSnap(`2026-04-22T${String(i % 24).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00+00:00`),
+    );
+    await expect(
+      processUsageHistory({ snapshots: big }, membershipId, teamId, pool),
+    ).rejects.toThrow();
   });
 });
