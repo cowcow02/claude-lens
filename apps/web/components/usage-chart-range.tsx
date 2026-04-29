@@ -402,41 +402,6 @@ export function UsageChartRange({
                   />
                 )}
 
-                {/* Predicted overlay for THIS cycle — clip to cycle window
-                 * and the visible range. Clamp util to [0, 100] so cold-start
-                 * extrapolations don't blow off-chart. Dashed orange so it
-                 * can be visually compared against the real burndown line. */}
-                {(() => {
-                  const predHere = (predictedSeries ?? [])
-                    .filter(
-                      (p) =>
-                        p.capturedAt >= cycle.startMs &&
-                        p.capturedAt <= cycle.resetsAtMs &&
-                        p.capturedAt >= startMs &&
-                        p.capturedAt <= endMs,
-                    )
-                    .map((p) => {
-                      const u = Math.max(0, Math.min(100, p.util));
-                      return { t: p.capturedAt, u, remaining: 100 - u };
-                    })
-                    .sort((a, b) => a.t - b.t);
-                  if (predHere.length < 2) return null;
-                  const predPath = buildGappedPath(predHere, xScale, yScale);
-                  if (!predPath) return null;
-                  return (
-                    <path
-                      d={predPath}
-                      fill="none"
-                      stroke="#ff7a00"
-                      strokeOpacity="0.85"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeDasharray="5 4"
-                    />
-                  );
-                })()}
-
                 {/* Data point dots — ensures isolated/gap-bounded snapshots
                     remain visible even when the polyline breaks around them. */}
                 {visiblePts.map((p, j) => (
@@ -478,6 +443,44 @@ export function UsageChartRange({
               </g>
             );
           })}
+
+          {/* Predicted overlay — single continuous path across the visible
+           * range, broken when pred drops >= 50pp (= cycle reset). One path
+           * covers daemon-backed AND cold-start periods uniformly, so a
+           * 30D / 90D zoomout shows the prediction over its whole span. */}
+          {(() => {
+            const pred = (predictedSeries ?? [])
+              .filter((p) => p.capturedAt >= startMs && p.capturedAt <= endMs)
+              .sort((a, b) => a.capturedAt - b.capturedAt);
+            if (pred.length < 2) return null;
+            const parts: string[] = [];
+            let inSeg = false;
+            let prevUtil = pred[0]!.util;
+            for (let i = 0; i < pred.length; i++) {
+              const p = pred[i]!;
+              const u = Math.max(0, Math.min(100, p.util));
+              const remaining = 100 - u;
+              const drop = prevUtil - u;
+              const isReset = i > 0 && drop >= 50;
+              const isGap = i > 0 && p.capturedAt - pred[i - 1]!.capturedAt > GAP_THRESHOLD_MS;
+              const cmd = !inSeg || isReset || isGap ? "M" : "L";
+              parts.push(`${cmd} ${xScale(p.capturedAt).toFixed(1)} ${yScale(remaining).toFixed(1)}`);
+              inSeg = true;
+              prevUtil = u;
+            }
+            return (
+              <path
+                d={parts.join(" ")}
+                fill="none"
+                stroke="#ff7a00"
+                strokeOpacity="0.85"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray="5 4"
+              />
+            );
+          })()}
 
           {/* Current-time vertical marker */}
           {Date.now() >= startMs && Date.now() <= endMs && (

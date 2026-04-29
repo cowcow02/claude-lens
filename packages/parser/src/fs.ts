@@ -1005,6 +1005,11 @@ export type CalibrationCurvePoint = {
   pred_5h: number;
   real_7d: number | null;
   pred_7d: number;
+  /** ISO timestamp of the 5h cycle this point belongs to (= resets_at).
+   * Lets consumers group points into cycles without having to detect
+   * resets heuristically from value drops. */
+  cycle_end_5h: string | null;
+  cycle_end_7d: string | null;
 };
 
 export type CalibrationCurve = {
@@ -1185,6 +1190,8 @@ export function buildCalibrationCurve(
       pred_5h: Math.max(0, Math.min(200, p5)),
       real_7d: real7,
       pred_7d: Math.max(0, Math.min(200, p7)),
+      cycle_end_5h: r5 != null ? new Date(r5).toISOString() : null,
+      cycle_end_7d: r7 != null ? new Date(r7).toISOString() : null,
     });
     cur += stepMs;
   }

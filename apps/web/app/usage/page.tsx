@@ -15,9 +15,14 @@ import {
   readCachedPlanTier,
   PLAN_TIER_LABELS,
 } from "@/lib/usage-data";
-import { readCalibrationDump, predictedSeriesFor } from "@/lib/calibration-data";
+import {
+  readCalibrationDump,
+  predictedSeriesFor,
+  lastCompletedCycleSummary,
+} from "@/lib/calibration-data";
 import { UsageChartsDashboard } from "@/components/usage-charts-dashboard";
 import { CalibrationComparisonChart } from "@/components/calibration-comparison-chart";
+import { LastCycleSummary } from "@/components/last-cycle-summary";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +32,7 @@ export default async function UsagePage() {
   const tier = readCachedPlanTier();
   const calibration = await readCalibrationDump();
   const predicted = predictedSeriesFor(calibration);
+  const lastCycle = lastCompletedCycleSummary(calibration);
 
   return (
     <div
@@ -91,6 +97,7 @@ export default async function UsagePage() {
         <EmptyState />
       ) : (
         <>
+          <LastCycleSummary fiveHour={lastCycle.five_hour} sevenDay={lastCycle.seven_day} />
           {calibration && (
             <section
               style={{
