@@ -1,11 +1,13 @@
 import type pg from "pg";
 import {
   DEFAULT_OPTIMIZER_SETTINGS,
+  recommend,
   type MemberStats,
   type OptimizerSettings,
+  type Recommendation,
 } from "./plan-optimizer";
 import type { MemberLatestSnapshot } from "./capacity-burndown";
-import type { PlanTierKey } from "./plan-tiers";
+import { tierEntry, type PlanTierKey } from "./plan-tiers";
 
 export type OptimizerMemberInput = {
   membershipId: string;
@@ -156,9 +158,15 @@ export type MemberPlanSummary = {
   avgSevenDayPct: number;
   worstSevenDayPeak: number;
   worstFiveHourPeak: number;
+  worstOpusPeak: number;
   totalDaysObserved: number;
   lastSeenAtMs: number | null;
   trail: number[];
+  // Number of distinct local days in the last 30 where the daemon observed
+  // utilization at or above 100% — i.e., this member ran into the wall.
+  wallHits5h: number;
+  wallHits7d: number;
+  recommendation: Recommendation;
 };
 
 export async function loadMemberPlanSummary(
@@ -166,7 +174,7 @@ export async function loadMemberPlanSummary(
   membershipId: string,
   pool: pg.Pool,
 ): Promise<MemberPlanSummary> {
-  const [tierRes, statsRes, trailRes] = await Promise.all([
+  const [tierRes, statsRes, trailRes, wallsRes, settings] = await Promise.all([
     pool.query<{ plan_tier: string }>(
       "SELECT plan_tier FROM memberships WHERE id = $1 AND team_id = $2",
       [membershipId, teamId],
@@ -175,6 +183,7 @@ export async function loadMemberPlanSummary(
       worst_7day_peak: number | null;
       avg_7day_avg: number | null;
       worst_5hr_peak: number | null;
+      worst_opus_peak: number | null;
       total_days_observed: number | null;
       last_seen_ms: number | null;
     }>(
@@ -182,6 +191,7 @@ export async function loadMemberPlanSummary(
          MAX(peak_seven_day_pct)::float8     AS worst_7day_peak,
          AVG(avg_seven_day_pct)::float8      AS avg_7day_avg,
          MAX(peak_five_hour_pct)::float8     AS worst_5hr_peak,
+         MAX(peak_opus_pct)::float8          AS worst_opus_peak,
          SUM(distinct_days_observed)::int    AS total_days_observed,
          EXTRACT(EPOCH FROM MAX(last_captured_at))::float8 * 1000 AS last_seen_ms
        FROM membership_weekly_utilization
@@ -197,24 +207,54 @@ export async function loadMemberPlanSummary(
        ORDER BY window_start_day ASC`,
       [teamId, membershipId],
     ),
+    // Read raw plan_utilization (not the mat view) so wall-hits surface the
+    // moment a snapshot lands, without waiting for the hourly mat view tick.
+    pool.query<{ wall_hits_5h: number; wall_hits_7d: number }>(
+      `SELECT
+         COUNT(DISTINCT date_trunc('day', captured_at))
+           FILTER (WHERE five_hour_utilization >= 100)::int AS wall_hits_5h,
+         COUNT(DISTINCT date_trunc('day', captured_at))
+           FILTER (WHERE seven_day_utilization >= 100)::int AS wall_hits_7d
+       FROM plan_utilization
+       WHERE team_id = $1 AND membership_id = $2
+         AND captured_at >= now() - interval '30 days'`,
+      [teamId, membershipId],
+    ),
+    loadOptimizerSettings(teamId, pool),
   ]);
 
   const stats = statsRes.rows[0] ?? {
     worst_7day_peak: null,
     avg_7day_avg: null,
     worst_5hr_peak: null,
+    worst_opus_peak: null,
     total_days_observed: null,
     last_seen_ms: null,
   };
+  const walls = wallsRes.rows[0] ?? { wall_hits_5h: 0, wall_hits_7d: 0 };
 
-  return {
-    planTier: tierRes.rows[0]?.plan_tier ?? "pro-max",
-    avgSevenDayPct: Number(stats.avg_7day_avg ?? 0),
+  const planTier = tierRes.rows[0]?.plan_tier ?? "pro-max";
+  const memberStats: MemberStats = {
     worstSevenDayPeak: Number(stats.worst_7day_peak ?? 0),
+    avgSevenDayAvg: Number(stats.avg_7day_avg ?? 0),
     worstFiveHourPeak: Number(stats.worst_5hr_peak ?? 0),
+    worstOpusPeak: Number(stats.worst_opus_peak ?? 0),
     totalDaysObserved: Number(stats.total_days_observed ?? 0),
     lastSeenAtMs: stats.last_seen_ms == null ? null : Number(stats.last_seen_ms),
+  };
+
+  return {
+    planTier,
+    avgSevenDayPct: memberStats.avgSevenDayAvg,
+    worstSevenDayPeak: memberStats.worstSevenDayPeak,
+    worstFiveHourPeak: memberStats.worstFiveHourPeak,
+    worstOpusPeak: memberStats.worstOpusPeak,
+    totalDaysObserved: memberStats.totalDaysObserved,
+    lastSeenAtMs: memberStats.lastSeenAtMs,
     trail: trailRes.rows.map((r) => Number(r.peak_seven_day_pct ?? 0)),
+    wallHits5h: Number(walls.wall_hits_5h ?? 0),
+    wallHits7d: Number(walls.wall_hits_7d ?? 0),
+    recommendation: recommend(memberStats, tierEntry(planTier), settings),
   };
 }
 

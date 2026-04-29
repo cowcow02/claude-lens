@@ -1,5 +1,6 @@
 import { writeTeamConfig } from "./config.js";
 import { runTeamBackfill } from "./backfill.js";
+import { runTeamSync } from "./sync.js";
 
 export async function joinTeam(args: string[]) {
   const [serverUrl, bearerToken] = args;
@@ -39,9 +40,12 @@ export async function joinTeam(args: string[]) {
   console.log(`Paired with "${data.team.name}" as ${data.user.displayName || data.user.email}`);
   console.log(`  role: ${data.membership.role}`);
 
-  // Without this, the team dashboard sits at "insufficient_data" for a week
-  // even though the local daemon already has weeks of history. Failures here
-  // are non-fatal — the daily-rollup sync still runs at the next 5-min tick.
+  // Two backfills run here so the team dashboard is fully populated on
+  // first visit: the snapshot backfill rescues the plan-utilization
+  // sparkline + optimizer (which would otherwise sit at "insufficient_data"
+  // for a week), and the daily-rollup sync fills the activity charts that
+  // would otherwise show "No activity" until the daemon's next 5-min tick.
+  // Both are non-fatal — failures fall back to the daemon's normal cycle.
   const backfill = await runTeamBackfill();
   if (backfill.insertedSnapshots > 0) {
     console.log(
@@ -49,6 +53,13 @@ export async function joinTeam(args: string[]) {
     );
   } else if (backfill.error) {
     console.log(`  Note: usage backfill skipped (${backfill.error}). Run 'fleetlens team backfill' to retry.`);
+  }
+
+  const sync = await runTeamSync();
+  if (sync.pushed > 0) {
+    console.log(`  Synced ${sync.pushed} day${sync.pushed === 1 ? "" : "s"} of session activity.`);
+  } else if (sync.error) {
+    console.log(`  Note: activity sync skipped (${sync.error}). Will retry on next daemon cycle.`);
   }
   console.log("  Your daemon will push metrics on the next 5-minute cycle.");
 }
