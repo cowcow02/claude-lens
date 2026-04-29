@@ -2,9 +2,30 @@
 
 import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import type { DayDigest as DayDigestType, Entry } from "@claude-lens/entries";
+import type { DayDigest as DayDigestType, DaySignals, Entry } from "@claude-lens/entries";
 import { OutcomePill } from "./outcome-pill";
 import { GoalBar } from "./goal-bar";
+
+const SHAPE_LABELS: Record<string, string> = {
+  "spec-review-loop": "Spec-review loop",
+  "chunk-implementation": "Chunk implementation",
+  "research-then-build": "Research-then-build",
+  "reviewer-triad": "Reviewer triad",
+  "background-coordinated": "Background-coordinated",
+  "solo-continuation": "Solo continuation",
+  "solo-design": "Solo design",
+  "solo-build": "Solo build",
+  "mixed": "Mixed",
+};
+
+const FRAME_LABELS: Record<string, string> = {
+  "teammate": "<teammate-message>",
+  "task-notification": "<task-notification>",
+  "local-command-caveat": "<local-command-caveat>",
+  "image-attached": "[Image #N]",
+  "slash-command": "/command",
+  "handoff-prose": "Handoff prose",
+};
 
 export function DayDigest({
   digest, entries, aiEnabled, actions,
@@ -52,7 +73,7 @@ export function DayDigest({
         {digest.headline ? (
           <h1 style={{
             fontSize: 26, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-0.02em",
-            margin: "0 0 14px", maxWidth: 820, color: "var(--af-text)",
+            margin: "0 0 8px", maxWidth: 820, color: "var(--af-text)",
           }}>
             {digest.headline}
           </h1>
@@ -60,6 +81,14 @@ export function DayDigest({
           <h1 style={{ fontSize: 20, color: "var(--af-text-secondary)", margin: "0 0 14px" }}>
             {aiEnabled ? "No narrative yet — click Regenerate." : `Worked ${timeStr} across ${digest.projects.length} project${digest.projects.length === 1 ? "" : "s"}.`}
           </h1>
+        )}
+        {digest.day_signature && (
+          <p style={{
+            margin: "0 0 14px", fontSize: 14, fontStyle: "italic",
+            color: "var(--af-text-secondary)", maxWidth: 820, lineHeight: 1.5,
+          }}>
+            {digest.day_signature}
+          </p>
         )}
       </header>
 
@@ -72,6 +101,9 @@ export function DayDigest({
           Enable AI features in <a href="/settings" style={{ color: "var(--af-accent)" }}>Settings</a> to see daily narratives.
         </div>
       )}
+
+      {/* "How today worked" — deterministic per-day classification, anchors the narrative below. */}
+      {digest.day_signals && <DaySignalsSection signals={digest.day_signals} />}
 
       {/* Went-well / Friction bands (no panel chrome) */}
       {(digest.what_went_well || digest.what_hit_friction) && (
@@ -257,6 +289,165 @@ function ShareBar({ pct }: { pct: number }) {
         background: "var(--af-accent)", transition: "width 0.2s",
       }} />
     </div>
+  );
+}
+
+function DaySignalsSection({ signals }: { signals: DaySignals }) {
+  const hasShape = signals.dominant_shape !== null;
+  const hasShapeMix = Object.keys(signals.shape_distribution).length > 0;
+  const hasSubagentRoles =
+    signals.user_authored_subagents_used.length > 0
+    || Object.keys(signals.shape_distribution).length > 0;
+  const stockSkills = signals.skills_loaded.filter(s => s.origin === "stock");
+  const userSkills = signals.skills_loaded.filter(s => s.origin === "user");
+  const claudeFrames = signals.prompt_frames.filter(f => f.origin === "claude-feature");
+  const personalFrames = signals.prompt_frames.filter(f => f.origin === "personal-habit");
+  const cs = signals.comm_style;
+  const verbositySum = cs.verbosity_distribution.short + cs.verbosity_distribution.medium
+    + cs.verbosity_distribution.long + cs.verbosity_distribution.very_long;
+  const steeringSum = cs.steering.interrupts + cs.steering.frustrated + cs.steering.dissatisfied;
+
+  if (!hasShape && !hasShapeMix && stockSkills.length === 0 && userSkills.length === 0
+      && signals.user_authored_subagents_used.length === 0
+      && claudeFrames.length === 0 && personalFrames.length === 0
+      && verbositySum === 0 && cs.external_refs.length === 0 && steeringSum === 0
+      && signals.brainstorm_warmup_session_count === 0
+      && signals.todo_ops_total === 0 && !signals.plan_mode_used) {
+    return null;
+  }
+
+  return (
+    <section style={{
+      marginBottom: 28, padding: "14px 16px", borderRadius: 8,
+      background: "var(--af-surface)", border: "1px solid var(--af-border-subtle)",
+    }}>
+      <div style={{
+        fontSize: 10, color: "var(--af-text-tertiary)", textTransform: "uppercase",
+        letterSpacing: "0.08em", fontWeight: 600, marginBottom: 10,
+      }}>
+        How today worked
+      </div>
+
+      {hasShape && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", padding: "3px 10px",
+            borderRadius: 999, fontSize: 12, fontWeight: 600,
+            background: "var(--af-accent-subtle)", color: "var(--af-accent)",
+          }}>
+            {SHAPE_LABELS[signals.dominant_shape!] ?? signals.dominant_shape}
+          </span>
+          {hasShapeMix && (
+            <span style={{ fontSize: 12, color: "var(--af-text-secondary)", fontFamily: "var(--font-mono)" }}>
+              {Object.entries(signals.shape_distribution)
+                .sort((a, b) => b[1] - a[1])
+                .map(([s, n]) => `${n} ${s}`)
+                .join(" · ")}
+            </span>
+          )}
+        </div>
+      )}
+
+      {hasSubagentRoles && signals.user_authored_subagents_used.length > 0 && (
+        <SignalsRow label="Your subagents">
+          {signals.user_authored_subagents_used.slice(0, 4).map(sa => (
+            <Chip key={sa.type} title={sa.sample_prompt_preview}>
+              {sa.type}{sa.count > 1 ? ` ×${sa.count}` : ""}
+            </Chip>
+          ))}
+        </SignalsRow>
+      )}
+
+      {(stockSkills.length > 0 || userSkills.length > 0) && (
+        <SignalsRow label="Skills loaded">
+          {userSkills.slice(0, 4).map(s => (
+            <Chip key={s.skill} tone="user">{s.skill}{s.count > 1 ? ` ×${s.count}` : ""}</Chip>
+          ))}
+          {stockSkills.slice(0, 4).map(s => (
+            <Chip key={s.skill} tone="stock">{s.skill}{s.count > 1 ? ` ×${s.count}` : ""}</Chip>
+          ))}
+        </SignalsRow>
+      )}
+
+      {(claudeFrames.length > 0 || personalFrames.length > 0) && (
+        <SignalsRow label="Prompt frames">
+          {personalFrames.map(f => (
+            <Chip key={f.frame} tone="user">
+              {FRAME_LABELS[f.frame] ?? f.frame}{f.count > 1 ? ` ×${f.count}` : ""}
+            </Chip>
+          ))}
+          {claudeFrames.map(f => (
+            <Chip key={f.frame} tone="stock">
+              {FRAME_LABELS[f.frame] ?? f.frame}{f.count > 1 ? ` ×${f.count}` : ""}
+            </Chip>
+          ))}
+        </SignalsRow>
+      )}
+
+      {(verbositySum > 0 || cs.external_refs.length > 0 || steeringSum > 0) && (
+        <SignalsRow label="Comm style">
+          {verbositySum > 0 && (
+            <span style={{ fontSize: 12, color: "var(--af-text-secondary)", fontFamily: "var(--font-mono)" }}>
+              {[
+                cs.verbosity_distribution.short && `${cs.verbosity_distribution.short} short`,
+                cs.verbosity_distribution.medium && `${cs.verbosity_distribution.medium} med`,
+                cs.verbosity_distribution.long && `${cs.verbosity_distribution.long} long`,
+                cs.verbosity_distribution.very_long && `${cs.verbosity_distribution.very_long} v.long`,
+              ].filter(Boolean).join(" · ")}
+            </span>
+          )}
+          {cs.external_refs.length > 0 && (
+            <Chip>{cs.external_refs.length} external ref{cs.external_refs.length === 1 ? "" : "s"}</Chip>
+          )}
+          {cs.steering.interrupts > 0 && <Chip>{cs.steering.interrupts} interrupts</Chip>}
+          {cs.steering.sessions_with_mid_run_redirect > 0 && (
+            <Chip>{cs.steering.sessions_with_mid_run_redirect} mid-run redirect{cs.steering.sessions_with_mid_run_redirect === 1 ? "" : "s"}</Chip>
+          )}
+        </SignalsRow>
+      )}
+
+      {(signals.brainstorm_warmup_session_count > 0 || signals.todo_ops_total > 0 || signals.plan_mode_used) && (
+        <SignalsRow label="Discipline">
+          {signals.brainstorm_warmup_session_count > 0 && (
+            <Chip>brainstorm warmup ×{signals.brainstorm_warmup_session_count}</Chip>
+          )}
+          {signals.todo_ops_total > 0 && <Chip>{signals.todo_ops_total} TodoWrite ops</Chip>}
+          {signals.plan_mode_used && <Chip tone="user">Plan Mode used</Chip>}
+        </SignalsRow>
+      )}
+    </section>
+  );
+}
+
+function SignalsRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+      padding: "4px 0", fontSize: 12,
+    }}>
+      <span style={{
+        minWidth: 100, color: "var(--af-text-tertiary)", fontWeight: 500,
+        fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em",
+      }}>
+        {label}
+      </span>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: 1 }}>{children}</div>
+    </div>
+  );
+}
+
+function Chip({ children, tone, title }: { children: ReactNode; tone?: "user" | "stock"; title?: string }) {
+  const bg = tone === "user" ? "var(--af-accent-subtle)" : "var(--af-border-subtle)";
+  const fg = tone === "user" ? "var(--af-accent)" : "var(--af-text-secondary)";
+  return (
+    <span title={title} style={{
+      display: "inline-flex", alignItems: "center", padding: "2px 8px",
+      borderRadius: 999, fontSize: 11, fontFamily: "var(--font-mono)",
+      background: bg, color: fg, whiteSpace: "nowrap",
+      maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis",
+    }}>
+      {children}
+    </span>
   );
 }
 
