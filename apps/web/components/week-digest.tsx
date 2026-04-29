@@ -164,60 +164,26 @@ export function WeekDigest({
         </div>
       )}
 
+      {/* ── §1: This week at a glance — totals, time distribution, goal mix ── */}
       <WeekStatsStrip digest={digest} />
 
       <DaysActiveBars digest={digest} />
 
+      {digest.top_goal_categories.length > 0 && (
+        <Section title="Goal mix" anchor="goals">
+          <GoalBar goals={digest.top_goal_categories} total={digest.agent_min_total} />
+        </Section>
+      )}
+
+      {/* ── §2: Through the week — trajectory + standout days + project areas ── */}
+      <ThroughTheWeek digest={digest} />
+
+      {/* ── §3: Top 3 sessions — per-session deep-dive ── */}
       {digest.top_sessions && digest.top_sessions.length > 0 && (
         <TopSessionsSection sessions={digest.top_sessions} />
       )}
 
-      {digest.standout_days && digest.standout_days.length > 0 && (
-        <Section title="Standout days" anchor="standout">
-          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-            {digest.standout_days.map(s => (
-              <li key={s.date} style={{
-                padding: "12px 14px", borderRadius: 8, background: "var(--af-surface)",
-                border: "1px solid var(--af-border-subtle)",
-                display: "flex", gap: 12, alignItems: "flex-start",
-              }}>
-                <Link
-                  href={`/digest/${s.date}`}
-                  style={{
-                    fontSize: 11, fontWeight: 600,
-                    color: "var(--af-accent)", textDecoration: "none",
-                    flexShrink: 0, paddingTop: 2,
-                    fontFamily: "var(--font-mono)",
-                  }}
-                >
-                  {dayName(s.date)} {s.date.slice(5)}
-                </Link>
-                <span style={{ fontSize: 13, lineHeight: 1.55, color: "var(--af-text)" }}>{renderWithFlagChips(s.why)}</span>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {digest.trajectory && digest.trajectory.length > 0 && (
-        <Section title="Trajectory" anchor="trajectory">
-          <ol style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-            {digest.trajectory.map(t => (
-              <li key={t.date} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                <Link href={`/digest/${t.date}`} style={{
-                  fontSize: 10, fontWeight: 600, color: "var(--af-text-tertiary)",
-                  fontFamily: "var(--font-mono)", flexShrink: 0, width: 64, paddingTop: 3,
-                  textDecoration: "none",
-                }}>
-                  {dayName(t.date)} {t.date.slice(5)}
-                </Link>
-                <span style={{ fontSize: 13, lineHeight: 1.55, color: "var(--af-text-secondary)" }}>{renderWithFlagChips(t.line)}</span>
-              </li>
-            ))}
-          </ol>
-        </Section>
-      )}
-
+      {/* ── §4: Findings narrative — what worked / stalled / surprised / lean ── */}
       <FindingsSection
         title="What worked"
         anchor="what-worked"
@@ -236,21 +202,11 @@ export function WeekDigest({
 
       <SurprisesSection items={digest.what_surprised ?? []} />
 
-      <ProjectAreas digest={digest} />
-
       <WhereToLeanSection items={digest.where_to_lean ?? []} />
 
+      {/* ── Bottom: extras + power-user fold-downs ── */}
       <ShippedList shipped={digest.shipped} />
 
-      {digest.top_goal_categories.length > 0 && (
-        <Section title="Goal mix" anchor="goals">
-          <GoalBar goals={digest.top_goal_categories} total={digest.agent_min_total} />
-        </Section>
-      )}
-
-      {/* Weekly pattern rollups — folded down because per-session cards now
-          carry the qualitative narrative. Kept for power users who want the
-          week-level aggregates. */}
       {(digest.working_shapes || digest.interaction_grammar) && (
         <PatternRollupsFold
           shapes={digest.working_shapes}
@@ -587,41 +543,122 @@ function DayChips({ dates, tone }: { dates: string[]; tone: string }) {
   );
 }
 
-function ProjectAreas({ digest }: { digest: WeekDigestType }) {
-  const visible = digest.projects.filter(p => p.share_pct >= PROJECT_MIN_SHARE || p.shipped_count > 0);
-  if (visible.length === 0) return null;
+/** "Through the week" combined section — trajectory + standout days +
+ *  project areas under one heading. Trajectory + standout share the top row
+ *  in two columns (60/40); project areas spread below in a 2-col grid. */
+function ThroughTheWeek({ digest }: { digest: WeekDigestType }) {
+  const hasTrajectory = digest.trajectory && digest.trajectory.length > 0;
+  const hasStandout = digest.standout_days && digest.standout_days.length > 0;
+  const visibleProjects = digest.projects.filter(p => p.share_pct >= PROJECT_MIN_SHARE || p.shipped_count > 0);
+  const hasProjects = visibleProjects.length > 0;
+  if (!hasTrajectory && !hasStandout && !hasProjects) return null;
+
   return (
-    <Section title="Project areas" anchor="projects">
-      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-        {visible.map(p => (
-          <li key={p.name} style={{
-            padding: "12px 14px", borderRadius: 8,
-            background: "var(--af-surface)",
-            border: "1px solid var(--af-border-subtle)",
-          }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: p.description ? 8 : 0 }}>
-              <Link
-                href={`/projects/${encodeURIComponent(p.name)}`}
-                style={{ fontSize: 14, fontWeight: 600, color: "var(--af-text)", textDecoration: "none", flex: 1, minWidth: 0, letterSpacing: "-0.01em" }}
-              >
-                {p.display_name}
-              </Link>
-              <span style={{
-                fontFamily: "var(--font-mono)", fontSize: 10,
-                color: "var(--af-text-tertiary)",
-              }}>
-                {Math.round(p.agent_min)}m · {p.share_pct.toFixed(0)}% · {p.shipped_count} PR
-              </span>
+    <Section title="Through the week" anchor="through-the-week">
+      {(hasTrajectory || hasStandout) && (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: hasTrajectory && hasStandout ? "minmax(0, 1.4fr) minmax(0, 1fr)" : "1fr",
+          gap: 28, marginBottom: hasProjects ? 22 : 0,
+        }}>
+          {hasTrajectory && (
+            <div>
+              <SubSectionLabel>Trajectory</SubSectionLabel>
+              <ol style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                {digest.trajectory!.map(t => (
+                  <li key={t.date} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                    <Link href={`/digest/${t.date}`} style={{
+                      fontSize: 10, fontWeight: 600, color: "var(--af-text-tertiary)",
+                      fontFamily: "var(--font-mono)", flexShrink: 0, width: 64, paddingTop: 3,
+                      textDecoration: "none",
+                    }}>
+                      {dayName(t.date)} {t.date.slice(5)}
+                    </Link>
+                    <span style={{ fontSize: 12.5, lineHeight: 1.55, color: "var(--af-text-secondary)" }}>
+                      {renderWithFlagChips(t.line)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </div>
-            {p.description && (
-              <p style={{ fontSize: 12, lineHeight: 1.55, margin: 0, color: "var(--af-text-secondary)" }}>
-                {p.description}
-              </p>
-            )}
-          </li>
-        ))}
-      </ul>
+          )}
+          {hasStandout && (
+            <div>
+              <SubSectionLabel>Standout days</SubSectionLabel>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+                {digest.standout_days!.map(s => (
+                  <li key={s.date} style={{
+                    padding: "10px 12px", borderRadius: 8, background: "var(--af-surface)",
+                    border: "1px solid var(--af-border-subtle)",
+                  }}>
+                    <Link href={`/digest/${s.date}`} style={{
+                      fontSize: 11, fontWeight: 600,
+                      color: "var(--af-accent)", textDecoration: "none",
+                      fontFamily: "var(--font-mono)", marginRight: 8,
+                    }}>
+                      {dayName(s.date)} {s.date.slice(5)}
+                    </Link>
+                    <span style={{ fontSize: 12.5, lineHeight: 1.55, color: "var(--af-text)" }}>
+                      {renderWithFlagChips(s.why)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+      {hasProjects && (
+        <div>
+          <SubSectionLabel>Project areas</SubSectionLabel>
+          <ul style={{
+            listStyle: "none", padding: 0, margin: 0,
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: 10,
+          }}>
+            {visibleProjects.map(p => (
+              <li key={p.name} style={{
+                padding: "11px 13px", borderRadius: 8,
+                background: "var(--af-surface)",
+                border: "1px solid var(--af-border-subtle)",
+                display: "flex", flexDirection: "column",
+              }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: p.description ? 6 : 0 }}>
+                  <Link
+                    href={`/projects/${encodeURIComponent(p.name)}`}
+                    style={{ fontSize: 13, fontWeight: 600, color: "var(--af-text)", textDecoration: "none", flex: 1, minWidth: 0, letterSpacing: "-0.01em" }}
+                  >
+                    {p.display_name}
+                  </Link>
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 10,
+                    color: "var(--af-text-tertiary)",
+                  }}>
+                    {Math.round(p.agent_min)}m · {p.share_pct.toFixed(0)}% · {p.shipped_count} PR
+                  </span>
+                </div>
+                {p.description && (
+                  <p style={{ fontSize: 12, lineHeight: 1.5, margin: 0, color: "var(--af-text-secondary)" }}>
+                    {p.description}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </Section>
+  );
+}
+
+function SubSectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 10, color: "var(--af-text-tertiary)", textTransform: "uppercase",
+      letterSpacing: "0.08em", fontWeight: 700, marginBottom: 10,
+    }}>
+      {children}
+    </div>
   );
 }
 
