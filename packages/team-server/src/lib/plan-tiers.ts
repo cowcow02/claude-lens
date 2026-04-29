@@ -1,13 +1,15 @@
-// Anthropic does not report dollar caps in the usage API, so we map the
-// admin-configured plan tier to a fixed catalog of weekly USD ceilings.
+// Anthropic bills these subscriptions monthly. The published prices are the
+// only dollar figures we can quote with confidence — Anthropic doesn't expose
+// the underlying weekly compute budget that drives `seven_day.utilization`,
+// so we surface % for capacity decisions and $/mo only for billing-grounded
+// arithmetic (savings on downgrade, total team spend).
 // Update when Anthropic changes pricing — `members.plan_tier` CHECK
-// constraint in 0002_plan_utilization.sql must stay in sync with the keys
-// here.
+// constraint in 0002_plan_utilization.sql must stay in sync with the keys here.
 export const PLAN_TIERS = {
-  pro: { label: "Claude Pro", weeklyLimitUsd: 20, rank: 0 },
-  "pro-max": { label: "Claude Pro Max", weeklyLimitUsd: 100, rank: 1 },
-  "pro-max-20x": { label: "Claude Pro Max 20x", weeklyLimitUsd: 200, rank: 2 },
-  custom: { label: "Custom", weeklyLimitUsd: 0, rank: -1 },
+  pro: { label: "Claude Pro", monthlyPriceUsd: 20, rank: 0 },
+  "pro-max": { label: "Claude Pro Max", monthlyPriceUsd: 100, rank: 1 },
+  "pro-max-20x": { label: "Claude Pro Max 20x", monthlyPriceUsd: 200, rank: 2 },
+  custom: { label: "Custom", monthlyPriceUsd: 0, rank: -1 },
 } as const;
 
 export type PlanTierKey = keyof typeof PLAN_TIERS;
@@ -15,7 +17,7 @@ export type PlanTierKey = keyof typeof PLAN_TIERS;
 export type PlanTierEntry = {
   key: PlanTierKey;
   label: string;
-  weeklyLimitUsd: number;
+  monthlyPriceUsd: number;
   rank: number;
 };
 

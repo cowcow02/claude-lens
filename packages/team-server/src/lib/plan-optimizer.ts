@@ -60,8 +60,6 @@ export type Recommendation =
     }
   | { action: "stay"; confidence: Confidence; rationale: string };
 
-const WEEKS_PER_MONTH = 4.33;
-
 export function recommend(
   m: MemberStats,
   tier: PlanTierEntry,
@@ -131,8 +129,10 @@ export function recommend(
         action: "downgrade",
         confidence: conf,
         targetTier: target.key,
-        estimatedSavingsUsd:
-          (tier.weeklyLimitUsd - target.weeklyLimitUsd) * WEEKS_PER_MONTH,
+        // Anthropic bills these tiers monthly, so the saving is just the
+        // monthly subscription delta — e.g., $200/mo → $100/mo saves $100/mo,
+        // not $100 × 4.33 weeks.
+        estimatedSavingsUsd: tier.monthlyPriceUsd - target.monthlyPriceUsd,
         rationale: `Averaging ${m.avgSevenDayAvg.toFixed(0)}% with peak ${m.worstSevenDayPeak.toFixed(0)}% on ${tier.label}. Downgrading to ${target.label} retains ${headroomPct}% headroom.`,
       };
     }

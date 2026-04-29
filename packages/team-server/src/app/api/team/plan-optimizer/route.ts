@@ -11,7 +11,7 @@ type ResponseRow = {
   membershipId: string;
   memberName: string;
   memberEmail: string | null;
-  currentPlan: { key: string; label: string; weeklyLimitUsd: number };
+  currentPlan: { key: string; label: string; monthlyPriceUsd: number };
   usage: {
     avgSevenDayPct: number;
     worstSevenDayPeak: number;
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
       currentPlan: {
         key: tier.key,
         label: tier.label,
-        weeklyLimitUsd: tier.weeklyLimitUsd,
+        monthlyPriceUsd: tier.monthlyPriceUsd,
       },
       usage: {
         avgSevenDayPct: input.stats.avgSevenDayAvg,

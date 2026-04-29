@@ -79,8 +79,8 @@ export function MemberPlanBlock({ summary }: { summary: MemberPlanSummary }) {
         <Stat
           label="Plan"
           value={
-            tier.weeklyLimitUsd > 0
-              ? `${tier.label} · $${tier.weeklyLimitUsd}/wk`
+            tier.monthlyPriceUsd > 0
+              ? `${tier.label} · $${tier.monthlyPriceUsd}/mo`
               : tier.label
           }
           hint="Anthropic subscription tier set for this seat"

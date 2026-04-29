@@ -86,9 +86,9 @@ export const readCachedPlanTier = cache((): CachedPlanTier | null => {
   }
 });
 
-export const PLAN_TIER_LABELS: Record<CachedPlanTier["planTier"], { label: string; weeklyLimitUsd: number }> = {
-  pro: { label: "Claude Pro", weeklyLimitUsd: 20 },
-  "pro-max": { label: "Claude Pro Max", weeklyLimitUsd: 100 },
-  "pro-max-20x": { label: "Claude Pro Max 20x", weeklyLimitUsd: 200 },
-  custom: { label: "Custom plan", weeklyLimitUsd: 0 },
+export const PLAN_TIER_LABELS: Record<CachedPlanTier["planTier"], { label: string; monthlyPriceUsd: number }> = {
+  pro: { label: "Claude Pro", monthlyPriceUsd: 20 },
+  "pro-max": { label: "Claude Pro Max", monthlyPriceUsd: 100 },
+  "pro-max-20x": { label: "Claude Pro Max 20x", monthlyPriceUsd: 200 },
+  custom: { label: "Custom plan", monthlyPriceUsd: 0 },
 };

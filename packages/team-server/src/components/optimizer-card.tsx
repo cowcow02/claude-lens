@@ -5,7 +5,7 @@ type Props = {
   membershipId: string;
   memberName: string;
   memberEmail: string | null;
-  currentPlan: { key: string; label: string; weeklyLimitUsd: number };
+  currentPlan: { key: string; label: string; monthlyPriceUsd: number };
   usage: {
     avgSevenDayPct: number;
     worstSevenDayPeak: number;
@@ -53,9 +53,9 @@ export function OptimizerCard(props: Props) {
         </div>
         <div className="optimizer-card-tier mono">
           {currentPlan.label}
-          {currentPlan.weeklyLimitUsd > 0 && (
+          {currentPlan.monthlyPriceUsd > 0 && (
             <span style={{ color: "var(--mute)", marginLeft: 6 }}>
-              ${currentPlan.weeklyLimitUsd}/wk
+              ${currentPlan.monthlyPriceUsd}/mo
             </span>
           )}
         </div>
@@ -89,14 +89,14 @@ export function OptimizerCard(props: Props) {
           Saves ~${Math.round(r.estimatedSavingsUsd)}/month
           {targetTier && (
             <span style={{ color: "var(--mute)", marginLeft: 8 }}>
-              → {targetTier.label} (${targetTier.weeklyLimitUsd}/wk)
+              → {targetTier.label} (${targetTier.monthlyPriceUsd}/mo)
             </span>
           )}
         </div>
       )}
       {(r.action === "upgrade" || r.action === "upgrade_urgent") && targetTier && (
         <div className="optimizer-card-savings mono" style={{ color: "var(--ink)" }}>
-          → {targetTier.label} (${targetTier.weeklyLimitUsd}/wk)
+          → {targetTier.label} (${targetTier.monthlyPriceUsd}/mo)
         </div>
       )}
     </div>

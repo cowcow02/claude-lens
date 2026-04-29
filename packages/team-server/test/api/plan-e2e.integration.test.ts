@@ -153,7 +153,7 @@ describe("Doc 2 e2e: 3-member team", () => {
       adminCookie,
     );
     const body = await (await warningsGET(req)).json();
-    expect(body.burndown.capUsd).toBe(300); // 3 × pro-max ($100/wk)
+    expect(body.burndown.capUsd).toBe(300); // 3 × pro-max ($100/mo)
     // Total spend = (70 + 65 + 60)% × 100 = $195. Projection ≈ 195 / 0.6 = $325,
     // give-or-take a few dollars from the captured_at offset baked into the
     // setup. Tolerance is 10.

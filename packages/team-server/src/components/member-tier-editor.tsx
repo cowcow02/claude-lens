@@ -86,8 +86,8 @@ function TierRow({ member }: { member: MemberRow }) {
           {ALL_KEYS.map((k) => (
             <option key={k} value={k}>
               {PLAN_TIERS[k].label}
-              {PLAN_TIERS[k].weeklyLimitUsd > 0
-                ? ` ($${PLAN_TIERS[k].weeklyLimitUsd}/wk)`
+              {PLAN_TIERS[k].monthlyPriceUsd > 0
+                ? ` ($${PLAN_TIERS[k].monthlyPriceUsd}/mo)`
                 : ""}
             </option>
           ))}

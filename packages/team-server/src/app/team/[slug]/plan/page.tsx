@@ -157,7 +157,7 @@ export default async function PlanPage({
                 currentPlan={{
                   key: tier.key,
                   label: tier.label,
-                  weeklyLimitUsd: tier.weeklyLimitUsd,
+                  monthlyPriceUsd: tier.monthlyPriceUsd,
                 }}
                 usage={{
                   avgSevenDayPct: input.stats.avgSevenDayAvg,

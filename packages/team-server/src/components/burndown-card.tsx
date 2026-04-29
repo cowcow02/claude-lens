@@ -51,28 +51,38 @@ export function BurndownCard({ burndown: b }: Props) {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
               gap: 16,
               marginBottom: 14,
             }}
           >
-            <Stat label="Current spend" value={`$${b.currentSpendUsd.toFixed(0)}`} />
             <Stat
-              label="Projected end"
+              label="Run-rate"
+              value={`$${b.currentSpendUsd.toFixed(0)}/mo`}
+              hint="Current usage × plan price — what this team is on track to consume monthly"
+            />
+            <Stat
+              label="Projected end-of-window"
               value={
                 b.projectedEndOfWindowUsd != null
-                  ? `$${b.projectedEndOfWindowUsd.toFixed(0)}`
+                  ? `$${b.projectedEndOfWindowUsd.toFixed(0)}/mo`
                   : "—"
               }
+              hint="Where the run-rate lands by the end of the current 7-day window"
             />
-            <Stat label="Cap" value={`$${b.capUsd.toFixed(0)}`} />
             <Stat
-              label="Days remaining"
+              label="Plan total"
+              value={`$${b.capUsd.toFixed(0)}/mo`}
+              hint="Sum of every member's monthly subscription cost"
+            />
+            <Stat
+              label="Window resets in"
               value={
                 b.approxDaysRemaining != null
-                  ? b.approxDaysRemaining.toFixed(1)
+                  ? `${b.approxDaysRemaining.toFixed(1)} days`
                   : "—"
               }
+              hint="Average across members of their rolling 7-day windows"
             />
           </div>
 
@@ -82,7 +92,7 @@ export function BurndownCard({ burndown: b }: Props) {
                 <tr>
                   <th>Top contributors</th>
                   <th>Plan</th>
-                  <th>This window</th>
+                  <th>Run-rate</th>
                 </tr>
               </thead>
               <tbody>
@@ -92,7 +102,7 @@ export function BurndownCard({ burndown: b }: Props) {
                     <td className="mono" style={{ fontSize: 12, color: "var(--mute)" }}>
                       {c.tierLabel}
                     </td>
-                    <td className="mono">${c.contributionUsd.toFixed(0)}</td>
+                    <td className="mono">${c.contributionUsd.toFixed(0)}/mo</td>
                   </tr>
                 ))}
               </tbody>
@@ -103,8 +113,9 @@ export function BurndownCard({ burndown: b }: Props) {
             className="mono"
             style={{ fontSize: 11, color: "var(--mute)", marginTop: 14 }}
           >
-            Projection averages each member&rsquo;s rolling 7-day window —
-            members reset at different times so this is approximate.
+            Run-rate is each member&rsquo;s 7-day utilization × their monthly plan
+            price. Projections average across members&rsquo; rolling windows;
+            actual end-of-window may differ.
           </div>
         </>
       )}
@@ -112,7 +123,7 @@ export function BurndownCard({ burndown: b }: Props) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div>
       <div
@@ -129,6 +140,11 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="mono" style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
         {value}
       </div>
+      {hint && (
+        <div style={{ fontSize: 11, marginTop: 4, color: "var(--mute)", lineHeight: 1.4 }}>
+          {hint}
+        </div>
+      )}
     </div>
   );
 }

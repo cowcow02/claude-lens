@@ -126,8 +126,8 @@ describe("recommend — downgrade", () => {
     expect(r.action).toBe("downgrade");
     if (r.action === "downgrade") {
       expect(r.targetTier).toBe("pro-max");
-      // (200 - 100) * 4.33 = 433
-      expect(r.estimatedSavingsUsd).toBeCloseTo(433, 0);
+      // Savings is the monthly subscription delta: $200/mo - $100/mo = $100/mo.
+      expect(r.estimatedSavingsUsd).toBe(100);
     }
   });
 

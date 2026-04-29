@@ -15,10 +15,10 @@ describe("plan-tiers catalog", () => {
   });
 
   it("dollar caps follow the public Anthropic price ladder", () => {
-    expect(PLAN_TIERS.pro.weeklyLimitUsd).toBe(20);
-    expect(PLAN_TIERS["pro-max"].weeklyLimitUsd).toBe(100);
-    expect(PLAN_TIERS["pro-max-20x"].weeklyLimitUsd).toBe(200);
-    expect(PLAN_TIERS.custom.weeklyLimitUsd).toBe(0);
+    expect(PLAN_TIERS.pro.monthlyPriceUsd).toBe(20);
+    expect(PLAN_TIERS["pro-max"].monthlyPriceUsd).toBe(100);
+    expect(PLAN_TIERS["pro-max-20x"].monthlyPriceUsd).toBe(200);
+    expect(PLAN_TIERS.custom.monthlyPriceUsd).toBe(0);
   });
 
   it("PLAN_TIERS_IN_ORDER excludes custom and is rank-sorted", () => {

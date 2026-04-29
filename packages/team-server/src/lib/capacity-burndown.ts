@@ -49,7 +49,7 @@ export function computeBurndown(
 ): BurndownResult {
   const priced = members.filter((m) => {
     const t = tierEntry(m.tierKey);
-    return t.weeklyLimitUsd > 0; // excludes custom tier
+    return t.monthlyPriceUsd > 0; // excludes custom tier
   });
 
   if (priced.length === 0) {
@@ -64,10 +64,10 @@ export function computeBurndown(
 
   for (const m of priced) {
     const t = tierEntry(m.tierKey);
-    capUsd += t.weeklyLimitUsd;
+    capUsd += t.monthlyPriceUsd;
 
     const util = m.sevenDayUtilization;
-    const contributionUsd = util != null ? (util / 100) * t.weeklyLimitUsd : 0;
+    const contributionUsd = util != null ? (util / 100) * t.monthlyPriceUsd : 0;
     currentSpendUsd += contributionUsd;
     contributions.push({
       memberName: m.memberName,

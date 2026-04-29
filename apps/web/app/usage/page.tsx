@@ -74,9 +74,9 @@ export default function UsagePage() {
             <span style={{ color: "var(--af-text)", fontWeight: 600 }}>
               {PLAN_TIER_LABELS[tier.planTier].label}
             </span>
-            {PLAN_TIER_LABELS[tier.planTier].weeklyLimitUsd > 0 && (
+            {PLAN_TIER_LABELS[tier.planTier].monthlyPriceUsd > 0 && (
               <span style={{ color: "var(--af-text-tertiary)" }}>
-                · ${PLAN_TIER_LABELS[tier.planTier].weeklyLimitUsd}/wk
+                · ${PLAN_TIER_LABELS[tier.planTier].monthlyPriceUsd}/mo
               </span>
             )}
           </span>
