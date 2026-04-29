@@ -21,11 +21,11 @@ import { CalibrationComparisonChart } from "@/components/calibration-comparison-
 
 export const dynamic = "force-dynamic";
 
-export default function UsagePage() {
+export default async function UsagePage() {
   const snapshots = readUsageSnapshots();
   const latest = latestUsageSnapshot();
   const tier = readCachedPlanTier();
-  const calibration = readCalibrationDump();
+  const calibration = await readCalibrationDump();
   const predicted = predictedSeriesFor(calibration);
 
   return (

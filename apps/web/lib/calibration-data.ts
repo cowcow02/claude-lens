@@ -3,11 +3,13 @@ import { cache } from "react";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { loadCalibrationCurve } from "@claude-lens/parser/fs";
+import type { PlanTier } from "@claude-lens/parser";
 
-// Output of /tmp/calibrate2.py — pairs the daemon's real utilization with a
-// JSONL-derived prediction at every snapshot's captured_at. Used as a
-// proof-of-concept overlay on /usage to validate the calibration math
-// before wiring it into the team server.
+// One point on the calibration overlay — pairs the daemon's measured
+// utilization (when a snapshot landed in the slot) with the JSONL-derived
+// prediction. Used by the /usage burndown overlay and by the Calibration
+// Check chart.
 export type CalibrationPoint = {
   ts: string;
   real_5h: number | null;
@@ -17,9 +19,14 @@ export type CalibrationPoint = {
 };
 
 export type CalibrationDump = {
-  coefs_5h: number[];
-  coefs_7d: number[];
   curve: CalibrationPoint[];
+  // Older Python dumps had per-feature coefficients; the $-rate predictor
+  // doesn't, so these are optional. Kept around so existing chart code
+  // that may inspect them doesn't crash on undefined.
+  coefs_5h?: number[];
+  coefs_7d?: number[];
+  rate_per_pct?: number;
+  tier?: string;
 };
 
 export type PredictedSeriesByKey = {
@@ -42,17 +49,39 @@ export function predictedSeriesFor(dump: CalibrationDump | null): PredictedSerie
   return { five_hour, seven_day, seven_day_sonnet: [] };
 }
 
-const CALIBRATION_PATH =
-  process.env.CCLENS_CALIBRATION_DEBUG ||
-  join(homedir(), ".cclens", "calibration-debug.json");
+// Default tier when we can't infer the user's subscription from anywhere.
+// /api/oauth/profile auto-detects this on each daemon push but for cold
+// start we fall back to the heaviest tier so cold-start back-fill predicts
+// the longest possible windows. The profile cache lives next to the JSON
+// dump and is read below if available.
+const PROFILE_CACHE = join(homedir(), ".cclens", "profile.json");
+const DEFAULT_TIER: PlanTier = "pro-max-20x";
 
-export const readCalibrationDump = cache((): CalibrationDump | null => {
-  if (!existsSync(CALIBRATION_PATH)) return null;
+function readTier(): PlanTier {
+  if (!existsSync(PROFILE_CACHE)) return DEFAULT_TIER;
   try {
-    const raw = JSON.parse(readFileSync(CALIBRATION_PATH, "utf8"));
-    if (!Array.isArray(raw?.curve)) return null;
-    return raw as CalibrationDump;
+    const raw = JSON.parse(readFileSync(PROFILE_CACHE, "utf8"));
+    const t = raw?.planTier as PlanTier | undefined;
+    if (t === "pro" || t === "pro-max" || t === "pro-max-20x" || t === "custom") return t;
   } catch {
-    return null;
+    /* ignore — fall back to default */
   }
-});
+  return DEFAULT_TIER;
+}
+
+// Computed live from JSONL transcripts + ~/.cclens/usage.jsonl, replacing
+// the Python sidecar that previously wrote ~/.cclens/calibration-debug.json.
+// The walk is heavy on first call but cached at multiple levels (parser's
+// mtime cache + React's per-request `cache()`).
+export const readCalibrationDump = cache(
+  async (): Promise<CalibrationDump | null> => {
+    const tier = readTier();
+    const result = await loadCalibrationCurve(tier);
+    if (!result) return null;
+    return {
+      curve: result.curve,
+      rate_per_pct: result.rate_per_pct,
+      tier: result.tier,
+    };
+  },
+);
