@@ -55,6 +55,11 @@ async function main() {
       await team(args.slice(1));
       break;
     }
+    case "runs": {
+      const { runs } = await import("./commands/runs.js");
+      await runs(args.slice(1));
+      break;
+    }
     case "version":
     case "--version":
     case "-v":
@@ -78,6 +83,7 @@ Terminal:
   digest day   [--date D|--yesterday|--today] [--json]    Day digest
   digest week  [--week D|--last-week|--this-week] [--json]   Week digest
   digest month [--month YYYY-MM|--last-month|--this-month] [--json]  Month digest
+  runs [--watch] [--json] [--since 24h]      Live LLM call activity + token spend
 
 Advanced:
   web [page] [--no-open]            Open dashboard in browser without auto-starting daemon

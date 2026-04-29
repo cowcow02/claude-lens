@@ -9,6 +9,7 @@ import { generateWeekDigest, buildDeterministicWeekDigest, weekDates } from "./d
 import { pickTopSessions, buildSessionSlice, generateTopSession, type RawSessionEvent } from "./top-sessions.js";
 import { getSession } from "@claude-lens/parser/fs";
 import { appendSpend } from "./budget.js";
+import { computeCostUsd } from "./enrich.js";
 import { writeInteractiveLock, removeInteractiveLock } from "./pipeline-lock.js";
 import type { CallLLM } from "./enrich.js";
 import type { AiFeaturesSettings } from "./settings.js";
@@ -232,7 +233,7 @@ export async function* runWeekDigestPipeline(
             model: opts.settings.model,
             input_tokens: r.usage.input_tokens,
             output_tokens: r.usage.output_tokens,
-            cost_usd: 0,
+            cost_usd: computeCostUsd(opts.settings.model, r.usage.input_tokens, r.usage.output_tokens),
             kind: "top_session", ref: `${monday}/${r.entry.session_id}`,
           });
         }
