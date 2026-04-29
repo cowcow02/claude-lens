@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { readSettings, readWeekDigest } from "@claude-lens/entries/node";
-import { lastCompletedWeekMonday, listEntriesForDay } from "@/lib/entries";
+import { lastCompletedWeekMonday, currentWeekMonday, listEntriesForDay } from "@/lib/entries";
 import { shouldAutoFireWeek } from "@/lib/auto-week-fire";
 import { WeekDigestView } from "@/components/week-digest-view";
-import { InsightsHistory } from "@/components/insights-history";
+import { InsightsTopBar } from "@/components/insights-top-bar";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,6 +32,14 @@ function hasAnyEntries(monday: string): boolean {
   return false;
 }
 
+function shortDateRange(monday: string): string {
+  const start = new Date(`${monday}T12:00:00`);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${fmt(start)} — ${fmt(end)}`;
+}
+
 export default async function InsightsPage() {
   const settings = readSettings();
   const aiOn = settings.ai_features.enabled;
@@ -42,23 +50,27 @@ export default async function InsightsPage() {
 
   const autoFire = aiOn && !cached && shouldAutoFireWeek(lastWeek);
 
+  // Prev/next nav targets — prev is the week before lastWeek; next is the
+  // current in-progress week (if any data) since we're already viewing the
+  // most recent completed.
+  const prevMonday = priorMonday(lastWeek);
+  const currentMonday = currentWeekMonday();
+  const nextMonday = currentMonday > lastWeek ? currentMonday : null;
+  const nextHasData = nextMonday ? hasAnyEntries(nextMonday) : false;
+
   return (
     <div style={{ paddingBottom: 64 }}>
-      <header style={{
-        maxWidth: 980, margin: "0 auto", padding: "32px 40px 0",
-      }}>
-        <h1 style={{
-          fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0,
-        }}>Insights</h1>
-        <p style={{
-          fontSize: 13, color: "var(--af-text-secondary)",
-          margin: "6px 0 0", lineHeight: 1.55, maxWidth: 640,
-        }}>
-          Weekly and monthly digests built from per-day perception entries. Past periods are cached locally and immutable; the current week and month live in a 10-min in-memory window.
-        </p>
-      </header>
+      <InsightsTopBar
+        scope="week"
+        currentLabel={`Week of ${lastWeek}`}
+        rangeLabel={shortDateRange(lastWeek)}
+        prev={{ key: `week-${prevMonday}`, label: shortDateRange(prevMonday).split(" — ")[0]!, cached: !!prior }}
+        next={nextMonday && nextHasData
+          ? { key: `week-${nextMonday}`, label: shortDateRange(nextMonday).split(" — ")[0]!, cached: false }
+          : null}
+      />
 
-      <section style={{ marginTop: 24, paddingBottom: 28, borderBottom: "1px solid var(--af-border-subtle)" }}>
+      <section style={{ paddingTop: 8 }}>
         {hasData ? (
           <WeekDigestView
             initial={cached}
@@ -71,8 +83,6 @@ export default async function InsightsPage() {
           <EmptyState aiOn={aiOn} />
         )}
       </section>
-
-      <InsightsHistory />
     </div>
   );
 }

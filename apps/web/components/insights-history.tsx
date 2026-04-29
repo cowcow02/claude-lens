@@ -32,7 +32,7 @@ type MonthRow = {
 
 type Tab = "weeks" | "months";
 
-export function InsightsHistory() {
+export function InsightsHistory({ inDrawer = false }: { inDrawer?: boolean } = {}) {
   const [tab, setTab] = useState<Tab>("weeks");
   const [weeks, setWeeks] = useState<WeekRow[] | null>(null);
   const [months, setMonths] = useState<MonthRow[] | null>(null);
@@ -48,14 +48,20 @@ export function InsightsHistory() {
       .catch(() => setMonths([]));
   }, []);
 
+  const wrapperStyle: React.CSSProperties = inDrawer
+    ? { padding: "0 18px" }
+    : { maxWidth: 980, margin: "0 auto", padding: "28px 40px 0" };
+
   return (
-    <div style={{ maxWidth: 980, margin: "0 auto", padding: "28px 40px 0" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-        <h2 style={{
-          fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
-          textTransform: "uppercase", color: "var(--af-text-tertiary)",
-          margin: 0, marginRight: 4,
-        }}>History</h2>
+    <div style={wrapperStyle}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: inDrawer ? 14 : 18 }}>
+        {!inDrawer && (
+          <h2 style={{
+            fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
+            textTransform: "uppercase", color: "var(--af-text-tertiary)",
+            margin: 0, marginRight: 4,
+          }}>History</h2>
+        )}
         <div style={tabGroup}>
           {(["weeks", "months"] as const).map(t => (
             <button key={t} type="button" onClick={() => setTab(t)} style={{
