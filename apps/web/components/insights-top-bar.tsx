@@ -39,7 +39,7 @@ export function InsightsTopBar({
     <>
       <header style={{
         position: "sticky", top: 0, zIndex: 50,
-        background: "color-mix(in srgb, var(--af-bg) 88%, transparent)",
+        background: "color-mix(in srgb, var(--background) 90%, transparent)",
         backdropFilter: "blur(10px)",
         WebkitBackdropFilter: "blur(10px)",
         borderBottom: "1px solid var(--af-border-subtle)",
@@ -141,9 +141,9 @@ function HistoryDrawer({ onClose }: { onClose: () => void }) {
       <aside style={{
         position: "relative",
         width: "min(440px, 92vw)", height: "100vh",
-        background: "var(--af-bg)",
+        background: "var(--background)",
         borderLeft: "1px solid var(--af-border-subtle)",
-        boxShadow: "-8px 0 30px rgba(0,0,0,0.18)",
+        boxShadow: "-12px 0 40px rgba(0,0,0,0.32)",
         display: "flex", flexDirection: "column",
         animation: "slide-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1)",
       }}>

@@ -710,10 +710,22 @@ export type WeekTopSession = {
   };
 
   // ── LLM-produced narrative ──
-  /** 1-2 sentences tying the pins into a story. Null if synth declined. */
+  /** "What happened" — 1-2 sentences tying the pins into a story.
+   *  Null if synth declined. (Field name kept for backward compat with
+   *  cached digests; rendered as the "What happened" section.) */
   session_summary: string | null;
   /** 1 sentence on steering style — verbosity, framing, mid-flight redirects. */
   steering_summary: string | null;
+  /** "Why this session" — 1 sentence on what made this session worth a deep
+   *  look in the week's context (PR count, autonomous spans, harness chain,
+   *  etc.). Optional for backward compat with cached digests. */
+  why_picked?: string | null;
+  /** Strongest positive signal in this session — 1 sentence. Null when the
+   *  session was friction-dominated. Optional for backward compat. */
+  what_worked?: string | null;
+  /** Most load-bearing friction in this session — 1 sentence. Null when the
+   *  session was smooth. Optional for backward compat. */
+  what_hit_friction?: string | null;
   pins: SessionPin[];
 };
 

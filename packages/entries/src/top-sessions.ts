@@ -533,14 +533,17 @@ const PinResponseSchema = z.object({
 });
 
 export const TopSessionResponseSchema = z.object({
+  why_picked: z.string().min(1).max(280),
   session_summary: z.string().min(1).max(400),
+  what_worked: z.string().max(280).nullable(),
+  what_hit_friction: z.string().max(280).nullable(),
   steering_summary: z.string().min(1).max(280),
   pins: z.array(PinResponseSchema).min(2).max(6),
 }).passthrough();
 
 export type TopSessionResponse = z.infer<typeof TopSessionResponseSchema>;
 
-const SYSTEM_PROMPT = `You are writing the editorial perception layer for ONE session in a developer's weekly report. The reader sees a timeline minimap of this session with annotated pin markers; your job is to write the labels and a short story.
+const SYSTEM_PROMPT = `You are writing the editorial perception layer for ONE session in a developer's weekly report. The reader sees a timeline minimap of this session with annotated pin markers; your job is to write a structured deep-dive that surfaces what made this session worth examining.
 
 INPUT shape:
 - session metadata (project, duration, turns, outcome, shipped_prs, working_shape, day_signature)
@@ -556,15 +559,23 @@ INPUT shape:
 OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence.
 
 {
-  "session_summary": "1-2 sentences, second-person, ≤300 chars. Tie the pins into a story. Anchor in the working_shape AND one concrete observation from the turns. Example: 'You drove this 78-min session through a 1.5K-char handoff prompt, four parallel research subagents, and a 25-min autonomous build → ship cycle.'",
+  "why_picked": "1 sentence, ≤200 chars. WHY THIS SESSION matters in the week's context. Anchor in the most distinctive signals — PR count vs week total, longest autonomous span, unusual subagent dispatch count, dominant working_shape on a heavy day. Example: 'Picked because this 471-min session shipped 4 of the week's 22 PRs through a chunk-implementation pattern with 21 subagent dispatches.'",
 
-  "steering_summary": "1 sentence, ≤200 chars. Characterize HOW the user drove the agent in this session. Reference: verbosity (long handoffs vs terse imperatives), framing (skill loads, slash commands), corrections (interrupts, mid-flight redirects), or trust (long-autonomous spans). Example: 'Heavy upfront briefing (3 messages ≥1K chars) then short steering — no interrupts, full trust through the 25-min build run.'",
+  "session_summary": "1-2 sentences, second-person, ≤300 chars. WHAT HAPPENED — narrative arc tying the pins into a story. Anchor in the working_shape AND concrete turn observations. Example: 'You drove this 78-min session through a 1.5K-char handoff prompt, four parallel research subagents, and a 25-min autonomous build → ship cycle.'",
+
+  "what_worked": "1 sentence, ≤200 chars. STRONGEST POSITIVE SIGNAL in this session. Tie to a specific moment — a successful subagent fan-out, a clean autonomous run that shipped, a quick error diagnosis, full trust extended. Example: 'The 25-min long-autonomous run shipped 7 chunks without interrupts — the upfront brainstorming load gave the agent enough scope to drive end-to-end.' Set null ONLY when the session was truly friction-dominated with no clear win.",
+
+  "what_hit_friction": "1 sentence, ≤200 chars. MOST LOAD-BEARING FRICTION in this session. Tie to a specific moment — a long error paste, an interrupt cluster, a back-and-forth around a misunderstanding, a stalled subagent. Example: 'A 51K-char typecheck dump at minute 25 ate three turns of correction before the agent narrowed it down to one line.' Set null ONLY when the session was genuinely smooth (no interrupts, no error pastes, no mid-flight redirects).",
+
+  "steering_summary": "1 sentence, ≤200 chars. HOW the user drove the agent. Reference: verbosity (long handoffs vs terse imperatives), framing (skill loads, slash commands), corrections (interrupts, mid-flight redirects), or trust (long-autonomous spans). Example: 'Heavy upfront briefing (3 messages ≥1K chars) then short steering — no interrupts, full trust through the 25-min build run.'",
 
   "pins": [
     { "start_min": <number>, "end_min": <number?>, "kind": "<one of: user-steering|subagent-burst|long-autonomous|plan-mode|pr-ship|harness-chain|interrupt|brainstorm-loop|agent-loop>", "label": "≤120 chars, second-person, editorial — explain WHAT happened and WHAT the user was doing, not just the rule label" }
     // 3-5 items picked from candidate_pins (or composed from turns when a candidate is incomplete)
   ]
 }
+
+CRITICAL: each of why_picked / session_summary / what_worked / what_hit_friction is ONE sentence with a SPECIFIC observation — not generic ("this was a productive session"). They earn their space by adding something the reader couldn't infer from the timeline alone.
 
 PIN-LABEL RULES (load-bearing):
 
@@ -667,6 +678,9 @@ function sliceToBaseTopSession(slice: SessionSlice): WeekTopSession {
     },
     session_summary: null,
     steering_summary: null,
+    why_picked: null,
+    what_worked: null,
+    what_hit_friction: null,
     pins: [],
   };
 }
@@ -702,6 +716,9 @@ export async function generateTopSession(
       ...base,
       session_summary: value.session_summary,
       steering_summary: value.steering_summary,
+      why_picked: value.why_picked,
+      what_worked: value.what_worked,
+      what_hit_friction: value.what_hit_friction,
       pins,
     };
   }

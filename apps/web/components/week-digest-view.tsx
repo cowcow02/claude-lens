@@ -116,16 +116,85 @@ export function WeekDigestView({
     return <WeekDigestRender digest={digest} aiEnabled={aiEnabled} actions={actions} priorDigest={prior ?? null} />;
   }
   return (
-    <>
-      {actions && (
-        <div style={{ display: "flex", gap: 10, padding: "14px 40px 0", alignItems: "center", flexWrap: "wrap" }}>
-          {actions}
-        </div>
-      )}
-      <div style={{ padding: 28, textAlign: "center", color: "var(--af-text-secondary)", fontSize: 13 }}>
-        {isStreaming ? "Loading week digest…" : "No digest yet — click Generate above."}
+    <EmptyWeekState
+      monday={monday}
+      isStreaming={isStreaming}
+      aiEnabled={aiEnabled}
+      progress={progress}
+      onGenerate={() => generate(false)}
+    />
+  );
+}
+
+function EmptyWeekState({ monday, isStreaming, aiEnabled, progress, onGenerate }: {
+  monday: string;
+  isStreaming: boolean;
+  aiEnabled: boolean;
+  progress: string | null;
+  onGenerate: () => void;
+}) {
+  const start = new Date(`${monday}T12:00:00`);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const range = `${fmt(start)} — ${fmt(end)}`;
+  return (
+    <div style={{ maxWidth: 980, margin: "0 auto", padding: "60px 40px" }}>
+      <div style={{
+        margin: "0 auto", maxWidth: 480,
+        padding: "32px 28px",
+        borderRadius: 14,
+        background: "var(--af-surface)",
+        border: "1px dashed var(--af-border-subtle)",
+        textAlign: "center",
+      }}>
+        <div style={{
+          width: 44, height: 44, borderRadius: 12, margin: "0 auto 16px",
+          background: "var(--af-accent-subtle)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: "var(--af-accent)", fontSize: 20,
+        }}>✦</div>
+        <h2 style={{
+          fontSize: 16, fontWeight: 600, margin: "0 0 6px",
+          color: "var(--af-text)", letterSpacing: "-0.01em",
+        }}>
+          {isStreaming ? "Generating digest…" : "No digest yet for this week"}
+        </h2>
+        <p style={{
+          fontSize: 12.5, lineHeight: 1.55, margin: "0 0 18px",
+          color: "var(--af-text-secondary)",
+        }}>
+          {isStreaming
+            ? `Synthesizing ${range} from this week's day digests. This usually takes 5–10 minutes.`
+            : aiEnabled
+              ? `Once generated, this view shows top sessions, trajectory, findings, and project areas for ${range}.`
+              : `Enable AI features in Settings to synthesize a weekly narrative for ${range}. Deterministic stats are still available below in the live digest as soon as data lands.`}
+        </p>
+        {aiEnabled && (
+          <button
+            onClick={onGenerate}
+            disabled={isStreaming}
+            style={{
+              padding: "9px 18px", borderRadius: 8,
+              background: isStreaming ? "var(--af-border-subtle)" : "var(--af-accent)",
+              color: isStreaming ? "var(--af-text-tertiary)" : "white",
+              border: "none", cursor: isStreaming ? "default" : "pointer",
+              fontSize: 13, fontWeight: 600, letterSpacing: "-0.005em",
+            }}
+          >
+            {isStreaming ? "Generating…" : "Generate digest"}
+          </button>
+        )}
+        {progress && (
+          <div style={{
+            marginTop: 12, fontSize: 10.5, color: "var(--af-text-tertiary)",
+            fontFamily: "var(--font-mono)",
+          }}>
+            {progress}
+          </div>
+        )}
       </div>
-    </>
+    </div>
   );
 }
 

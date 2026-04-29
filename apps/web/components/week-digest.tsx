@@ -95,7 +95,6 @@ export function WeekDigest({
   actions?: ReactNode;
   priorDigest?: WeekDigestType | null;
 }) {
-  const fmtRange = formatRange(digest.window.start, digest.window.end);
   const totalShipped = digest.shipped.length;
   const dayCount = Object.values(digest.outcome_mix).reduce((a, b) => a + (b ?? 0), 0);
   const hrs = digest.agent_min_total / 60;
@@ -110,10 +109,8 @@ export function WeekDigest({
           fontSize: 12, color: "var(--af-text-tertiary)", fontWeight: 500,
           flexWrap: "wrap",
         }}>
-          <span style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}>Week of {digest.key}</span>
-          <span style={{ color: "var(--af-text-tertiary)" }}>·</span>
           <span style={{ fontFamily: "var(--font-mono)", color: "var(--af-text-secondary)" }}>
-            {fmtRange} · {timeStr} agent time · {dayCount} active day{dayCount === 1 ? "" : "s"} · {totalShipped} PR{totalShipped === 1 ? "" : "s"}
+            {timeStr} agent time · {dayCount} active day{dayCount === 1 ? "" : "s"} · {totalShipped} PR{totalShipped === 1 ? "" : "s"}
           </span>
           {delta && (
             <span style={{
@@ -1791,26 +1788,19 @@ function TopSessionCard({ session }: { session: WeekTopSession }) {
         {session.day_signature && (
           <p style={{
             fontSize: 12, fontStyle: "italic", color: "var(--af-text-secondary)",
-            margin: "0 0 10px", lineHeight: 1.5, maxWidth: 760,
+            margin: "0 0 14px", lineHeight: 1.5, maxWidth: 760,
           }}>
             “{session.day_signature}”
           </p>
         )}
 
-        {/* Session summary */}
-        {session.session_summary && (
-          <p style={{
-            fontSize: 13, lineHeight: 1.55, margin: "0 0 8px",
-            color: "var(--af-text)", maxWidth: 780,
-          }}>
-            {session.session_summary}
-          </p>
-        )}
+        {/* Structured deep-dive: why-picked / what-happened / what-worked / what-hit-friction */}
+        <NarrativeBlock session={session} />
 
         {/* Steering summary */}
         {session.steering_summary && (
           <p style={{
-            fontSize: 12, lineHeight: 1.55, margin: "0 0 10px",
+            fontSize: 12, lineHeight: 1.55, margin: "10px 0 12px",
             color: "var(--af-text-secondary)", maxWidth: 780,
             paddingLeft: 10, borderLeft: "2px solid var(--af-border-subtle)",
           }}>
@@ -1839,6 +1829,86 @@ function TopSessionCard({ session }: { session: WeekTopSession }) {
           </ol>
         )}
       </div>
+    </div>
+  );
+}
+
+function NarrativeBlock({ session }: { session: WeekTopSession }) {
+  // Backward-compat: cached pre-refactor digests only have session_summary.
+  // Render the new structured fields when present; fall back to the old
+  // single summary otherwise.
+  const hasStructured = session.why_picked || session.what_worked || session.what_hit_friction;
+  if (!hasStructured) {
+    if (!session.session_summary) return null;
+    return (
+      <p style={{
+        fontSize: 13, lineHeight: 1.55, margin: "0 0 8px",
+        color: "var(--af-text)", maxWidth: 780,
+      }}>
+        {session.session_summary}
+      </p>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "0 0 6px" }}>
+      {session.why_picked && (
+        <NarrativeRow
+          label="Why this session"
+          tone="var(--af-text-tertiary)"
+          accent="var(--af-text-tertiary)"
+          text={session.why_picked}
+        />
+      )}
+      {session.session_summary && (
+        <NarrativeRow
+          label="What happened"
+          tone="var(--af-text)"
+          accent="var(--af-text-secondary)"
+          text={session.session_summary}
+          weight={500}
+        />
+      )}
+      {session.what_worked && (
+        <NarrativeRow
+          label="What worked"
+          tone="var(--af-text)"
+          accent="#48bb78"
+          text={session.what_worked}
+        />
+      )}
+      {session.what_hit_friction && (
+        <NarrativeRow
+          label="What hit friction"
+          tone="var(--af-text)"
+          accent="#ed8936"
+          text={session.what_hit_friction}
+        />
+      )}
+    </div>
+  );
+}
+
+function NarrativeRow({ label, tone, accent, text, weight = 400 }: {
+  label: string;
+  tone: string;
+  accent: string;
+  text: string;
+  weight?: number;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", maxWidth: 800 }}>
+      <span style={{
+        flexShrink: 0, width: 132, paddingTop: 2,
+        fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em",
+        textTransform: "uppercase", color: accent,
+      }}>
+        {label}
+      </span>
+      <span style={{
+        fontSize: 13, lineHeight: 1.55, color: tone, fontWeight: weight,
+      }}>
+        {text}
+      </span>
     </div>
   );
 }
