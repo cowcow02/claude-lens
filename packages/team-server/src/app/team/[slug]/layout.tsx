@@ -64,6 +64,7 @@ export default async function TeamLayout({
           <div className="mono" style={{ fontSize: 11, color: "var(--mute)", padding: "4px 0 8px" }}>
             {session.user.email}
           </div>
+          <a href={`/team/${slug}/me`}>My account · pair CLI</a>
           <a href="/logout">Sign out</a>
         </nav>
         <main className="shell-main">{children}</main>
