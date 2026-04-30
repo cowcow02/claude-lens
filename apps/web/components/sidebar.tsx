@@ -14,6 +14,7 @@ import {
   Activity,
   Gauge,
   Lightbulb,
+  Radio,
   Settings,
   CalendarDays,
 } from "lucide-react";
@@ -208,6 +209,13 @@ export function Sidebar({
           icon={<Lightbulb size={15} />}
         >
           Insights
+        </NavLink>
+        <NavLink
+          href="/runs"
+          active={pathname === "/runs" || pathname.startsWith("/runs/")}
+          icon={<Radio size={15} />}
+        >
+          Runs
         </NavLink>
       </nav>
 

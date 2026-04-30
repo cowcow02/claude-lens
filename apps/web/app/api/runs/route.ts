@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -123,11 +123,118 @@ function parseSince(s: string | null): number {
   return Date.now() - 24 * 3_600_000;
 }
 
+const RUNS_DIR = join(homedir(), ".cclens", "llm-runs");
+
+type TraceSummary = {
+  run_id: string;
+  kind: string;
+  model: string;
+  pid: number | null;
+  started_at: string;
+  ended_at: string | null;
+  elapsed_ms: number | null;
+  exit_code: number | null;
+  status: "running" | "ok" | "error" | "unknown";
+  content_chars: number | null;
+  output_tokens: number | null;
+};
+
+function listRecentTraces(limit: number): TraceSummary[] {
+  if (!existsSync(RUNS_DIR)) return [];
+  const files = readdirSync(RUNS_DIR)
+    .filter(f => f.endsWith(".jsonl"))
+    .map(f => ({ id: f.replace(/\.jsonl$/, ""), path: join(RUNS_DIR, f), mtime: statSync(join(RUNS_DIR, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, limit);
+
+  const out: TraceSummary[] = [];
+  for (const f of files) {
+    let start: { ts?: string; kind?: string; model?: string } | null = null;
+    let spawned: { pid?: number } | null = null;
+    let end: { ts?: string; elapsed_ms?: number; exit_code?: number; content_chars?: number; output_tokens?: number } | null = null;
+    let spawnError: { ts?: string } | null = null;
+
+    try {
+      // Read first ~16KB (start + spawned + maybe payload) and last ~4KB (end record)
+      const stat = statSync(f.path);
+      const headSize = Math.min(16_384, stat.size);
+      const tailSize = Math.min(4_096, stat.size);
+      const buf = Buffer.alloc(headSize);
+      const fd = openSync(f.path, "r");
+      try {
+        readSync(fd, buf, 0, headSize, 0);
+      } finally {
+        closeSync(fd);
+      }
+      const head = buf.toString("utf-8");
+      // Parse every _meta record visible in head — start, spawned, AND end /
+      // spawn_error. Previously end/spawn_error were only checked in the tail
+      // block, which got skipped when the file fit entirely in headSize. That
+      // left small completed traces (~10-15KB entry-enrich files) stuck at
+      // status="running" forever, even though their end record was already in
+      // the head buffer.
+      for (const line of head.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const obj = JSON.parse(line) as { _meta?: { type?: string; ts?: string; kind?: string; model?: string; pid?: number; elapsed_ms?: number; exit_code?: number; content_chars?: number; output_tokens?: number } };
+          const t = obj._meta?.type;
+          if (t === "start") start = obj._meta!;
+          else if (t === "spawned") spawned = obj._meta!;
+          else if (t === "end") end = obj._meta!;
+          else if (t === "spawn_error") spawnError = obj._meta!;
+        } catch { /* skip */ }
+      }
+
+      if (!end && !spawnError && stat.size > headSize) {
+        const tailBuf = Buffer.alloc(tailSize);
+        const fd2 = openSync(f.path, "r");
+        try {
+          readSync(fd2, tailBuf, 0, tailSize, stat.size - tailSize);
+        } finally {
+          closeSync(fd2);
+        }
+        const tail = tailBuf.toString("utf-8");
+        for (const line of tail.split("\n").reverse()) {
+          if (!line.trim()) continue;
+          try {
+            const obj = JSON.parse(line) as { _meta?: { type?: string; ts?: string; elapsed_ms?: number; exit_code?: number; content_chars?: number; output_tokens?: number } };
+            if (obj._meta?.type === "end") { end = obj._meta; break; }
+            if (obj._meta?.type === "spawn_error") { spawnError = obj._meta; break; }
+          } catch { /* skip */ }
+        }
+      }
+    } catch { /* skip */ }
+
+    const status: TraceSummary["status"] =
+      end ? (end.exit_code === 0 ? "ok" : "error")
+        : spawnError ? "error"
+          : start ? "running"
+            : "unknown";
+
+    out.push({
+      run_id: f.id,
+      kind: start?.kind ?? "?",
+      model: start?.model ?? "?",
+      pid: spawned?.pid ?? null,
+      started_at: start?.ts ?? "",
+      ended_at: end?.ts ?? null,
+      elapsed_ms: end?.elapsed_ms ?? null,
+      exit_code: end?.exit_code ?? null,
+      status,
+      content_chars: end?.content_chars ?? null,
+      output_tokens: end?.output_tokens ?? null,
+    });
+  }
+  return out;
+}
+
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const sinceMs = parseSince(url.searchParams.get("since"));
+  const traceLimit = Number(url.searchParams.get("trace_limit") ?? "30");
   const active = listActiveRuns();
   const completed = readSpend(sinceMs);
+  const traces = listRecentTraces(traceLimit);
 
   type Totals = { ops: number; input_tokens: number; output_tokens: number; cost_usd: number };
   const totals: Totals = { ops: completed.length, input_tokens: 0, output_tokens: 0, cost_usd: 0 };
@@ -151,6 +258,7 @@ export async function GET(req: Request): Promise<Response> {
     totals,
     by_kind: byKind,
     completed,
+    traces,
   }, null, 2), {
     status: 200,
     headers: { "content-type": "application/json" },
