@@ -5,12 +5,6 @@ import type { CyclePeak } from "@/lib/calibration-data";
 // danger thresholds (green / amber / red). The right-most bar is "current"
 // (in-progress) and gets a distinct styling so it isn't read as a finished
 // trend point. Designed for direct reuse on the team-edition member card.
-//
-// Layout choices:
-// - Horizontal bars (left → right = oldest → newest) match how people
-//   intuit "trend over time"
-// - End date labels under each bar so admins can map to specific weeks
-// - "estimated" tag on cycles that predate daemon data
 export function PreviousCyclesTrend({
   windowLabel,
   cycles,
