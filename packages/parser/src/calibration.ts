@@ -194,122 +194,90 @@ export function groupSnapsByCycle(
   return out;
 }
 
-export type PriorRateInfo = { rate: number; travel: number; dollars: number };
+// One observed `$/pp` rate per snap-pair within a cycle. Each pair-rate
+// is a LOWER BOUND on the user's true solo `$/pp`: the user contributed
+// `dollars` and Anthropic measured `travel` pp, but on a SHARED account
+// teammates may have contributed additional pp without contributing to
+// `dollars`. Higher pair-rates → moments when teammates were idle, closest
+// to the user's true solo rate. We use an upper percentile of these rates
+// (not the cycle average) for forward extrapolation, so shared-account
+// pollution doesn't bias the rate downward.
+export type SnapPairRate = {
+  cycleEndMs: number;
+  rate: number;
+  travel: number;
+  dollars: number;
+  gapMs: number;
+};
 
-// One observed rate per completed cycle, from full daemon coverage of that
-// cycle. Used as the fallback rate prior when the active cycle has thin data.
-export function buildPriorRateMap(
+export type SnapPairOpts = {
+  minTravelPct?: number;
+  minDollars?: number;
+  maxGapMs?: number;
+};
+
+export function collectSnapPairRates(
   snapsByCycle: Map<number, CycleSnap[]>,
   spend: SpendIndex,
-): Map<number, PriorRateInfo> {
-  const out = new Map<number, PriorRateInfo>();
+  opts?: SnapPairOpts,
+): SnapPairRate[] {
+  const minTravel = opts?.minTravelPct ?? 1;
+  const minDollars = opts?.minDollars ?? 1;
+  const maxGap = opts?.maxGapMs ?? 24 * HOUR_MS;
+  const out: SnapPairRate[] = [];
   for (const [cycleEnd, arr] of snapsByCycle) {
-    if (arr.length < 2) continue;
-    const a = arr[0]!;
-    const b = arr[arr.length - 1]!;
-    const travel = b.pct - a.pct;
-    if (travel <= 0) continue;
-    const dollars = dollarsInRange(spend, a.ts, b.ts);
-    if (dollars <= 0) continue;
-    out.set(cycleEnd, { rate: dollars / travel, travel, dollars });
+    for (let i = 1; i < arr.length; i++) {
+      const a = arr[i - 1]!;
+      const b = arr[i]!;
+      const gap = b.ts - a.ts;
+      const travel = b.pct - a.pct;
+      if (gap <= 0 || gap > maxGap) continue;
+      if (travel < minTravel) continue;
+      const dollars = dollarsInRange(spend, a.ts, b.ts);
+      if (dollars < minDollars) continue;
+      out.push({ cycleEndMs: cycleEnd, rate: dollars / travel, travel, dollars, gapMs: gap });
+    }
   }
   return out;
 }
 
-// Median of the K most recent priors before `cycleEnd`, filtered to those
-// with at least `minTravel` pp moved and `minDollars` spent. Median is
-// robust against the noisy short cycles (5h cycles have CV ~70% across
-// rates; mean is biased by outliers, median sits on the typical day).
-function priorMedianRate(
-  priors: Map<number, PriorRateInfo>,
-  cycleEnd: number,
-  k: number,
-  minTravel: number,
-  minDollars: number,
-): number | null {
-  const eligible: number[] = [];
-  for (const [end, info] of priors) {
-    if (end >= cycleEnd) continue;
-    if (info.travel < minTravel) continue;
-    if (info.dollars < minDollars) continue;
-    eligible.push(end);
-  }
-  eligible.sort((a, b) => b - a);
-  const recent = eligible.slice(0, k).map((end) => priors.get(end)!.rate);
-  if (recent.length === 0) return null;
-  const sorted = [...recent].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  // For even-length arrays, average the two middle values — the conventional
-  // median definition. For odd, return the middle element.
-  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
-}
-
-export type AnchoredPredictorOpts = {
-  /** Tier-default $/pp rate, used when no observed cycle data is available. */
-  tierDefault: number;
-  /** Maximum prior cycles to consult for the median fallback. */
-  priorK: number;
-  /** Minimum pp travel for a prior cycle to count toward the median. */
-  priorMinTravel: number;
-  /** Minimum $ spent for a prior cycle to count toward the median. */
-  priorMinDollars: number;
-  /** Travel (pp) at which the active cycle's own rate fully replaces the
-   *  prior rate. Below this, the two are blended linearly (with prior
-   *  dominating when travel ≈ 0). 30pp is enough for the 1pp-quantized
-   *  utilization to carry signal above its rounding noise. */
-  travelForFullConfidence: number;
-};
-
-const ANCHORED_OPTS_7D: AnchoredPredictorOpts = {
-  tierDefault: 12.0,
-  priorK: 5,
-  priorMinTravel: 10,
-  priorMinDollars: 5,
-  travelForFullConfidence: 30,
-};
-
-const ANCHORED_OPTS_5H: AnchoredPredictorOpts = {
-  tierDefault: 2.0,
-  priorK: 10,
-  priorMinTravel: 20,
-  priorMinDollars: 5,
-  travelForFullConfidence: 30,
-};
-
-export function getAnchoredOpts(window: "5h" | "7d", tier: PlanTier): AnchoredPredictorOpts {
-  const base = window === "5h" ? ANCHORED_OPTS_5H : ANCHORED_OPTS_7D;
-  const tierDefault = (window === "5h" ? RATE_PER_PCT_5H : RATE_PER_PCT_7D)[tier];
-  return { ...base, tierDefault };
+// Upper percentile of pair rates. p90 is robust against extreme outliers
+// while still leaning toward solo-dominated moments. Returns null when
+// there isn't enough data; caller should fall back to the tier default.
+export function userSoloRate(pairs: SnapPairRate[], percentile = 0.9): number | null {
+  if (pairs.length < 3) return null;
+  const sorted = pairs.map((p) => p.rate).sort((a, b) => a - b);
+  const idx = Math.min(Math.floor(sorted.length * percentile), sorted.length - 1);
+  return sorted[idx]!;
 }
 
 // The predictor: returns predicted utilization (pp) at time `t`, given the
-// cycle's observed snapshots, prior cycle rates, and cycle metadata.
+// cycle's observed snapshots, a forward-extrapolation rate, and cycle
+// metadata.
 //
 // Behavior:
 // - between two adjacent snaps a, b in the same cycle:
 //     pred(t) = pct_a + (pct_b - pct_a) × ($_a→t / $_a→b)
 //   so the curve passes through every observed point exactly.
 // - past the latest snap of an in-progress cycle:
-//     pred(t) = pct_last + ($_last→t / blendedRate)
+//     pred(t) = pct_last + ($_last→t / forwardRate)
 // - before the first snap of a cycle (cold-start back-fill):
-//     pred(t) = max(0, pct_first - ($_t→first / blendedRate))
-// - cycle has no snaps at all: returns the tier-default linear projection
-//   from cycle start so cold-start back-fill before any daemon data still
-//   draws a curve.
+//     pred(t) = max(0, pct_first - ($_t→first / forwardRate))
+// - cycle has no snaps at all: linear projection from cycle start using
+//   forwardRate so cold-start back-fill draws a curve.
 export function predictAnchored(
   spend: SpendIndex,
   cycleSnaps: CycleSnap[],
-  priors: Map<number, PriorRateInfo>,
+  forwardRate: number,
   cycleEndMs: number,
   cycleHours: number,
   t: number,
-  opts: AnchoredPredictorOpts,
 ): number {
   const cycleStart = cycleEndMs - cycleHours * HOUR_MS;
+  if (forwardRate <= 0) forwardRate = 1; // defensive
 
-  // Cycle has no observations yet — pure tier-default projection.
   if (cycleSnaps.length === 0) {
-    return Math.max(0, dollarsInRange(spend, cycleStart, t) / opts.tierDefault);
+    return Math.max(0, dollarsInRange(spend, cycleStart, t) / forwardRate);
   }
 
   // aIdx = last snap with ts <= t
@@ -327,7 +295,8 @@ export function predictAnchored(
     const totalDollars = dollarsInRange(spend, a.ts, b.ts);
     if (totalDollars <= 0) {
       // Daemon recorded a pct change with zero JSONL spend (e.g. non-Anthropic
-      // models, or events outside our scan). Fall back to time-linear.
+      // models, or events outside our scan, or pure team contribution). Fall
+      // back to time-linear so the curve still passes through both anchors.
       const frac = (t - a.ts) / (b.ts - a.ts);
       return a.pct + (b.pct - a.pct) * frac;
     }
@@ -335,53 +304,10 @@ export function predictAnchored(
     return a.pct + (b.pct - a.pct) * (tDollars / totalDollars);
   }
 
-  // Forward-extrapolate past last snap, or backward-extrapolate before first.
-  const rate = blendedRate(spend, cycleSnaps, priors, cycleEndMs, opts);
-
   if (aIdx >= 0) {
     const last = cycleSnaps[aIdx]!;
-    return last.pct + dollarsInRange(spend, last.ts, t) / rate;
+    return last.pct + dollarsInRange(spend, last.ts, t) / forwardRate;
   }
-  // t is before every snap of this cycle.
   const first = cycleSnaps[0]!;
-  return Math.max(0, first.pct - dollarsInRange(spend, t, first.ts) / rate);
-}
-
-function blendedRate(
-  spend: SpendIndex,
-  cycleSnaps: CycleSnap[],
-  priors: Map<number, PriorRateInfo>,
-  cycleEndMs: number,
-  opts: AnchoredPredictorOpts,
-): number {
-  // The active cycle's own observed rate, if it has at least 2 snaps with
-  // positive travel and spend.
-  let curRate: number | null = null;
-  let curTravel = 0;
-  if (cycleSnaps.length >= 2) {
-    const a = cycleSnaps[0]!;
-    const b = cycleSnaps[cycleSnaps.length - 1]!;
-    const travel = b.pct - a.pct;
-    if (travel > 0) {
-      const dollars = dollarsInRange(spend, a.ts, b.ts);
-      if (dollars > 0) {
-        curRate = dollars / travel;
-        curTravel = travel;
-      }
-    }
-  }
-
-  const priorRate = priorMedianRate(
-    priors,
-    cycleEndMs,
-    opts.priorK,
-    opts.priorMinTravel,
-    opts.priorMinDollars,
-  );
-
-  if (curRate != null && priorRate != null) {
-    const w = Math.min(curTravel / opts.travelForFullConfidence, 1);
-    return curRate * w + priorRate * (1 - w);
-  }
-  return curRate ?? priorRate ?? opts.tierDefault;
+  return Math.max(0, first.pct - dollarsInRange(spend, t, first.ts) / forwardRate);
 }

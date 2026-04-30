@@ -33,12 +33,14 @@ import {
   type CalibrationEvent,
   type PlanTier,
   type RateSource,
-  buildPriorRateMap,
+  RATE_PER_PCT_5H,
+  RATE_PER_PCT_7D,
   buildSpendIndex,
-  getAnchoredOpts,
+  collectSnapPairRates,
   groupSnapsByCycle,
   modelFamily,
   predictAnchored,
+  userSoloRate,
 } from "./calibration.js";
 
 export const DEFAULT_ROOT = path.join(os.homedir(), ".claude", "projects");
@@ -1068,9 +1070,10 @@ function inferResetsAt(
  * snapshots. The predictor passes EXACTLY through every observed OAuth
  * snapshot via spend-weighted interpolation between adjacent snaps in the
  * same cycle. Past the latest snap of a cycle (forward extrapolation) it
- * uses a $/pp rate that blends the active cycle's own observed rate with
- * a robust median of recent prior cycles. See predictAnchored in
- * calibration.ts.
+ * uses a $/pp rate fitted from the upper percentile of snap-pair rates
+ * across all cycles — closest to the user's solo rate on shared accounts
+ * where teammates contribute pp travel that we never see in JSONL.
+ * See predictAnchored / collectSnapPairRates in calibration.ts.
  *
  * Cold-start back-fill: the curve extends up to 14 days before the first
  * snapshot so /usage shows estimates from JSONL spend even when the daemon
@@ -1086,13 +1089,30 @@ export function buildCalibrationCurve(
   if (snapshots.length === 0 || events.length === 0) return null;
 
   const spend = buildSpendIndex(events);
-  const opts5h = getAnchoredOpts("5h", tier);
-  const opts7d = getAnchoredOpts("7d", tier);
+  const tierDefault7d = RATE_PER_PCT_7D[tier];
+  const tierDefault5h = RATE_PER_PCT_5H[tier];
 
   const snapsByCycle5h = groupSnapsByCycle(snapshots, (s) => s.five_hour);
   const snapsByCycle7d = groupSnapsByCycle(snapshots, (s) => s.seven_day);
-  const priors5h = buildPriorRateMap(snapsByCycle5h, spend);
-  const priors7d = buildPriorRateMap(snapsByCycle7d, spend);
+  // Keep only pairs with ≥$10 (7d) / ≥$1 (5h) of user spend — filters out
+  // low-spend pairs whose rates are dominated by 1pp utilization rounding
+  // noise. The remaining pairs cluster tightly around the user's solo rate
+  // on shared accounts (verified in /tmp/calibrate-bench-shared.mjs:
+  // dropping the noise floor moved the p90 from $15.9 → $21.8 with no
+  // sensitivity to maxGap). Cap at 24h to drop daemon-off pairs where
+  // teammate contribution is unknowable.
+  const pairs7d = collectSnapPairRates(snapsByCycle7d, spend, {
+    minTravelPct: 1, minDollars: 10, maxGapMs: 24 * 3_600_000,
+  });
+  const pairs5h = collectSnapPairRates(snapsByCycle5h, spend, {
+    minTravelPct: 1, minDollars: 1, maxGapMs: 2 * 3_600_000,
+  });
+  const fwdRate7d = userSoloRate(pairs7d, 0.9) ?? tierDefault7d;
+  const fwdRate5h = userSoloRate(pairs5h, 0.9) ?? tierDefault5h;
+  // Distinct cycles contributing to the fitted rate — surfaced as
+  // `cycles_used_*` so the UI can label provenance.
+  const cycles7d = new Set(pairs7d.map((p) => p.cycleEndMs)).size;
+  const cycles5h = new Set(pairs5h.map((p) => p.cycleEndMs)).size;
 
   // (snap_ts, reset_ts) pairs for inferResetsAt — used to attribute each
   // curve-point timestamp to the cycle it belongs to.
@@ -1155,8 +1175,8 @@ export function buildCalibrationCurve(
     const cycleEnd5 = r5k ?? cur + 5 * HOUR;
     const cycleEnd7 = r7k ?? cur + 168 * HOUR;
 
-    const p5 = predictAnchored(spend, cycle5Snaps, priors5h, cycleEnd5, 5, cur, opts5h);
-    const p7 = predictAnchored(spend, cycle7Snaps, priors7d, cycleEnd7, 168, cur, opts7d);
+    const p5 = predictAnchored(spend, cycle5Snaps, fwdRate5h, cycleEnd5, 5, cur);
+    const p7 = predictAnchored(spend, cycle7Snaps, fwdRate7d, cycleEnd7, 168, cur);
 
     curve.push({
       ts: new Date(cur).toISOString(),
@@ -1170,24 +1190,21 @@ export function buildCalibrationCurve(
     cur += stepMs;
   }
 
-  // The predictor is "user_calibrated" once we have any prior cycle to draw
-  // a fallback rate from; before that, forward extrapolation falls back on
-  // the tier default. Surface this so the UI can label confidence.
-  const has7dPriors = priors7d.size > 0;
-  const has5hPriors = priors5h.size > 0;
-  const rateSource7d: RateSource = has7dPriors ? "user_calibrated" : "tier_default";
-  const rateSource5h: RateSource = has5hPriors ? "user_calibrated" : "tier_default";
+  // "user_calibrated" when we fit a rate from this account's snap-pairs;
+  // "tier_default" while still cold-starting (fewer than 3 usable pairs).
+  const rateSource7d: RateSource = pairs7d.length >= 3 ? "user_calibrated" : "tier_default";
+  const rateSource5h: RateSource = pairs5h.length >= 3 ? "user_calibrated" : "tier_default";
 
   return {
     model: `anchored-${tier}`,
     tier,
-    rate_per_pct: opts7d.tierDefault,
-    rate_per_pct_5h: opts5h.tierDefault,
-    rate_per_pct_7d: opts7d.tierDefault,
+    rate_per_pct: fwdRate7d,
+    rate_per_pct_5h: fwdRate5h,
+    rate_per_pct_7d: fwdRate7d,
     rate_source_5h: rateSource5h,
     rate_source_7d: rateSource7d,
-    cycles_used_5h: priors5h.size,
-    cycles_used_7d: priors7d.size,
+    cycles_used_5h: cycles5h,
+    cycles_used_7d: cycles7d,
     granularity_min: granularityMin,
     curve,
     first_snapshot_ts: snapshots[0]!.captured_at ?? null,

@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildPriorRateMap,
   buildSpendIndex,
+  collectSnapPairRates,
   dollarsInRange,
-  getAnchoredOpts,
   groupSnapsByCycle,
   predictAnchored,
+  userSoloRate,
   type CalibrationEvent,
   type CycleSnap,
   type SnapshotForCalibration,
@@ -38,17 +38,14 @@ function eventsCosting(startMs: number, endMs: number, targetDollars: number, n 
 
 describe("buildSpendIndex / dollarsInRange", () => {
   it("matches a manual sum across windows", () => {
-    const events = eventsCosting(1_000_000, 1_000_000 + DAY, 240); // ~$240 over a day
+    const events = eventsCosting(1_000_000, 1_000_000 + DAY, 240);
     const idx = buildSpendIndex(events);
-    const total = dollarsInRange(idx, 0, Number.MAX_SAFE_INTEGER);
-    expect(total).toBeCloseTo(240, 0);
-    const half = dollarsInRange(idx, 1_000_000, 1_000_000 + DAY / 2);
-    expect(half).toBeCloseTo(120, 0);
+    expect(dollarsInRange(idx, 0, Number.MAX_SAFE_INTEGER)).toBeCloseTo(240, 0);
+    expect(dollarsInRange(idx, 1_000_000, 1_000_000 + DAY / 2)).toBeCloseTo(120, 0);
   });
 
   it("returns 0 for empty windows", () => {
-    const idx = buildSpendIndex([]);
-    expect(dollarsInRange(idx, 0, 1)).toBe(0);
+    expect(dollarsInRange(buildSpendIndex([]), 0, 1)).toBe(0);
   });
 });
 
@@ -69,10 +66,61 @@ describe("groupSnapsByCycle", () => {
   });
 });
 
-describe("predictAnchored", () => {
-  const opts = getAnchoredOpts("7d", "pro-max-20x");
+describe("collectSnapPairRates / userSoloRate", () => {
+  it("builds one pair-rate per adjacent in-cycle snap pair", () => {
+    const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
+    const cycleStart = cycleEnd - 7 * DAY;
+    // Three snaps: pp 0 → 20 → 50. $200 between snap 1-2, $300 between 2-3.
+    const snaps: SnapshotForCalibration[] = [
+      { captured_at: new Date(cycleStart).toISOString(),                seven_day: { utilization: 0,  resets_at: new Date(cycleEnd).toISOString() } },
+      { captured_at: new Date(cycleStart + 2 * DAY).toISOString(),      seven_day: { utilization: 20, resets_at: new Date(cycleEnd).toISOString() } },
+      { captured_at: new Date(cycleStart + 4 * DAY).toISOString(),      seven_day: { utilization: 50, resets_at: new Date(cycleEnd).toISOString() } },
+    ];
+    const events = [
+      ...eventsCosting(cycleStart,             cycleStart + 2 * DAY, 200, 60),
+      ...eventsCosting(cycleStart + 2 * DAY,   cycleStart + 4 * DAY, 300, 60),
+    ];
+    const groups = groupSnapsByCycle(snaps, (s) => s.seven_day);
+    const pairs = collectSnapPairRates(groups, buildSpendIndex(events), {
+      maxGapMs: 7 * DAY,
+    });
+    expect(pairs.length).toBe(2);
+    // $200 / 20pp = $10/pp ; $300 / 30pp = $10/pp
+    expect(pairs[0]!.rate).toBeCloseTo(10, 0);
+    expect(pairs[1]!.rate).toBeCloseTo(10, 0);
+  });
 
-  it("returns the real value at snapshot times (anchor exactly)", () => {
+  it("filters out pairs below the noise floor (travel, dollars, gap)", () => {
+    const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
+    const cycleStart = cycleEnd - 7 * DAY;
+    const snaps: SnapshotForCalibration[] = [
+      // Tiny travel (0pp) — should be dropped
+      { captured_at: new Date(cycleStart).toISOString(),               seven_day: { utilization: 5, resets_at: new Date(cycleEnd).toISOString() } },
+      { captured_at: new Date(cycleStart + 5 * 60_000).toISOString(),  seven_day: { utilization: 5, resets_at: new Date(cycleEnd).toISOString() } },
+    ];
+    const events = eventsCosting(cycleStart, cycleStart + DAY, 50);
+    const groups = groupSnapsByCycle(snaps, (s) => s.seven_day);
+    const pairs = collectSnapPairRates(groups, buildSpendIndex(events));
+    expect(pairs.length).toBe(0);
+  });
+
+  it("p90 picks the upper-percentile rate (= solo-rate proxy)", () => {
+    const pairs = [10, 11, 12, 13, 14, 15, 16, 17, 18, 50].map((rate, i) => ({
+      cycleEndMs: i,
+      rate,
+      travel: 10,
+      dollars: rate * 10,
+      gapMs: HOUR,
+    }));
+    expect(userSoloRate(pairs, 0.9)).toBe(50);
+    expect(userSoloRate(pairs, 0.5)).toBe(15);
+    // Below the noise floor of 3 pairs: returns null.
+    expect(userSoloRate(pairs.slice(0, 2), 0.9)).toBeNull();
+  });
+});
+
+describe("predictAnchored", () => {
+  it("returns the real value at every snapshot ts (zero error on observed)", () => {
     const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
     const cycleStart = cycleEnd - 7 * DAY;
     const snaps: CycleSnap[] = [
@@ -83,7 +131,7 @@ describe("predictAnchored", () => {
     const events = eventsCosting(cycleStart, cycleStart + 6 * DAY, 800, 100);
     const spend = buildSpendIndex(events);
     for (const s of snaps) {
-      const p = predictAnchored(spend, snaps, new Map(), cycleEnd, 168, s.ts, opts);
+      const p = predictAnchored(spend, snaps, 12, cycleEnd, 168, s.ts);
       expect(p).toBeCloseTo(s.pct, 1);
     }
   });
@@ -93,111 +141,58 @@ describe("predictAnchored", () => {
     const cycleStart = cycleEnd - 7 * DAY;
     const a = { ts: cycleStart, pct: 0 };
     const b = { ts: cycleStart + 4 * DAY, pct: 40 };
-    // Spend is back-loaded: $0 in first 3 days, then $400 over the last day.
+    // Spend back-loaded: $0 first 3 days, $400 over the last day.
     const events = eventsCosting(cycleStart + 3 * DAY, cycleStart + 4 * DAY, 400, 60);
     const spend = buildSpendIndex(events);
-    const snaps = [a, b];
-    // At day 3 (just before spending starts), $-fraction is 0 → predicted = pct_a.
     const tDay3 = cycleStart + 3 * DAY;
-    const p3 = predictAnchored(spend, snaps, new Map(), cycleEnd, 168, tDay3, opts);
-    expect(p3).toBeCloseTo(0, 0);
-    // At halfway through the spending phase, $-fraction is 0.5 → predicted = 20.
+    expect(predictAnchored(spend, [a, b], 12, cycleEnd, 168, tDay3)).toBeCloseTo(0, 0);
     const tHalf = cycleStart + 3.5 * DAY;
-    const pHalf = predictAnchored(spend, snaps, new Map(), cycleEnd, 168, tHalf, opts);
+    const pHalf = predictAnchored(spend, [a, b], 12, cycleEnd, 168, tHalf);
     expect(pHalf).toBeGreaterThan(15);
     expect(pHalf).toBeLessThan(25);
   });
 
-  it("forward-extrapolates past the last snap using cycle rate when current cycle has travel", () => {
+  it("forward-extrapolates past the last snap using the supplied rate", () => {
     const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
     const cycleStart = cycleEnd - 7 * DAY;
     const lastSnapTs = cycleStart + 5 * DAY;
     const snaps: CycleSnap[] = [
       { ts: cycleStart, pct: 0 },
-      { ts: lastSnapTs, pct: 50 },  // travel = 50pp, dominant
+      { ts: lastSnapTs, pct: 50 },
     ];
-    // $500 spent during observation (gives $10/pp for current cycle)
-    // then another $50 in the forward window — should add 5pp predicted.
-    const events = [
-      ...eventsCosting(cycleStart, lastSnapTs, 500, 100),
-      ...eventsCosting(lastSnapTs, lastSnapTs + DAY, 50, 24),
-    ];
+    // $50 spent in the forward window. forwardRate=$10/pp → +5pp predicted.
+    const events = eventsCosting(lastSnapTs, lastSnapTs + DAY, 50, 24);
     const spend = buildSpendIndex(events);
-    const tForward = lastSnapTs + DAY;
-    const p = predictAnchored(spend, snaps, new Map(), cycleEnd, 168, tForward, opts);
-    // 50pp + ($50 / $10/pp) = 55pp
+    const p = predictAnchored(spend, snaps, 10, cycleEnd, 168, lastSnapTs + DAY);
     expect(p).toBeGreaterThan(53);
     expect(p).toBeLessThan(57);
   });
 
-  it("falls back to the prior median rate when current cycle has no travel", () => {
+  it("higher forwardRate → less predicted travel for same $-spent (solo-rate fix)", () => {
     const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
     const cycleStart = cycleEnd - 7 * DAY;
-    // Active cycle: only one snap, no travel observable yet.
-    const snaps: CycleSnap[] = [{ ts: cycleStart + 60_000, pct: 0 }];
-
-    // Two prior cycles, one closing at $20/pp, one at $10/pp — median is $15.
-    const priorEnd1 = cycleStart - 7 * DAY;
-    const priorStart1 = priorEnd1 - 7 * DAY;
-    const priorEnd2 = priorEnd1;
-    void priorEnd2;
-    const priors = new Map<number, { rate: number; travel: number; dollars: number }>([
-      [priorEnd1, { rate: 20, travel: 50, dollars: 1000 }],
-      [priorEnd1 - 7 * DAY, { rate: 10, travel: 50, dollars: 500 }],
-    ]);
-
-    // Spent $30 since active cycle began.
-    const events = eventsCosting(cycleStart + 60_000, cycleStart + DAY, 30, 24);
-    void priorStart1;
+    const lastSnapTs = cycleStart + 5 * DAY;
+    const snaps: CycleSnap[] = [
+      { ts: cycleStart, pct: 0 },
+      { ts: lastSnapTs, pct: 45 },
+    ];
+    const events = eventsCosting(lastSnapTs, lastSnapTs + DAY, 544, 200);
     const spend = buildSpendIndex(events);
-    const t = cycleStart + DAY;
-    // With $15/pp rate and $30 spent → pred = 0 + 30/15 = 2pp.
-    const p = predictAnchored(spend, snaps, priors, cycleEnd, 168, t, opts);
-    expect(p).toBeGreaterThan(1.5);
-    expect(p).toBeLessThan(2.5);
+    const t = lastSnapTs + DAY;
+    const lowRate = predictAnchored(spend, snaps, 10.25, cycleEnd, 168, t);
+    const highRate = predictAnchored(spend, snaps, 22, cycleEnd, 168, t);
+    expect(lowRate).toBeGreaterThan(highRate);
+    // 45 + 544/22 ≈ 70%, 45 + 544/10.25 ≈ 98%.
+    expect(highRate).toBeCloseTo(70, 0);
+    expect(lowRate).toBeCloseTo(98, 0);
   });
 
-  it("uses tier default when no current data and no priors", () => {
+  it("uses the supplied rate for cycles with no observations yet", () => {
     const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
     const cycleStart = cycleEnd - 7 * DAY;
     const events = eventsCosting(cycleStart, cycleStart + DAY, 24, 24);
     const spend = buildSpendIndex(events);
     const t = cycleStart + DAY;
-    const p = predictAnchored(spend, [], new Map(), cycleEnd, 168, t, opts);
-    // $24 / tierDefault $12 = 2pp
-    expect(p).toBeCloseTo(2, 0);
-  });
-});
-
-describe("buildPriorRateMap", () => {
-  it("produces one rate per cycle with travel/spend metadata", () => {
-    const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
-    const cycleStart = cycleEnd - 7 * DAY;
-    const snaps: CycleSnap[] = [
-      { ts: cycleStart, pct: 0 },
-      { ts: cycleEnd - 60_000, pct: 50 },
-    ];
-    const events = eventsCosting(cycleStart, cycleEnd - 60_000, 500);
-    const spend = buildSpendIndex(events);
-    const groups = new Map<number, CycleSnap[]>([[cycleEnd, snaps]]);
-    const priors = buildPriorRateMap(groups, spend);
-    const info = priors.get(cycleEnd);
-    expect(info).toBeDefined();
-    expect(info!.rate).toBeCloseTo(10, 0); // $500 / 50pp = $10/pp
-    expect(info!.travel).toBe(50);
-    expect(info!.dollars).toBeCloseTo(500, 0);
-  });
-
-  it("skips cycles with non-positive travel or no spend", () => {
-    const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
-    const cycleStart = cycleEnd - 7 * DAY;
-    const flat: CycleSnap[] = [
-      { ts: cycleStart, pct: 30 },
-      { ts: cycleEnd - 60_000, pct: 30 },
-    ];
-    const groups = new Map<number, CycleSnap[]>([[cycleEnd, flat]]);
-    const events = eventsCosting(cycleStart, cycleEnd, 500);
-    const priors = buildPriorRateMap(groups, buildSpendIndex(events));
-    expect(priors.size).toBe(0);
+    expect(predictAnchored(spend, [], 12, cycleEnd, 168, t)).toBeCloseTo(2, 0);
   });
 });
