@@ -88,10 +88,15 @@ export function MemberPlanBlock({
         </div>
       </div>
 
+      {/* Three tiles only — what admins actually need to make a tier
+          decision. We dropped "avg utilization" (lossy 30-day mean —
+          the cycle bars below show real per-cycle behaviour), "peak 7d"
+          (identical to the tallest cycle bar) and "peak 5h" (subsumed
+          by the wall-hits panel which is the actionable version). */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
           gap: 16,
           marginBottom: 18,
         }}
@@ -106,33 +111,14 @@ export function MemberPlanBlock({
           hint="Anthropic subscription tier set for this seat"
         />
         <Stat
-          label="Avg utilization"
-          value={`${summary.avgSevenDayPct.toFixed(0)}%`}
-          hint="Average rolling 7-day usage across the window"
-        />
-        <Stat
-          label="Peak 7-day"
-          value={`${summary.worstSevenDayPeak.toFixed(0)}%`}
-          hint="Worst 7-day window seen"
-        />
-        <Stat
-          label="Peak 5-hour"
-          value={`${summary.worstFiveHourPeak.toFixed(0)}%`}
-          hint="Worst 5-hour burst seen"
-        />
-        <Stat
           label="Active days"
           value={`${summary.totalDaysObserved} of 30`}
-          hint="Days the daemon recorded any usage"
+          hint="How engaged this seat is — flags wasted licenses on quiet members"
         />
         <Stat
-          label="Last snapshot"
-          value={
-            summary.lastSeenAtMs != null
-              ? new Date(summary.lastSeenAtMs).toLocaleString()
-              : "—"
-          }
-          hint="Most recent push from this seat's daemon"
+          label="Daemon"
+          value={daemonFreshness(summary.lastSeenAtMs)}
+          hint="If this isn't recent, the rest of this card may be stale"
         />
       </div>
 
@@ -256,6 +242,20 @@ function peakColor(pct: number): string {
   if (pct >= 90) return "#c5283d";
   if (pct >= 70) return "#b58400";
   return "#2f8f5a";
+}
+
+// "5m ago" / "2h ago" / "yesterday" — relative format an admin can scan.
+// "live" if the daemon polled in the last 10 min (matches the daemon's
+// 5-min interval + a buffer for clock skew).
+function daemonFreshness(lastSeenAtMs: number | null): string {
+  if (lastSeenAtMs == null) return "—";
+  const ageMs = Date.now() - lastSeenAtMs;
+  if (ageMs < 0) return "just now";
+  if (ageMs < 10 * 60 * 1000) return "live · last poll just now";
+  if (ageMs < 60 * 60 * 1000) return `${Math.round(ageMs / 60_000)}m ago`;
+  if (ageMs < 24 * 60 * 60 * 1000) return `${Math.round(ageMs / 3_600_000)}h ago`;
+  if (ageMs < 7 * 86_400_000) return `${Math.round(ageMs / 86_400_000)}d ago — daemon stalled?`;
+  return `${Math.round(ageMs / 86_400_000)}d ago — daemon down`;
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
