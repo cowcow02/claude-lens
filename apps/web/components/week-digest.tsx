@@ -201,23 +201,15 @@ export function WeekDigest({
 
       <WhereToLeanSection items={digest.where_to_lean ?? []} />
 
-      {/* ── Bottom: extras + power-user fold-downs ── */}
+      {/* ── Bottom: shipped list (kept) + legacy fallback ──
+          Removed PatternRollupsFold (working_shapes + interaction_grammar
+          UI) and ByTheNumbersFold (interaction_modes). They were collapsed
+          by default and rarely expanded; the LLM's findings already cite
+          shape/grammar names by anchor, so the rollup tables were
+          redundant context. Their feeder data is still on the digest for
+          back-compat — only the rendering is gone. */}
       <ShippedList shipped={digest.shipped} />
 
-      {(digest.working_shapes || digest.interaction_grammar) && (
-        <PatternRollupsFold
-          shapes={digest.working_shapes}
-          grammar={digest.interaction_grammar}
-        />
-      )}
-
-      {digest.interaction_modes && (
-        <ByTheNumbersFold modes={digest.interaction_modes} />
-      )}
-
-      {/* Legacy fallback: when reading a cached digest from before the
-          working_shapes refactor, the new fields are absent but old narrative
-          fields may be present. Render those so old digests aren't blank. */}
       {!digest.working_shapes && (
         <LegacyNarrativeFallback digest={digest} />
       )}
@@ -1977,8 +1969,16 @@ function Chip({ children, tone, title }: { children: ReactNode; tone?: "user" | 
 }
 
 function SessionTimelineMinimap({ session }: { session: WeekTopSession }) {
-  const duration = Math.max(1, session.timeline.duration_min);
   const intervals = session.timeline.active_intervals;
+  // Compute the actual span the bars cover so we never clip an interval off
+  // the right edge. Older cached digests stored duration_min as active_min
+  // while intervals are positioned in wall-clock minutes — taking max() of
+  // both makes the renderer correct regardless of which convention the
+  // cached digest used.
+  const observedMax = intervals.length > 0
+    ? Math.max(...intervals.map(iv => iv.end_min))
+    : 0;
+  const duration = Math.max(1, session.timeline.duration_min, observedMax);
   return (
     <div style={{ marginTop: 10, marginBottom: 4 }}>
       <div style={{
@@ -2028,7 +2028,8 @@ function SessionTimelineMinimap({ session }: { session: WeekTopSession }) {
           );
         })}
       </div>
-      {/* Min markers */}
+      {/* Min markers — wall-clock from session start; teal bars are active
+          intervals, gaps are idle periods (>3min between events). */}
       <div style={{
         display: "flex", justifyContent: "space-between",
         fontSize: 9, fontFamily: "var(--font-mono)",
@@ -2036,8 +2037,8 @@ function SessionTimelineMinimap({ session }: { session: WeekTopSession }) {
         marginTop: 3,
       }}>
         <span>0m</span>
-        <span>{Math.round(duration / 2)}m</span>
-        <span>{Math.round(duration)}m active</span>
+        <span>{formatMin(duration / 2)}</span>
+        <span>{formatMin(duration)} wall</span>
       </div>
     </div>
   );
@@ -2081,8 +2082,12 @@ function PinRow({ pin }: { pin: SessionPin }) {
 
 function formatMin(m: number): string {
   if (m >= 60) {
-    const h = Math.floor(m / 60);
-    const min = Math.round(m % 60);
+    // Round to whole minutes first, THEN split into hours+minutes — otherwise
+    // a value like 179.6 rounds to "2h 60m" because Math.round(179.6 % 60)
+    // wraps to 60 without bumping the hour.
+    const total = Math.round(m);
+    const h = Math.floor(total / 60);
+    const min = total % 60;
     return `${h}h${min > 0 ? ` ${min}m` : ""}`;
   }
   return `${Math.round(m * 10) / 10}m`;

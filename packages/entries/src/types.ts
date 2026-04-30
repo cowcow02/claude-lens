@@ -705,7 +705,11 @@ export type WeekTopSession = {
 
   // ── Timeline minimap data ──
   timeline: {
-    duration_min: number;              // session active span
+    /** Wall-clock span from first to last event, in minutes. This is the
+     *  minimap's x-axis denominator. active_intervals carry wall-clock
+     *  offsets so they must be scaled against wall_min, not active_min,
+     *  otherwise intervals past the active budget get clipped invisibly. */
+    duration_min: number;
     active_intervals: Array<{ start_min: number; end_min: number }>;
   };
 

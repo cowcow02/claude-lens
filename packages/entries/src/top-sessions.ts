@@ -529,7 +529,14 @@ const PinResponseSchema = z.object({
     "user-steering", "subagent-burst", "long-autonomous", "plan-mode",
     "pr-ship", "harness-chain", "interrupt", "brainstorm-loop", "agent-loop",
   ]),
-  label: z.string().min(1).max(180),
+  // Truncate rather than reject. The model anchors pin labels with detail
+  // ("turn N, X-char message, Y subagents, version Z") and reaches 250-290
+  // chars when the session has substance. A hard cap silently rejects the
+  // entire top-session response (Zod is all-or-nothing per parse) and the
+  // digest falls back to all-null narrative — happened on claude-lens
+  // 2026-04-24 with one 286-char overflow killing 5 otherwise-valid pins.
+  // 320 is the soft cap; anything over gets sliced at parse time.
+  label: z.string().min(1).transform(s => s.length <= 320 ? s : s.slice(0, 317) + "..."),
 });
 
 export const TopSessionResponseSchema = z.object({
@@ -545,16 +552,22 @@ export type TopSessionResponse = z.infer<typeof TopSessionResponseSchema>;
 
 const SYSTEM_PROMPT = `You are writing the editorial perception layer for ONE session in a developer's weekly report. The reader sees a timeline minimap of this session with annotated pin markers; your job is to write a structured deep-dive that surfaces what made this session worth examining.
 
-INPUT shape:
-- session metadata (project, duration, turns, outcome, shipped_prs, working_shape, day_signature)
-- harness signature (user_authored_skills, user_authored_subagents, stock_skills, top_tools)
-- steering snapshot (user_msg_count, long_user_msg_count, median_user_msg_chars, interrupts)
-- turns: full per-turn timeline. Each turn carries:
-    - start_min, end_min, wall_min, active_min, idle_before_min — DURATION matters
-    - user (head-tail truncated; chars = original length)
-    - first_agent + last_agent (head-tail truncated; or single agent field when first==longest)
-    - tools, skills_loaded, subagents_dispatched, exit_plan_calls, pr_created, long_autonomous_run
-- candidate_pins: deterministic moments worth surfacing — your menu
+INPUT shape (transcript-style markdown, NOT JSON):
+The user prompt is a markdown document with these sections:
+  • Header lines: session id, project, date, started_at, wall/active/idle/turns, outcome, working shape, day signature, shipped PRs.
+  • "## Harness" — bullets: user-authored skills, user-authored subagents, stock skills, top tools.
+  • "## Steering" — single line: user message count, median chars, long-msg count, interrupt count.
+  • "## Turns (N)" — one "### Turn K — start–end (wall, active, idle_before)" subsection per turn.
+    Each turn has labeled lines:
+      - "USER (Nc): <head-tail-truncated preview>"
+      - "FIRST_AGENT / LAST_AGENT / AGENT (Nc): <head-tail-truncated preview>" (only one of these per turn)
+      - "Tools: tool1, tool2, ..."
+      - "Skills loaded this turn: ..."
+      - "Subagent dispatched: <type> — <description>" with a "  prompt: <preview>" sub-line if present
+      - "Signals: exit_plan×N · TodoWrite ops: M · interrupts: K · PR created: \"...\" · LONG-AUTONOMOUS RUN" (only when present)
+  • "## Candidate pins" — bullet per candidate: "[start_min–end_min] kind — key=value, key=value". These are deterministic moments; pick + label the most editorial 3-5.
+
+DURATION matters: a turn with active_min ≫ wall_min indicates the agent worked autonomously inside; idle_before_min indicates user-initiated gaps.
 
 OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence.
 
@@ -570,7 +583,7 @@ OUTPUT: ONE JSON object. Strict JSON, no prose outside, no fence.
   "steering_summary": "1 sentence, ≤200 chars. HOW the user drove the agent. Reference: verbosity (long handoffs vs terse imperatives), framing (skill loads, slash commands), corrections (interrupts, mid-flight redirects), or trust (long-autonomous spans). Example: 'Heavy upfront briefing (3 messages ≥1K chars) then short steering — no interrupts, full trust through the 25-min build run.'",
 
   "pins": [
-    { "start_min": <number>, "end_min": <number?>, "kind": "<one of: user-steering|subagent-burst|long-autonomous|plan-mode|pr-ship|harness-chain|interrupt|brainstorm-loop|agent-loop>", "label": "≤120 chars, second-person, editorial — explain WHAT happened and WHAT the user was doing, not just the rule label" }
+    { "start_min": <number>, "end_min": <number?>, "kind": "<one of: user-steering|subagent-burst|long-autonomous|plan-mode|pr-ship|harness-chain|interrupt|brainstorm-loop|agent-loop>", "label": "≤200 chars, second-person, editorial — explain WHAT happened and WHAT the user was doing, not just the rule label. Anchor with one or two specifics (turn number, char count, subagent count, PR title, version) but keep it tight" }
     // 3-5 items picked from candidate_pins (or composed from turns when a candidate is incomplete)
   ]
 }
@@ -604,31 +617,112 @@ VOCABULARY:
 
 export const TOP_SESSION_SYSTEM_PROMPT = SYSTEM_PROMPT;
 
+/**
+ * Transcript-style top-session prompt. The bulky part is `turns[]` — each turn
+ * has 10+ fields and there are typically 5-50 turns per session, so emitting
+ * JSON pays the structural overhead repeatedly. Markdown-headed turns with
+ * inline labeled metadata cut tokens roughly in half (and read better).
+ *
+ * The LLM still sees every field — just denser. The `evidence.quote`
+ * substring check works against this prose just as it did against JSON.
+ */
 export function buildTopSessionUserPrompt(slice: SessionSlice): string {
-  const payload = {
-    session_id: slice.session_id,
-    project_display: slice.project_display,
-    date: slice.date,
-    start_iso: slice.start_iso,
-    wall_min: slice.wall_min,
-    active_min: slice.active_min,
-    idle_min: slice.idle_min,
-    turn_count: slice.turn_count,
-    outcome: slice.outcome,
-    shipped_prs: slice.shipped_prs,
-    working_shape: slice.working_shape,
-    day_signature: slice.day_signature,
-    harness: {
-      user_authored_skills: slice.user_authored_skills,
-      user_authored_subagents: slice.user_authored_subagents,
-      stock_skills: slice.stock_skills,
-      top_tools: slice.top_tools,
-    },
-    steering: slice.steering,
-    turns: slice.turns,
-    candidate_pins: slice.candidate_pins,
-  };
-  return JSON.stringify(payload, null, 2);
+  const lines: string[] = [];
+  const out = (s = "") => lines.push(s);
+
+  // ── Header ─────────────────────────────────────────────────────────────
+  out(`# Session ${slice.session_id}`);
+  out(`Project: ${slice.project_display} · Date: ${slice.date} · Started: ${slice.start_iso}`);
+  out(`Wall: ${slice.wall_min}m · Active: ${slice.active_min}m · Idle: ${slice.idle_min}m · Turns: ${slice.turn_count}`);
+  const meta: string[] = [];
+  if (slice.outcome) meta.push(`Outcome: ${slice.outcome}`);
+  if (slice.working_shape) meta.push(`Working shape: ${slice.working_shape}`);
+  if (meta.length) out(meta.join(" · "));
+  if (slice.day_signature) out(`Day signature: "${slice.day_signature}"`);
+  if (slice.shipped_prs.length) {
+    out(`Shipped PRs (${slice.shipped_prs.length}):`);
+    for (const pr of slice.shipped_prs) out(`  - "${pr}"`);
+  }
+
+  // ── Harness ────────────────────────────────────────────────────────────
+  out();
+  out(`## Harness`);
+  out(`- User-authored skills: ${slice.user_authored_skills.length ? slice.user_authored_skills.join(", ") : "(none)"}`);
+  if (slice.user_authored_subagents.length) {
+    const subs = slice.user_authored_subagents.map(s => `${s.type}×${s.count}`).join(", ");
+    out(`- User-authored subagents: ${subs}`);
+  }
+  out(`- Stock skills loaded: ${slice.stock_skills.length ? slice.stock_skills.join(", ") : "(none)"}`);
+  out(`- Top tools: ${slice.top_tools.length ? slice.top_tools.join(", ") : "(none)"}`);
+
+  // ── Steering ───────────────────────────────────────────────────────────
+  out();
+  const st = slice.steering;
+  out(`## Steering`);
+  out(`${st.user_msg_count} user messages (median ${st.median_user_msg_chars} chars, ${st.long_user_msg_count} long, ${st.interrupts} interrupts)`);
+
+  // ── Turns ──────────────────────────────────────────────────────────────
+  out();
+  out(`## Turns (${slice.turns.length})`);
+  for (const t of slice.turns) {
+    out();
+    const idleNote = t.idle_before_min > 0 ? ` · ${t.idle_before_min}m idle before` : "";
+    out(`### Turn ${t.turn} — ${t.start_min}m–${t.end_min}m (${t.wall_min}m wall, ${t.active_min}m active${idleNote})`);
+    if (t.user) out(`USER (${t.user.chars}c): ${t.user.preview}`);
+
+    // first_agent / last_agent / agent are mutually-exclusive flavors of the
+    // same field — only one is set per turn depending on whether the turn is
+    // a boundary turn (first/last in slice) or a middle turn.
+    const ag = t.first_agent ?? t.last_agent ?? t.agent;
+    if (ag) {
+      const agLabel = t.first_agent ? "FIRST_AGENT" : t.last_agent ? "LAST_AGENT" : "AGENT";
+      out(`${agLabel} (${ag.chars}c): ${ag.preview}`);
+    }
+    if (t.tools.length) out(`Tools: ${t.tools.join(", ")}`);
+    if (t.skills_loaded?.length) out(`Skills loaded this turn: ${t.skills_loaded.join(", ")}`);
+    if (t.subagents_dispatched?.length) {
+      for (const sa of t.subagents_dispatched) {
+        out(`Subagent dispatched: ${sa.type} — ${sa.description}`);
+        if (sa.prompt_preview) out(`  prompt: ${sa.prompt_preview}`);
+      }
+    }
+    const sigs: string[] = [];
+    if (t.exit_plan_calls) sigs.push(`exit_plan×${t.exit_plan_calls}`);
+    if (t.todo_ops) sigs.push(`TodoWrite ops: ${t.todo_ops}`);
+    if (t.interrupts) sigs.push(`interrupts: ${t.interrupts}`);
+    if (t.pr_created) sigs.push(`PR created: "${t.pr_created}"`);
+    if (t.long_autonomous_run) sigs.push(`LONG-AUTONOMOUS RUN`);
+    if (sigs.length) out(`Signals: ${sigs.join(" · ")}`);
+  }
+
+  // ── Candidate pins ─────────────────────────────────────────────────────
+  out();
+  out(`## Candidate pins (deterministic — pick + label the most editorial 3-6 of these for your "pins" output)`);
+  if (slice.candidate_pins.length === 0) {
+    out(`(none — sparse session)`);
+  } else {
+    for (const cp of slice.candidate_pins) {
+      const range = cp.end_min !== undefined ? `${cp.start_min}m–${cp.end_min}m` : `${cp.start_min}m`;
+      // Render context as a compact "key=value" line; keeps it readable while
+      // preserving every numeric/string the model might want to anchor against.
+      const ctxParts: string[] = [];
+      for (const [k, v] of Object.entries(cp.context ?? {})) {
+        if (v == null) continue;
+        if (typeof v === "string") {
+          ctxParts.push(`${k}="${v.length > 200 ? v.slice(0, 197) + "..." : v}"`);
+        } else if (Array.isArray(v)) {
+          ctxParts.push(`${k}=[${v.length} items]`);
+        } else if (typeof v === "object") {
+          ctxParts.push(`${k}={...}`);
+        } else {
+          ctxParts.push(`${k}=${v}`);
+        }
+      }
+      out(`- [${range}] ${cp.kind}${ctxParts.length ? ` — ${ctxParts.join(", ")}` : ""}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 // ─── LLM generator ─────────────────────────────────────────────────────
@@ -673,7 +767,12 @@ function sliceToBaseTopSession(slice: SessionSlice): WeekTopSession {
     top_tools: slice.top_tools,
     steering: slice.steering,
     timeline: {
-      duration_min: slice.active_min,
+      // duration_min is the minimap's x-axis scale. active_intervals carry
+      // start/end_min as WALL-clock offsets from session start, so the scale
+      // must be wall_min — not active_min — or intervals past the active
+      // budget get clipped off the right edge (e.g. a long autonomous burst
+      // that happens after a long idle gap appears past 100%, invisible).
+      duration_min: slice.wall_min,
       active_intervals: slice.active_intervals,
     },
     session_summary: null,
