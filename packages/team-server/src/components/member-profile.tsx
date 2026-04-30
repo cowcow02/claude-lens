@@ -1,59 +1,29 @@
 import { formatAgentTime, formatTokens } from "../lib/format";
-import type { MemberRow, RollupRow } from "../lib/queries";
+import type { RollupRow } from "../lib/queries";
 
-export function MemberProfile({ member, rollups }: { member: MemberRow; rollups: RollupRow[] }) {
-  const totalAgentTime = rollups.reduce((sum, r) => sum + Number(r.agent_time_ms), 0);
-  const totalSessions = rollups.reduce((sum, r) => sum + r.sessions, 0);
-  const totalTokens = rollups.reduce(
-    (sum, r) => sum + Number(r.tokens_input) + Number(r.tokens_output) + Number(r.tokens_cache_read) + Number(r.tokens_cache_write),
-    0,
-  );
+// 30-day day-by-day activity shape + drill-down table. Identity/role and
+// 30-day totals moved up into the page-level header so this component
+// stays focused on the per-day breakdown.
+export function MemberProfile({ rollups }: { rollups: RollupRow[] }) {
   const maxDayMs = Math.max(...rollups.map((r) => Number(r.agent_time_ms)), 1);
 
   return (
-    <>
-      <div className="profile-head">
-        <div>
-          <h1 className="profile-name">
-            <em>{member.display_name || member.email || "Anonymous"}</em>
-          </h1>
-          {member.email && (
-            <div className="mono" style={{ marginTop: 8, fontSize: 12, color: "var(--mute)" }}>
-              {member.email}
-            </div>
-          )}
-        </div>
-        <div className="profile-meta">
-          {member.role.toUpperCase()}
-          <br />
-          JOINED {new Date(member.joined_at).toLocaleDateString("en-US", {
-            month: "short", day: "2-digit", year: "numeric"
-          }).toUpperCase()}
-        </div>
-      </div>
-
-      <div className="stat-row">
-        <div>
-          <div className="stat-label">30-day Agent Time</div>
-          <div className="stat-value">{formatAgentTime(totalAgentTime)}</div>
-        </div>
-        <div>
-          <div className="stat-label">30-day Sessions</div>
-          <div className="stat-value">{totalSessions}</div>
-        </div>
-        <div>
-          <div className="stat-label">30-day Tokens</div>
-          <div className="stat-value">{formatTokens(totalTokens)}</div>
-        </div>
-      </div>
-
+    <section style={{ marginTop: 24 }}>
       <div className="subsection-head">
         <h2>Daily activity</h2>
-        <span className="kicker">30-day trail</span>
+        <span className="kicker">30-day shape · hover any bar for that day's agent time</span>
       </div>
       <div className="activity-chart">
         {rollups.length === 0 && (
-          <div style={{ color: "var(--mute)", fontSize: 13, width: "100%", textAlign: "center", padding: 40 }}>
+          <div
+            style={{
+              color: "var(--mute)",
+              fontSize: 13,
+              width: "100%",
+              textAlign: "center",
+              padding: 40,
+            }}
+          >
             No activity recorded in this window.
           </div>
         )}
@@ -77,10 +47,10 @@ export function MemberProfile({ member, rollups }: { member: MemberRow; rollups:
         </div>
       )}
 
-      {/* Collapsed by default — the day-bar chart above already conveys
-          shape; the table is for admins who want the exact numbers per
-          day, not the default view. */}
-      <details>
+      {/* Drill-down: per-day numbers. Collapsed by default — the bar
+          chart above already conveys shape; only power users want the
+          exact per-day rows. */}
+      <details style={{ marginTop: 20 }}>
         <summary
           className="subsection-head"
           style={{ cursor: "pointer", listStyle: "revert" }}
@@ -102,19 +72,29 @@ export function MemberProfile({ member, rollups }: { member: MemberRow; rollups:
               </tr>
             </thead>
             <tbody>
-              {rollups.slice().reverse().map((r) => (
-                <tr key={r.day}>
-                  <td>{r.day}</td>
-                  <td>{formatAgentTime(Number(r.agent_time_ms))}</td>
-                  <td>{r.sessions}</td>
-                  <td>{r.tool_calls}</td>
-                  <td>{formatTokens(Number(r.tokens_input) + Number(r.tokens_output) + Number(r.tokens_cache_read) + Number(r.tokens_cache_write))}</td>
-                </tr>
-              ))}
+              {rollups
+                .slice()
+                .reverse()
+                .map((r) => (
+                  <tr key={r.day}>
+                    <td>{r.day}</td>
+                    <td>{formatAgentTime(Number(r.agent_time_ms))}</td>
+                    <td>{r.sessions}</td>
+                    <td>{r.tool_calls}</td>
+                    <td>
+                      {formatTokens(
+                        Number(r.tokens_input) +
+                          Number(r.tokens_output) +
+                          Number(r.tokens_cache_read) +
+                          Number(r.tokens_cache_write),
+                      )}
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         )}
       </details>
-    </>
+    </section>
   );
 }

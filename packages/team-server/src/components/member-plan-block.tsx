@@ -1,4 +1,3 @@
-import { tierEntry } from "../lib/plan-tiers";
 import type { Recommendation } from "../lib/plan-optimizer";
 import { UtilizationSparkline } from "./utilization-sparkline";
 import { CyclePeaksStrip } from "./cycle-peaks-strip";
@@ -33,7 +32,6 @@ export function MemberPlanBlock({
   summary: MemberPlanSummary;
   cyclePeaks?: MembershipCyclePeak[];
 }) {
-  const tier = tierEntry(summary.planTier);
   const tone = ACTION_TONE[summary.recommendation.action];
 
   // Most recently completed cycle (drops the in-progress one). Used to
@@ -50,10 +48,10 @@ export function MemberPlanBlock({
   const currentInFlight = cyclePeaks.find((c) => c.isCurrent) ?? null;
 
   return (
-    <>
+    <section style={{ marginBottom: 24 }}>
       <div className="subsection-head">
-        <h2>Subscription utilization</h2>
-        <span className="kicker">last 30 days · how well this seat uses its plan</span>
+        <h2>Plan match</h2>
+        <span className="kicker">verdict · cycle peaks · throttling history</span>
       </div>
 
       {/* Verdict banner — the answer to "is this plan right for them" */}
@@ -86,68 +84,6 @@ export function MemberPlanBlock({
         <div style={{ fontSize: 14, marginTop: 6, color: "var(--ink)" }}>
           {summary.recommendation.rationale}
         </div>
-      </div>
-
-      {/* Three tiles only — what admins actually need to make a tier
-          decision. We dropped "avg utilization" (lossy 30-day mean —
-          the cycle bars below show real per-cycle behaviour), "peak 7d"
-          (identical to the tallest cycle bar) and "peak 5h" (subsumed
-          by the wall-hits panel which is the actionable version). */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: 16,
-          marginBottom: 18,
-        }}
-      >
-        <Stat
-          label="Plan"
-          value={
-            tier.monthlyPriceUsd > 0
-              ? `${tier.label} · $${tier.monthlyPriceUsd}/mo`
-              : tier.label
-          }
-          hint="Anthropic subscription tier set for this seat"
-        />
-        <Stat
-          label="Active days"
-          value={`${summary.totalDaysObserved} of 30`}
-          hint="How engaged this seat is — flags wasted licenses on quiet members"
-        />
-        <Stat
-          label="Daemon"
-          value={daemonFreshness(summary.lastSeenAtMs)}
-          hint="If this isn't recent, the rest of this card may be stale"
-        />
-      </div>
-
-      {/* Throttling counters. "100% peak" looks alarming on its own —
-          this panel turns it into "did they actually hit the wall, and
-          for how many days?" Anthropic stops accepting new work once a
-          rolling window hits its cap, so these days are when the user
-          was *blocked* (or routed to a slower model), not just busy. */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-          gap: 16,
-          marginBottom: 24,
-          padding: "14px 16px",
-          background: "var(--paper)",
-          border: "1px solid var(--rule)",
-        }}
-      >
-        <WallStat
-          label="Throttled (weekly limit)"
-          count={summary.wallHits7d}
-          hint="Days they exhausted the rolling 7-day budget — Claude refuses or routes to a fallback until the window rolls forward"
-        />
-        <WallStat
-          label="Throttled (5-hour burst)"
-          count={summary.wallHits5h}
-          hint="Days a 5-hour burst hit 100% — bursty work, mid-session throttling that resolves on the next 5-hour reset"
-        />
       </div>
 
       {/* Per-cycle peak history — same data and visual the member sees on
@@ -236,7 +172,34 @@ export function MemberPlanBlock({
           Hover for exact date.
         </div>
       </div>
-    </>
+
+      {/* Throttling counters. "100% peak" looks alarming on its own —
+          this panel turns it into "did they actually hit the wall, and
+          for how many days?" Anthropic stops accepting new work once a
+          rolling window hits its cap, so these days are when the user
+          was *blocked* (or routed to a slower model), not just busy. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          gap: 16,
+          padding: "14px 16px",
+          background: "var(--paper)",
+          border: "1px solid var(--rule)",
+        }}
+      >
+        <WallStat
+          label="Throttled (weekly limit)"
+          count={summary.wallHits7d}
+          hint="Days they exhausted the rolling 7-day budget — Claude refuses or routes to a fallback until the window rolls forward"
+        />
+        <WallStat
+          label="Throttled (5-hour burst)"
+          count={summary.wallHits5h}
+          hint="Days a 5-hour burst hit 100% — bursty work, mid-session throttling that resolves on the next 5-hour reset"
+        />
+      </div>
+    </section>
   );
 }
 
@@ -246,49 +209,6 @@ function peakColor(pct: number): string {
   if (pct >= 90) return "#c5283d";
   if (pct >= 70) return "#b58400";
   return "#2f8f5a";
-}
-
-// "5m ago" / "2h ago" / "yesterday" — relative format an admin can scan.
-// "live" if the daemon polled in the last 10 min (matches the daemon's
-// 5-min interval + a buffer for clock skew).
-function daemonFreshness(lastSeenAtMs: number | null): string {
-  if (lastSeenAtMs == null) return "—";
-  const ageMs = Date.now() - lastSeenAtMs;
-  if (ageMs < 0) return "just now";
-  if (ageMs < 10 * 60 * 1000) return "live · last poll just now";
-  if (ageMs < 60 * 60 * 1000) return `${Math.round(ageMs / 60_000)}m ago`;
-  if (ageMs < 24 * 60 * 60 * 1000) return `${Math.round(ageMs / 3_600_000)}h ago`;
-  if (ageMs < 7 * 86_400_000) return `${Math.round(ageMs / 86_400_000)}d ago — daemon stalled?`;
-  return `${Math.round(ageMs / 86_400_000)}d ago — daemon down`;
-}
-
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div>
-      <div
-        className="mono"
-        style={{
-          fontSize: 11,
-          letterSpacing: "0.1em",
-          color: "var(--mute)",
-          textTransform: "uppercase",
-        }}
-      >
-        {label}
-      </div>
-      <div
-        className="mono"
-        style={{ fontSize: 16, marginTop: 4, color: "var(--ink)" }}
-      >
-        {value}
-      </div>
-      {hint && (
-        <div style={{ fontSize: 11, marginTop: 4, color: "var(--mute)", lineHeight: 1.4 }}>
-          {hint}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function WallStat({ label, count, hint }: { label: string; count: number; hint: string }) {
