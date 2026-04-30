@@ -49,7 +49,7 @@ function etimeToSec(s: string): number {
 }
 
 function listActiveRuns(): ActiveRun[] {
-  let out = "";
+  let out: string;
   try {
     out = execSync("ps -axww -o pid,etime,time,command", { encoding: "utf-8" });
   } catch {

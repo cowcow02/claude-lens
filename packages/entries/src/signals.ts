@@ -203,7 +203,7 @@ export function classifySkill(name: string): SkillOrigin {
 const EXTERNAL_REF_PATTERNS: Array<{ kind: ExternalRefKind; re: RegExp }> = [
   { kind: "linear-kip", re: /\bKIP-\d+\b/i },
   { kind: "github-issue-pr", re: /\b(issue|pr|pull request)\s*#\d+\b|github\.com\/[^\s]+\/(issues|pull)\/\d+/i },
-  { kind: "branch-ref", re: /\b(branch|feat|fix|chore|refactor)[\/:]\s*[\w./-]+|on `[\w./-]+`/i },
+  { kind: "branch-ref", re: /\b(branch|feat|fix|chore|refactor)[/:]\s*[\w./-]+|on `[\w./-]+`/i },
   { kind: "url", re: /https?:\/\/\S+/ },
 ];
 

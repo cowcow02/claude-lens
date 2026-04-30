@@ -2,7 +2,10 @@ import { z } from "zod";
 import type {
   DayDigest, DayOutcome, WeekDigest, WorkingShape,
 } from "../types.js";
-import { flagGlossaryForPrompt, FLAG_GLOSSARY } from "../flag-glossary.js";
+// flagGlossaryForPrompt + FLAG_GLOSSARY were used by the prior JSON
+// payload's flag_glossary block; the transcript prompt drops that section
+// since the ANCHORING RULES already constrain output and flags rarely
+// surface in anchored findings.
 
 const DateRegex = /^\d{4}-\d{2}-\d{2}$/;
 

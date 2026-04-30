@@ -6,7 +6,6 @@ import {
   classifySkill, inferWorkingShape, isStockSubagentType,
 } from "./signals.js";
 import type { CallLLM, EnrichUsage } from "./enrich.js";
-import { computeCostUsd } from "./enrich.js";
 import { runClaudeSubprocess, parseAndValidate } from "./llm-runner.js";
 
 const IDLE_GAP_MS = 3 * 60 * 1000;
@@ -332,7 +331,7 @@ export function buildSessionSlice(
   // Per-turn payload
   const turnsOut: SliceTurn[] = [];
   let prevEndMs = sliceStartMs;
-  let userMsgChars: number[] = [];
+  const userMsgChars: number[] = [];
   let longUserMsgs = 0;
 
   turns.forEach((t, i) => {
@@ -564,7 +563,7 @@ The user prompt is a markdown document with these sections:
       - "Tools: tool1, tool2, ..."
       - "Skills loaded this turn: ..."
       - "Subagent dispatched: <type> — <description>" with a "  prompt: <preview>" sub-line if present
-      - "Signals: exit_plan×N · TodoWrite ops: M · interrupts: K · PR created: \"...\" · LONG-AUTONOMOUS RUN" (only when present)
+      - "Signals: exit_plan×N · TodoWrite ops: M · interrupts: K · PR created: '...' · LONG-AUTONOMOUS RUN" (only when present)
   • "## Candidate pins" — bullet per candidate: "[start_min–end_min] kind — key=value, key=value". These are deterministic moments; pick + label the most editorial 3-5.
 
 DURATION matters: a turn with active_min ≫ wall_min indicates the agent worked autonomously inside; idle_before_min indicates user-initiated gaps.
