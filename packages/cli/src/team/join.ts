@@ -49,20 +49,30 @@ export async function joinTeam(args: string[]) {
   // Both are non-fatal — failures fall back to the daemon's normal cycle.
   // Threading `config` directly avoids a stale-disk-read race during the
   // first paired moment.
+  // ALWAYS print outcome — even on zero. A silent run-and-no-message
+  // is the worst UX: the user can't tell whether backfill ran, partially
+  // ran, or didn't fire at all. Each branch prints exactly one line.
+  console.log("  Pushing local history…");
   const backfill = await runTeamBackfill(undefined, undefined, config);
-  if (backfill.insertedSnapshots > 0) {
+  if (backfill.error) {
+    console.log(`  ⚠ Backfill failed: ${backfill.error} — run 'fleetlens team backfill' to retry.`);
+  } else if (backfill.insertedSnapshots > 0) {
     console.log(
-      `  Backfilled ${backfill.insertedSnapshots} usage snapshot${backfill.insertedSnapshots === 1 ? "" : "s"} from local history.`,
+      `  ✓ Backfilled ${backfill.insertedSnapshots} usage snapshot${backfill.insertedSnapshots === 1 ? "" : "s"} from local history.`,
     );
-  } else if (backfill.error) {
-    console.log(`  Note: usage backfill skipped (${backfill.error}). Run 'fleetlens team backfill' to retry.`);
+  } else if (backfill.sentSnapshots > 0) {
+    console.log(`  ✓ ${backfill.sentSnapshots} snapshots already on server (deduped on capture time).`);
+  } else {
+    console.log("  · No local usage snapshots yet — daemon will start collecting.");
   }
 
   const sync = await runTeamSync(undefined, config);
-  if (sync.pushed > 0) {
-    console.log(`  Synced ${sync.pushed} day${sync.pushed === 1 ? "" : "s"} of session activity.`);
-  } else if (sync.error) {
-    console.log(`  Note: activity sync skipped (${sync.error}). Will retry on next daemon cycle.`);
+  if (sync.error) {
+    console.log(`  ⚠ Activity sync failed: ${sync.error} — will retry on next daemon cycle.`);
+  } else if (sync.pushed > 0) {
+    console.log(`  ✓ Synced ${sync.pushed} day${sync.pushed === 1 ? "" : "s"} of session activity.`);
+  } else {
+    console.log("  · No new session activity to push.");
   }
-  console.log("  Your daemon will push metrics on the next 5-minute cycle.");
+  console.log("  Daemon polls every 5 minutes — next push happens automatically.");
 }
