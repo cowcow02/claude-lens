@@ -1,17 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-// scheduler.ts uses setInterval and getPool(); we test it by mocking the module
-// to avoid actual database calls and actual timers.
-
 describe("startScheduler", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    // Reset the module so `started` is reset between tests
     vi.resetModules();
+    delete process.env.FLEETLENS_EXTERNAL_SCHEDULER;
   });
 
   it("starts without throwing", async () => {
-    // Mock getPool to return a fake pool
     vi.doMock("../../src/db/pool.js", () => ({
       getPool: () => ({
         query: vi.fn().mockResolvedValue({ rowCount: 0 }),
@@ -33,8 +29,11 @@ describe("startScheduler", () => {
     const { startScheduler } = await import("../../src/lib/scheduler.js");
     const setIntervalSpy = vi.spyOn(global, "setInterval");
     startScheduler();
-    startScheduler(); // second call is a no-op
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    startScheduler();
+    // Two setInterval calls from a single startScheduler invocation
+    // (ingest-log prune + checkForUpdates); the second startScheduler
+    // returns early and must not schedule more.
+    expect(setIntervalSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 
@@ -47,7 +46,6 @@ describe("startScheduler", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const { startScheduler } = await import("../../src/lib/scheduler.js");
     startScheduler();
-    // Advance timer by 1 hour to trigger the interval callback
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect(mockQuery).toHaveBeenCalledWith(
       expect.stringContaining("DELETE FROM ingest_log")
@@ -68,5 +66,108 @@ describe("startScheduler", () => {
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("prune failed"));
     vi.useRealTimers();
+  });
+
+  it("skips setInterval when FLEETLENS_EXTERNAL_SCHEDULER=1", async () => {
+    process.env.FLEETLENS_EXTERNAL_SCHEDULER = "1";
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({ query: vi.fn() }),
+    }));
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("runs checkNow on the hourly checkForUpdates tick", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+    }));
+    const checkNow = vi.fn().mockResolvedValue({
+      currentVersion: "0.4.2",
+      latestVersion: "0.5.0",
+      updateAvailable: true,
+      lastCheckedAt: new Date(),
+    });
+    vi.doMock("../../src/lib/self-update/service.js", () => ({ checkNow }));
+    vi.useFakeTimers();
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(checkNow).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("kicks off an initial checkNow ~5s after boot", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+    }));
+    const checkNow = vi.fn().mockResolvedValue({
+      currentVersion: "0.4.2",
+      latestVersion: null,
+      updateAvailable: false,
+      lastCheckedAt: new Date(),
+    });
+    vi.doMock("../../src/lib/self-update/service.js", () => ({ checkNow }));
+    vi.useFakeTimers();
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    expect(checkNow).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(checkNow).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("logs and swallows errors from checkForUpdates ticks", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: 0 }),
+      }),
+    }));
+    const checkNow = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.doMock("../../src/lib/self-update/service.js", () => ({ checkNow }));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    const { startScheduler } = await import("../../src/lib/scheduler.js");
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("checkForUpdates failed"),
+      expect.any(Error),
+    );
+    vi.useRealTimers();
+  });
+});
+
+describe("pruneIngestLog", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("returns the row count of deleted rows", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: 7 }),
+      }),
+    }));
+    const { pruneIngestLog } = await import("../../src/lib/scheduler.js");
+    await expect(pruneIngestLog()).resolves.toBe(7);
+  });
+
+  it("returns 0 when rowCount is null", async () => {
+    vi.doMock("../../src/db/pool.js", () => ({
+      getPool: () => ({
+        query: vi.fn().mockResolvedValue({ rowCount: null }),
+      }),
+    }));
+    const { pruneIngestLog } = await import("../../src/lib/scheduler.js");
+    await expect(pruneIngestLog()).resolves.toBe(0);
   });
 });

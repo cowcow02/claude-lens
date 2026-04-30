@@ -61,6 +61,22 @@ export type SessionEvent = {
   toolResult?: unknown;
   /** raw attachment type when role=system */
   attachmentType?: string;
+  /** Set on the first assistant event after the prompt cache was
+   *  invalidated. Two triggers: `"idle"` (previous API call > 5 min ago,
+   *  TTL expired) or `"compact"` (a `compact_boundary` summarized the
+   *  conversation — the new summary must be written to a fresh cache). */
+  coldResume?: {
+    trigger: "idle" | "compact";
+    gapMs: number;
+    writeTokens: number;
+    /** cacheWrite / (cacheWrite + cacheRead). ~1.0 is fully cold; compact
+     *  rebuilds sit 0.5–0.75 since some post-summary context warms fast. */
+    writeRatio: number;
+    compact?: {
+      trigger: "manual" | "auto";
+      preTokens: number;
+    };
+  };
   /** full raw JSONL line — for debug panel */
   raw: unknown;
   /** Set when this user event is a cross-session team message delivery.
@@ -116,6 +132,11 @@ export type SessionMeta = {
   linesRemoved?: number;
   /** derived: number of unique files touched (Edit + Write) */
   filesEdited?: number;
+  /** derived: count of turns flagged with `coldResume` (idle + compact) */
+  coldResumeCount?: number;
+  /** derived: sum of cacheWrite across flagged turns — the "cache rebuild
+   *  tax" billed against the 5h budget at 1.25× base input price. */
+  cacheRebuildTokens?: number;
   /** derived: sum of event-to-event gaps under the idle threshold
    *  (default 3 minutes) — a close approximation of "how long was
    *  the agent actively working" without counting user-away time,

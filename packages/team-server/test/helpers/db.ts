@@ -15,6 +15,7 @@ export async function resetDb(): Promise<ReturnType<typeof getPool>> {
     TRUNCATE TABLE
       events, daily_rollups, ingest_log, invites,
       memberships, sessions, server_config,
+      update_check_cache,
       user_accounts, teams
     RESTART IDENTITY CASCADE
   `);

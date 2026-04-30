@@ -1,98 +1,159 @@
-export const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS user_accounts (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  email           text UNIQUE NOT NULL,
-  password_hash   text NOT NULL,
-  display_name    text,
-  is_staff        boolean NOT NULL DEFAULT false,
-  email_verified_at timestamptz,
-  created_at      timestamptz NOT NULL DEFAULT now()
+import {
+  pgTable,
+  uuid,
+  text,
+  boolean,
+  timestamp,
+  date,
+  integer,
+  bigint,
+  bigserial,
+  jsonb,
+  index,
+  uniqueIndex,
+  check,
+  primaryKey,
+} from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+
+export const userAccounts = pgTable("user_accounts", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  displayName: text("display_name"),
+  isStaff: boolean("is_staff").notNull().default(false),
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const teams = pgTable("teams", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  retentionDays: integer("retention_days").notNull().default(365),
+  resendApiKeyEnc: text("resend_api_key_enc"),
+  customDomain: text("custom_domain"),
+  settings: jsonb("settings").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const memberships = pgTable(
+  "memberships",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userAccountId: uuid("user_account_id")
+      .notNull()
+      .references(() => userAccounts.id, { onDelete: "cascade" }),
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    bearerTokenHash: text("bearer_token_hash"),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => ({
+    roleCheck: check("memberships_role_check", sql`${t.role} IN ('admin','member')`),
+    uniqUserTeam: uniqueIndex("memberships_user_account_id_team_id_key").on(t.userAccountId, t.teamId),
+    teamActive: index("idx_memberships_team_active").on(t.teamId).where(sql`${t.revokedAt} IS NULL`),
+    bearer: index("idx_memberships_bearer").on(t.bearerTokenHash).where(sql`${t.bearerTokenHash} IS NOT NULL`),
+  }),
 );
 
-CREATE TABLE IF NOT EXISTS teams (
-  id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  slug                   text UNIQUE NOT NULL,
-  name                   text NOT NULL,
-  retention_days         int  NOT NULL DEFAULT 365,
-  resend_api_key_enc     text,
-  custom_domain          text,
-  settings               jsonb NOT NULL DEFAULT '{}',
-  created_at             timestamptz NOT NULL DEFAULT now()
+export const invites = pgTable(
+  "invites",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by").notNull().references(() => userAccounts.id),
+    email: text("email"),
+    tokenHash: text("token_hash").notNull().unique(),
+    role: text("role").notNull().default("member"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    roleCheck: check("invites_role_check", sql`${t.role} IN ('admin','member')`),
+  }),
 );
 
-CREATE TABLE IF NOT EXISTS memberships (
-  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_account_id   uuid NOT NULL REFERENCES user_accounts ON DELETE CASCADE,
-  team_id           uuid NOT NULL REFERENCES teams ON DELETE CASCADE,
-  role              text NOT NULL CHECK (role IN ('admin','member')),
-  bearer_token_hash text,
-  joined_at         timestamptz NOT NULL DEFAULT now(),
-  last_seen_at     timestamptz,
-  revoked_at        timestamptz,
-  UNIQUE (user_account_id, team_id)
-);
-CREATE INDEX IF NOT EXISTS idx_memberships_team_active ON memberships (team_id) WHERE revoked_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_memberships_bearer ON memberships (bearer_token_hash) WHERE bearer_token_hash IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS invites (
-  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  team_id           uuid NOT NULL REFERENCES teams ON DELETE CASCADE,
-  created_by        uuid NOT NULL REFERENCES user_accounts,
-  email             text,
-  token_hash        text NOT NULL UNIQUE,
-  role              text NOT NULL DEFAULT 'member' CHECK (role IN ('admin','member')),
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  used_at           timestamptz,
-  expires_at        timestamptz NOT NULL
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userAccountId: uuid("user_account_id")
+      .notNull()
+      .references(() => userAccounts.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => ({
+    userIdx: index("idx_sessions_user").on(t.userAccountId),
+  }),
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_account_id  uuid NOT NULL REFERENCES user_accounts ON DELETE CASCADE,
-  token_hash       text NOT NULL UNIQUE,
-  created_at       timestamptz NOT NULL DEFAULT now(),
-  expires_at       timestamptz NOT NULL,
-  last_used_at     timestamptz
+export const dailyRollups = pgTable(
+  "daily_rollups",
+  {
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id").notNull().references(() => memberships.id, { onDelete: "cascade" }),
+    day: date("day").notNull(),
+    agentTimeMs: bigint("agent_time_ms", { mode: "number" }).notNull().default(0),
+    sessions: integer("sessions").notNull().default(0),
+    toolCalls: integer("tool_calls").notNull().default(0),
+    turns: integer("turns").notNull().default(0),
+    tokensInput: bigint("tokens_input", { mode: "number" }).notNull().default(0),
+    tokensOutput: bigint("tokens_output", { mode: "number" }).notNull().default(0),
+    tokensCacheRead: bigint("tokens_cache_read", { mode: "number" }).notNull().default(0),
+    tokensCacheWrite: bigint("tokens_cache_write", { mode: "number" }).notNull().default(0),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.teamId, t.membershipId, t.day] }),
+    teamDay: index("idx_daily_rollups_team_day").on(t.teamId, sql`${t.day} DESC`),
+  }),
 );
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_account_id);
 
-CREATE TABLE IF NOT EXISTS daily_rollups (
-  team_id           uuid NOT NULL REFERENCES teams ON DELETE CASCADE,
-  membership_id     uuid NOT NULL REFERENCES memberships ON DELETE CASCADE,
-  day               date NOT NULL,
-  agent_time_ms     bigint NOT NULL DEFAULT 0,
-  sessions          int NOT NULL DEFAULT 0,
-  tool_calls        int NOT NULL DEFAULT 0,
-  turns             int NOT NULL DEFAULT 0,
-  tokens_input      bigint NOT NULL DEFAULT 0,
-  tokens_output     bigint NOT NULL DEFAULT 0,
-  tokens_cache_read  bigint NOT NULL DEFAULT 0,
-  tokens_cache_write bigint NOT NULL DEFAULT 0,
-  PRIMARY KEY (team_id, membership_id, day)
+export const events = pgTable(
+  "events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }),
+    actorId: uuid("actor_id").references(() => userAccounts.id),
+    action: text("action").notNull(),
+    payload: jsonb("payload").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    teamCreated: index("idx_events_team_created").on(t.teamId, sql`${t.createdAt} DESC`),
+  }),
 );
-CREATE INDEX IF NOT EXISTS idx_daily_rollups_team_day ON daily_rollups (team_id, day DESC);
 
-CREATE TABLE IF NOT EXISTS events (
-  id           bigserial PRIMARY KEY,
-  team_id      uuid REFERENCES teams ON DELETE CASCADE,
-  actor_id     uuid REFERENCES user_accounts,
-  action       text NOT NULL,
-  payload      jsonb NOT NULL DEFAULT '{}',
-  created_at   timestamptz NOT NULL DEFAULT now()
+export const ingestLog = pgTable(
+  "ingest_log",
+  {
+    ingestId: text("ingest_id").primaryKey(),
+    teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+    membershipId: uuid("membership_id").notNull().references(() => memberships.id, { onDelete: "cascade" }),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    received: index("idx_ingest_log_received").on(t.receivedAt),
+  }),
 );
-CREATE INDEX IF NOT EXISTS idx_events_team_created ON events (team_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS ingest_log (
-  ingest_id      text PRIMARY KEY,
-  team_id        uuid NOT NULL REFERENCES teams ON DELETE CASCADE,
-  membership_id  uuid NOT NULL REFERENCES memberships ON DELETE CASCADE,
-  received_at    timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_ingest_log_received ON ingest_log (received_at);
+export const serverConfig = pgTable("server_config", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
-CREATE TABLE IF NOT EXISTS server_config (
-  key        text PRIMARY KEY,
-  value      text NOT NULL,
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-`;
+export const updateCheckCache = pgTable("update_check_cache", {
+  key: text("key").primaryKey(),
+  currentVersion: text("current_version"),
+  latestVersion: text("latest_version"),
+  updateAvailable: boolean("update_available").notNull().default(false),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }).notNull().defaultNow(),
+  lastUpdateAttempt: jsonb("last_update_attempt"),
+});

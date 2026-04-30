@@ -31,6 +31,8 @@ fleetlens/                            ← github.com/cowcow02/fleetlens
 
 **Web (`apps/web`)** — Next 16 App Router. Server components read from `@claude-lens/parser/fs` per request, `LiveRefresher` subscribes to `/api/events` SSE and calls `router.refresh()` on file changes.
 
+**Team-server (`packages/team-server`)** — separate Next.js service for the hosted Team Edition. Ships as a Docker image to GHCR (`ghcr.io/cowcow02/fleetlens-team-server`). Has its own release track: `server-v*` tags, self-contained `packages/team-server/package.json` version, migrations under `src/db/migrations/` managed by Drizzle. See the "Versioning" and "Release process" sections below.
+
 ---
 
 ## Core domain concepts
@@ -95,11 +97,27 @@ This is the flow I use after any change to parser, web, or CLI. Without `prepare
 
 ## Versioning
 
-**All packages share a single version.** The root `package.json` is the source of truth. `scripts/version-sync.mjs` runs on every `npm version` invocation and propagates the root version into `packages/parser`, `packages/cli`, and `apps/web`.
+**Two independent version tracks:**
 
-**Never edit version numbers in sub-package `package.json` files manually.** Always go through `npm version <patch|minor|major>` at the repo root.
+| Track | Source of truth | Synced to | Released as | Distribution |
+|---|---|---|---|---|
+| **CLI** | root `package.json` | `packages/parser`, `packages/cli`, `apps/web` via `scripts/version-sync.mjs` | `v<X.Y.Z>` tag | npm (`fleetlens` package) |
+| **Team-server** | `packages/team-server/package.json` (self-contained) | nothing — team-server stands alone | `server-v<X.Y.Z>` tag | GHCR image |
 
-The web UI reads its version via `import pkg from "../package.json" with { type: "json" }` in `apps/web/app/layout.tsx` and passes it to the sidebar, so the version shown in the UI is always in lockstep with the installed package.
+**Never edit sub-package version fields manually.** Always go through the right release command:
+
+- CLI: `npm version <patch|minor|major>` at the repo root.
+- Team-server: bump the version and create the commit + tag manually — from the repo root:
+  ```bash
+  (cd packages/team-server && npm version <patch|minor|major> --no-git-tag-version)
+  V=$(jq -r .version packages/team-server/package.json)
+  git add packages/team-server/package.json
+  git commit -m "$V"
+  git tag -a "server-v$V" -m "server-v$V"
+  ```
+  `--no-git-tag-version` is required because `npm version` relies on `@npmcli/git`'s `is()` check (a `stat()` for `.git` at its own cwd) which returns false from any subdirectory — so npm silently drops the commit + tag step. Tagging manually sidesteps that. The `tag-version-prefix=server-v` in `packages/team-server/.npmrc` is kept for convention and would be used if a future npm release fixes the sub-directory detection.
+
+The web UI reads its version via `import pkg from "../package.json" with { type: "json" }` in `apps/web/app/layout.tsx` and passes it to the sidebar. The team-server UI reads `process.env.APP_VERSION`, baked into the Docker image at build time from `packages/team-server/package.json`.
 
 ---
 
@@ -112,12 +130,15 @@ The web UI reads its version via `import pkg from "../package.json" with { type:
 - `minor` (0.N.0) — new features, new commands, notable improvements
 - `major` (N.0.0) — breaking changes (held until 1.0)
 
-**Commands:**
+The CLI and team-server release on independent tracks. The CLI workflow does NOT trigger image builds; the team-server workflow does NOT trigger npm publishing.
+
+### Releasing the CLI (`fleetlens` npm package)
+
 ```bash
-pnpm test && pnpm verify     # Must pass — CI runs these and will fail the release otherwise
-npm version patch            # or minor/major — bumps + syncs sub-packages + commits + tags
+pnpm test && pnpm verify      # Must pass — CI runs these and will fail the release otherwise
+npm version patch             # or minor/major — bumps root + syncs parser/cli/web
 git push origin master
-git push origin v<version>   # pushing the tag is what actually triggers publish
+git push origin v<version>    # pushing the tag triggers .github/workflows/release.yml
 ```
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which:
@@ -127,6 +148,31 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`, which:
 4. Creates a GitHub Release with auto-generated notes
 
 The agent does not need npm credentials. The workflow runs with the stored token.
+
+### Releasing team-server (`ghcr.io/cowcow02/fleetlens-team-server` image)
+
+```bash
+pnpm -F @claude-lens/team-server test                              # team-server tests must pass
+(cd packages/team-server && npm version patch --no-git-tag-version) # or minor/major — bumps team-server only
+V=$(jq -r .version packages/team-server/package.json)
+git add packages/team-server/package.json
+git commit -m "$V"
+git tag -a "server-v$V" -m "server-v$V"
+git push origin master
+git push origin "server-v$V"                                        # pushing the server-v* tag triggers publish-team-server-image.yml
+```
+
+See the "Versioning" section above for why `--no-git-tag-version` + manual git commit/tag is necessary (npm can't create commits from a sub-directory).
+
+Pushing a `server-v*` tag triggers `.github/workflows/publish-team-server-image.yml`, which:
+
+1. Reads `APP_VERSION` from `packages/team-server/package.json`.
+2. Asserts the tag suffix equals the `package.json` version; fails otherwise.
+3. Builds the Docker image with `APP_VERSION` baked in.
+4. Publishes the image to GHCR as `:<X.Y.Z>` + `:latest` + `:<sha7>`.
+5. Builds `migrations-manifest.json` from `packages/team-server/src/db/migrations/` and publishes it as a GitHub Release asset on `server-v<version>`.
+
+Each migration SQL file must begin with a `-- description: ...` header so the manifest captures a human-readable summary. See `packages/team-server/src/db/MIGRATIONS.md` for the author workflow and expand/contract rules.
 
 ### Publishing gotchas (learned the hard way)
 - **npm's similarity check rejects names close to existing packages.** `cclens` was blocked by `cc-lens`, then `claudelens` was blocked by `claude-lens`. The fix is either (a) a scoped package `@<user>/<name>` or (b) a distinctively different name. `fleetlens` passed because no `fleet-lens` existed.

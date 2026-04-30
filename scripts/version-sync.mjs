@@ -6,6 +6,9 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const version = rootPkg.version;
 
+// NOTE: packages/team-server/package.json is deliberately NOT synced.
+// Team-server has its own release cadence (server-v* tags) decoupled from
+// the CLI's root versioning. See docs/superpowers/specs/2026-04-22-team-edition-self-update-design.md.
 const targets = [
   "packages/cli/package.json",
   "packages/parser/package.json",

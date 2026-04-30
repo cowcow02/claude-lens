@@ -146,6 +146,198 @@ describe("parseTranscript", () => {
     const { meta } = parseTranscript(lines);
     expect(meta.toolCallCount).toBe(2);
   });
+
+  it("flags cold-resume turns when the cache expired during idle", () => {
+    // Turn 1: normal warm request (small cache write, big cache read)
+    // Turn 2: more than 5 min later, cache expired — huge cache write,
+    //         zero cache read. Should be flagged coldResume.
+    const lines = [
+      makeUser("start", "2026-04-10T10:00:00.000Z"),
+      makeAssistantText("hi", "2026-04-10T10:00:01.000Z", {
+        messageId: "msg-warm",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 20,
+          cache_read_input_tokens: 40_000,
+          cache_creation_input_tokens: 500,
+        },
+      }),
+      makeUser("resume after lunch", "2026-04-10T14:00:00.000Z"),
+      makeAssistantText("back", "2026-04-10T14:00:05.000Z", {
+        messageId: "msg-cold",
+        usage: {
+          input_tokens: 10,
+          output_tokens: 30,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 42_000,
+        },
+      }),
+    ];
+    const { meta, events } = parseTranscript(lines);
+    const warm = events.find((e) => e.messageId === "msg-warm")!;
+    const cold = events.find((e) => e.messageId === "msg-cold")!;
+    expect(warm.coldResume).toBeUndefined();
+    expect(cold.coldResume).toBeDefined();
+    expect(cold.coldResume!.trigger).toBe("idle");
+    expect(cold.coldResume!.writeTokens).toBe(42_000);
+    expect(cold.coldResume!.writeRatio).toBeCloseTo(1, 2);
+    expect(cold.coldResume!.gapMs).toBe(4 * 60 * 60 * 1000 + 4000);
+    expect(meta.coldResumeCount).toBe(1);
+    expect(meta.cacheRebuildTokens).toBe(42_000);
+  });
+
+  it("flags the first turn after a compact_boundary as a compact rebuild", () => {
+    // Two warm turns, then a manual /compact boundary, then a fresh turn
+    // that rewrites the summarized prefix into cache. The idle gap here is
+    // tiny (5 seconds) so the idle rule alone wouldn't catch it.
+    const compactBoundary = {
+      type: "system",
+      subtype: "compact_boundary",
+      content: "Conversation compacted",
+      timestamp: "2026-04-10T10:05:00.000Z",
+      uuid: "cb-1",
+      compactMetadata: { trigger: "manual", preTokens: 500_000 },
+      sessionId: "sess-1",
+    };
+    const lines = [
+      makeUser("q1", "2026-04-10T10:00:00.000Z"),
+      makeAssistantText("a1", "2026-04-10T10:00:01.000Z", {
+        messageId: "m1",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 20,
+          cache_read_input_tokens: 50_000,
+          cache_creation_input_tokens: 500,
+        },
+      }),
+      compactBoundary,
+      makeUser("continue", "2026-04-10T10:05:03.000Z"),
+      makeAssistantText("picking up", "2026-04-10T10:05:05.000Z", {
+        messageId: "m-compact",
+        usage: {
+          input_tokens: 10,
+          output_tokens: 30,
+          cache_read_input_tokens: 12_000,
+          cache_creation_input_tokens: 30_000,
+        },
+      }),
+    ];
+    const { meta, events } = parseTranscript(lines);
+    const warm = events.find((e) => e.messageId === "m1")!;
+    const rebuilt = events.find((e) => e.messageId === "m-compact")!;
+    expect(warm.coldResume).toBeUndefined();
+    expect(rebuilt.coldResume).toBeDefined();
+    expect(rebuilt.coldResume!.trigger).toBe("compact");
+    expect(rebuilt.coldResume!.compact?.trigger).toBe("manual");
+    expect(rebuilt.coldResume!.compact?.preTokens).toBe(500_000);
+    expect(rebuilt.coldResume!.writeTokens).toBe(30_000);
+    expect(meta.coldResumeCount).toBe(1);
+    expect(meta.cacheRebuildTokens).toBe(30_000);
+  });
+
+  it("propagates coldResume to thinking/tool-use siblings sharing a messageId", () => {
+    // One API response that arrives as three lines in the JSONL: thinking +
+    // tool_use + text, all sharing messageId "m-cold". The flag must land
+    // on every sibling so the UI can surface it regardless of which row
+    // the presentation layer chooses.
+    const usage = {
+      input_tokens: 5,
+      output_tokens: 10,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 50_000,
+    };
+    const lines = [
+      makeUser("warm", "2026-04-10T10:00:00.000Z"),
+      makeAssistantText("ok", "2026-04-10T10:00:01.000Z", {
+        messageId: "m-warm",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 5,
+          cache_read_input_tokens: 40_000,
+          cache_creation_input_tokens: 200,
+        },
+      }),
+      makeUser("back after lunch", "2026-04-10T14:00:00.000Z"),
+      // three lines, same messageId, different content types
+      {
+        type: "assistant",
+        uuid: "a-think",
+        timestamp: "2026-04-10T14:00:01.000Z",
+        sessionId: "sess-1",
+        message: {
+          id: "m-cold",
+          role: "assistant",
+          model: "claude-opus-4-6",
+          content: [{ type: "thinking", thinking: "let me catch up" }],
+          usage,
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "a-tool",
+        timestamp: "2026-04-10T14:00:02.000Z",
+        sessionId: "sess-1",
+        message: {
+          id: "m-cold",
+          role: "assistant",
+          model: "claude-opus-4-6",
+          content: [{ type: "tool_use", id: "tu-1", name: "Read", input: {} }],
+          usage,
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "a-text",
+        timestamp: "2026-04-10T14:00:03.000Z",
+        sessionId: "sess-1",
+        message: {
+          id: "m-cold",
+          role: "assistant",
+          model: "claude-opus-4-6",
+          content: [{ type: "text", text: "here" }],
+          usage,
+        },
+      },
+    ];
+    const { events } = parseTranscript(lines);
+    const coldEvents = events.filter((e) => e.messageId === "m-cold");
+    expect(coldEvents).toHaveLength(3);
+    for (const e of coldEvents) {
+      expect(e.coldResume).toBeDefined();
+      expect(e.coldResume!.trigger).toBe("idle");
+      expect(e.coldResume!.writeTokens).toBe(50_000);
+    }
+  });
+
+  it("does not flag cold-resume when cache read dominates (warm turn)", () => {
+    const lines = [
+      makeUser("q1", "2026-04-10T10:00:00.000Z"),
+      makeAssistantText("a1", "2026-04-10T10:00:01.000Z", {
+        messageId: "m1",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 20,
+          cache_read_input_tokens: 10_000,
+          cache_creation_input_tokens: 200,
+        },
+      }),
+      // 10 min later — past TTL — but cacheRead still dominates (cache hit
+      // via 1h extended tier). Should NOT be flagged.
+      makeUser("q2", "2026-04-10T10:10:00.000Z"),
+      makeAssistantText("a2", "2026-04-10T10:10:05.000Z", {
+        messageId: "m2",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 20,
+          cache_read_input_tokens: 10_200,
+          cache_creation_input_tokens: 200,
+        },
+      }),
+    ];
+    const { meta } = parseTranscript(lines);
+    expect(meta.coldResumeCount).toBe(0);
+    expect(meta.cacheRebuildTokens).toBe(0);
+  });
 });
 
 describe("buildPresentation", () => {
