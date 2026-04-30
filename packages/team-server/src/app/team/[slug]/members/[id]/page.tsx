@@ -12,6 +12,7 @@ import { tierEntry } from "../../../../../lib/plan-tiers";
 import { formatAgentTime, formatTokens } from "../../../../../lib/format";
 import { MemberProfile } from "../../../../../components/member-profile";
 import { MemberPlanBlock } from "../../../../../components/member-plan-block";
+import { PairCliPanel } from "../../../../../components/pair-cli-panel";
 
 export default async function MemberPage({
   params,
@@ -187,6 +188,11 @@ export default async function MemberPage({
 
       {/* ─── 3. DAILY ACTIVITY (per-day shape + drill-down table) ───── */}
       <MemberProfile rollups={rollups} />
+
+      {/* Self-service CLI pairing — visible only when the viewer is the
+          seat owner. Mints a fresh device token on click; stale tokens
+          on other machines stop working immediately. */}
+      {isSelf && <PairCliPanel teamSlug={slug} />}
     </>
   );
 }
