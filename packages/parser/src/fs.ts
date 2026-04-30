@@ -33,9 +33,12 @@ import {
   type CalibrationEvent,
   type PlanTier,
   type RateSource,
-  computeUserRates,
+  buildPriorRateMap,
+  buildSpendIndex,
+  getAnchoredOpts,
+  groupSnapsByCycle,
   modelFamily,
-  predictUtilization,
+  predictAnchored,
 } from "./calibration.js";
 
 export const DEFAULT_ROOT = path.join(os.homedir(), ".claude", "projects");
@@ -1061,65 +1064,18 @@ function inferResetsAt(
 }
 
 /**
- * Map each unique reset_ts (hour-rounded) → the snap_ts of the earliest
- * snapshot that reports it. That snap_ts is the moment Anthropic's
- * `resets_at` value flipped to a new cycle, i.e. the actual cycle start.
- *
- * Why we can't just use the previous distinct reset_ts as the start:
- * Anthropic occasionally resets a cycle early (compensation, manual
- * adjustments). On 04-16 the user's cycle was supposed to end at
- * 04-17 05:00 but reset early at ~04-16 20:00. The previous cycle's
- * distinct reset_ts (04-17 05:00) is the SCHEDULED end of the prior
- * cycle, not when the new cycle actually started.
- */
-function cycleStartIndex(snapResets: Array<[number, number]>): Map<number, number> {
-  const HOUR = 3_600_000;
-  const out = new Map<number, number>();
-  for (const [snapMs, resetMs] of snapResets) {
-    const k = Math.round(resetMs / HOUR) * HOUR;
-    const existing = out.get(k);
-    if (existing === undefined || snapMs < existing) out.set(k, snapMs);
-  }
-  return out;
-}
-
-/**
- * Window start for predicting at any timestamp. Falls back to the naive
- * `reset - cycleHours` for periods before the daemon was running (no
- * cycle-start event to anchor to). When daemon data covers the cycle,
- * uses the actual cycle-flip event so we don't over-count prior cycle's
- * tail or under-count by mis-anchoring on a scheduled reset that didn't
- * fire.
- */
-function clippedWindowStartMs(
-  resetMs: number,
-  cycleStarts: Map<number, number>,
-  cycleHours: number,
-): number {
-  const HOUR = 3_600_000;
-  const k = Math.round(resetMs / HOUR) * HOUR;
-  const cycleStart = cycleStarts.get(k);
-  if (cycleStart !== undefined) return cycleStart;
-  return resetMs - cycleHours * HOUR;
-}
-
-/**
  * Build a continuous predicted-utilization curve aligned with daemon
- * snapshots. This replaces the Python /tmp/calibrate_dollar.py sidecar
- * that previously generated ~/.cclens/calibration-debug.json.
+ * snapshots. The predictor passes EXACTLY through every observed OAuth
+ * snapshot via spend-weighted interpolation between adjacent snaps in the
+ * same cycle. Past the latest snap of a cycle (forward extrapolation) it
+ * uses a $/pp rate that blends the active cycle's own observed rate with
+ * a robust median of recent prior cycles. See predictAnchored in
+ * calibration.ts.
  *
  * Cold-start back-fill: the curve extends up to 14 days before the first
  * snapshot so /usage shows estimates from JSONL spend even when the daemon
  * is brand new. After the first snapshot, real values are paired with
  * predictions for direct comparison.
- *
- * Window definition is naive (cycle_end − cycle_hours). It's MAE ~1–2pp
- * on full 7-day cycles but can over-count when Anthropic resets a cycle
- * early (4-day cycles, etc).
- *
- * The $/pp rate is per-user calibrated against this account's own completed
- * cycles when at least one well-covered cycle has been observed; otherwise
- * it falls back to the tier default. See computeUserRates in calibration.ts.
  */
 export function buildCalibrationCurve(
   events: CalibrationEvent[],
@@ -1128,11 +1084,18 @@ export function buildCalibrationCurve(
   granularityMin = 30,
 ): CalibrationCurve | null {
   if (snapshots.length === 0 || events.length === 0) return null;
-  const userRates = computeUserRates(events, snapshots, tier);
-  const rate7d = userRates.rate7d;
-  const rate5h = userRates.rate5h;
 
-  // (snap_ts, reset_ts) pairs, sorted
+  const spend = buildSpendIndex(events);
+  const opts5h = getAnchoredOpts("5h", tier);
+  const opts7d = getAnchoredOpts("7d", tier);
+
+  const snapsByCycle5h = groupSnapsByCycle(snapshots, (s) => s.five_hour);
+  const snapsByCycle7d = groupSnapsByCycle(snapshots, (s) => s.seven_day);
+  const priors5h = buildPriorRateMap(snapsByCycle5h, spend);
+  const priors7d = buildPriorRateMap(snapsByCycle7d, spend);
+
+  // (snap_ts, reset_ts) pairs for inferResetsAt — used to attribute each
+  // curve-point timestamp to the cycle it belongs to.
   const snap5h: Array<[number, number]> = [];
   const snap7d: Array<[number, number]> = [];
   for (const s of snapshots) {
@@ -1147,12 +1110,7 @@ export function buildCalibrationCurve(
       if (!Number.isNaN(r)) snap7d.push([ms, r]);
     }
   }
-
-  // For each cycle (keyed by hour-rounded resets_at), the snap_ts of the
-  // earliest snapshot reporting it = when the cycle actually started.
   const HOUR = 3_600_000;
-  const cycleStarts5h = cycleStartIndex(snap5h);
-  const cycleStarts7d = cycleStartIndex(snap7d);
 
   // Real-value lookup at minute granularity
   const realByMinute = new Map<number, [number | null, number | null]>();
@@ -1186,15 +1144,19 @@ export function buildCalibrationCurve(
 
     const r5 = inferResetsAt(cur, snap5h, 5);
     const r7 = inferResetsAt(cur, snap7d, 168);
-    const start5 = r5 != null
-      ? clippedWindowStartMs(r5, cycleStarts5h, 5)
-      : cur - 5 * HOUR;
-    const start7 = r7 != null
-      ? clippedWindowStartMs(r7, cycleStarts7d, 168)
-      : cur - 168 * HOUR;
+    // groupSnapsByCycle keys are hour-rounded so sub-second jitter on
+    // resets_at doesn't fragment a cycle into multiple buckets. Round
+    // the inferResetsAt result the same way so the lookup hits.
+    const r5k = r5 != null ? Math.round(r5 / HOUR) * HOUR : null;
+    const r7k = r7 != null ? Math.round(r7 / HOUR) * HOUR : null;
 
-    const p5 = predictUtilization(events, start5, cur, rate5h);
-    const p7 = predictUtilization(events, start7, cur, rate7d);
+    const cycle5Snaps = r5k != null ? (snapsByCycle5h.get(r5k) ?? []) : [];
+    const cycle7Snaps = r7k != null ? (snapsByCycle7d.get(r7k) ?? []) : [];
+    const cycleEnd5 = r5k ?? cur + 5 * HOUR;
+    const cycleEnd7 = r7k ?? cur + 168 * HOUR;
+
+    const p5 = predictAnchored(spend, cycle5Snaps, priors5h, cycleEnd5, 5, cur, opts5h);
+    const p7 = predictAnchored(spend, cycle7Snaps, priors7d, cycleEnd7, 168, cur, opts7d);
 
     curve.push({
       ts: new Date(cur).toISOString(),
@@ -1202,22 +1164,30 @@ export function buildCalibrationCurve(
       pred_5h: Math.max(0, Math.min(200, p5)),
       real_7d: real7,
       pred_7d: Math.max(0, Math.min(200, p7)),
-      cycle_end_5h: r5 != null ? new Date(r5).toISOString() : null,
-      cycle_end_7d: r7 != null ? new Date(r7).toISOString() : null,
+      cycle_end_5h: r5k != null ? new Date(r5k).toISOString() : null,
+      cycle_end_7d: r7k != null ? new Date(r7k).toISOString() : null,
     });
     cur += stepMs;
   }
 
+  // The predictor is "user_calibrated" once we have any prior cycle to draw
+  // a fallback rate from; before that, forward extrapolation falls back on
+  // the tier default. Surface this so the UI can label confidence.
+  const has7dPriors = priors7d.size > 0;
+  const has5hPriors = priors5h.size > 0;
+  const rateSource7d: RateSource = has7dPriors ? "user_calibrated" : "tier_default";
+  const rateSource5h: RateSource = has5hPriors ? "user_calibrated" : "tier_default";
+
   return {
-    model: `$-rate-${tier}`,
+    model: `anchored-${tier}`,
     tier,
-    rate_per_pct: rate7d,
-    rate_per_pct_5h: rate5h,
-    rate_per_pct_7d: rate7d,
-    rate_source_5h: userRates.source5h,
-    rate_source_7d: userRates.source7d,
-    cycles_used_5h: userRates.cyclesUsed5h,
-    cycles_used_7d: userRates.cyclesUsed7d,
+    rate_per_pct: opts7d.tierDefault,
+    rate_per_pct_5h: opts5h.tierDefault,
+    rate_per_pct_7d: opts7d.tierDefault,
+    rate_source_5h: rateSource5h,
+    rate_source_7d: rateSource7d,
+    cycles_used_5h: priors5h.size,
+    cycles_used_7d: priors7d.size,
     granularity_min: granularityMin,
     curve,
     first_snapshot_ts: snapshots[0]!.captured_at ?? null,

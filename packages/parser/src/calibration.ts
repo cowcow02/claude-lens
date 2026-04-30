@@ -98,148 +98,290 @@ export function predictUtilization(
 }
 
 // ──────────────────────────────────────────────────────────────────
-//                Per-user rate calibration from completed cycles
+//          Snapshot-anchored utilization predictor
 // ──────────────────────────────────────────────────────────────────
+//
+// The predictor builds a curve that passes EXACTLY through every observed
+// OAuth snapshot. Between two snapshots in the same cycle, it interpolates
+// linearly weighted by JSONL spend. Past the latest snapshot of an
+// in-progress cycle (or in any daemon-gap before the first snapshot of a
+// cycle) it falls back to a $/pp rate that blends the cycle's own observed
+// rate with a robust median of recent prior cycles.
+//
+// This eliminates rate-modeling error on observed history (residual ~0)
+// and only leaves the forward-extrapolation residual past the last poll.
 
 // Minimal structural shape of a daemon snapshot — defined here so this module
 // stays free of fs/network deps. Compatible with the richer UsageSnapshot
 // types in cli/usage/api.ts and apps/web/lib/usage-data.ts.
+export type RateSource = "user_calibrated" | "tier_default";
+
 export type SnapshotForCalibration = {
   captured_at?: string | null;
   five_hour?: { utilization?: number | null; resets_at?: string | null } | null;
   seven_day?: { utilization?: number | null; resets_at?: string | null } | null;
 };
 
-export type RateSource = "user_calibrated" | "tier_default";
-
-export type UserRates = {
-  rate7d: number;
-  rate5h: number;
-  cyclesUsed7d: number;
-  cyclesUsed5h: number;
-  source7d: RateSource;
-  source5h: RateSource;
-};
+export type CycleSnap = { ts: number; pct: number };
 
 const HOUR_MS = 3_600_000;
 
-type CycleObservation = {
-  cycleEndMs: number;
-  cycleStartMs: number;
-  lastSnapMs: number;
-  closingPct: number;
+// Cumulative $-spent indexed by event timestamp, so any (start, end) window
+// query is O(log n) via binary search instead of O(n) linear scan. Worth it
+// because the curve builder calls this 1000+ times per render.
+export type SpendIndex = {
+  ts: Float64Array;
+  cum: Float64Array;
 };
 
-function collectCycles(
+export function buildSpendIndex(events: CalibrationEvent[]): SpendIndex {
+  const sorted = events
+    .map((e) => ({ e, t: Date.parse(e.ts) }))
+    .filter((x) => !Number.isNaN(x.t))
+    .sort((a, b) => a.t - b.t);
+  const ts = new Float64Array(sorted.length);
+  const cum = new Float64Array(sorted.length + 1);
+  let acc = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    ts[i] = sorted[i].t;
+    cum[i] = acc;
+    acc += eventDollars(sorted[i].e);
+  }
+  cum[sorted.length] = acc;
+  return { ts, cum };
+}
+
+function lowerBound(arr: Float64Array, target: number, hi: number): number {
+  let lo = 0;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (arr[mid]! < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+export function dollarsInRange(idx: SpendIndex, startMs: number, endMs: number): number {
+  if (endMs <= startMs) return 0;
+  const n = idx.ts.length;
+  const lo = lowerBound(idx.ts, startMs, n);
+  const hi = lowerBound(idx.ts, endMs, n);
+  return idx.cum[hi]! - idx.cum[lo]!;
+}
+
+// Group snapshots by cycle (key = hour-rounded resets_at) for one window.
+export function groupSnapsByCycle(
   snapshots: SnapshotForCalibration[],
   pick: (s: SnapshotForCalibration) =>
     | { utilization?: number | null; resets_at?: string | null }
     | null
     | undefined,
-): CycleObservation[] {
-  type Bucket = {
-    cycleEndMs: number;
-    firstSnapMs: number;
-    lastSnapMs: number;
-    lastUtil: number;
-  };
-  const byCycle = new Map<number, Bucket>();
+): Map<number, CycleSnap[]> {
+  const out = new Map<number, CycleSnap[]>();
   for (const s of snapshots) {
     if (!s.captured_at) continue;
     const w = pick(s);
     if (!w?.resets_at || typeof w.utilization !== "number") continue;
-    const snapMs = Date.parse(s.captured_at);
-    const resetMs = Date.parse(w.resets_at);
-    if (Number.isNaN(snapMs) || Number.isNaN(resetMs)) continue;
-    const k = Math.round(resetMs / HOUR_MS) * HOUR_MS;
-    const ex = byCycle.get(k);
-    if (ex === undefined) {
-      byCycle.set(k, {
-        cycleEndMs: k,
-        firstSnapMs: snapMs,
-        lastSnapMs: snapMs,
-        lastUtil: w.utilization,
-      });
-    } else {
-      if (snapMs < ex.firstSnapMs) ex.firstSnapMs = snapMs;
-      if (snapMs >= ex.lastSnapMs) {
-        ex.lastSnapMs = snapMs;
-        ex.lastUtil = w.utilization;
+    const ts = Date.parse(s.captured_at);
+    const reset = Date.parse(w.resets_at);
+    if (Number.isNaN(ts) || Number.isNaN(reset)) continue;
+    const k = Math.round(reset / HOUR_MS) * HOUR_MS;
+    const arr = out.get(k) ?? [];
+    arr.push({ ts, pct: w.utilization });
+    out.set(k, arr);
+  }
+  for (const arr of out.values()) arr.sort((a, b) => a.ts - b.ts);
+  return out;
+}
+
+export type PriorRateInfo = { rate: number; travel: number; dollars: number };
+
+// One observed rate per completed cycle, from full daemon coverage of that
+// cycle. Used as the fallback rate prior when the active cycle has thin data.
+export function buildPriorRateMap(
+  snapsByCycle: Map<number, CycleSnap[]>,
+  spend: SpendIndex,
+): Map<number, PriorRateInfo> {
+  const out = new Map<number, PriorRateInfo>();
+  for (const [cycleEnd, arr] of snapsByCycle) {
+    if (arr.length < 2) continue;
+    const a = arr[0]!;
+    const b = arr[arr.length - 1]!;
+    const travel = b.pct - a.pct;
+    if (travel <= 0) continue;
+    const dollars = dollarsInRange(spend, a.ts, b.ts);
+    if (dollars <= 0) continue;
+    out.set(cycleEnd, { rate: dollars / travel, travel, dollars });
+  }
+  return out;
+}
+
+// Median of the K most recent priors before `cycleEnd`, filtered to those
+// with at least `minTravel` pp moved and `minDollars` spent. Median is
+// robust against the noisy short cycles (5h cycles have CV ~70% across
+// rates; mean is biased by outliers, median sits on the typical day).
+function priorMedianRate(
+  priors: Map<number, PriorRateInfo>,
+  cycleEnd: number,
+  k: number,
+  minTravel: number,
+  minDollars: number,
+): number | null {
+  const eligible: number[] = [];
+  for (const [end, info] of priors) {
+    if (end >= cycleEnd) continue;
+    if (info.travel < minTravel) continue;
+    if (info.dollars < minDollars) continue;
+    eligible.push(end);
+  }
+  eligible.sort((a, b) => b - a);
+  const recent = eligible.slice(0, k).map((end) => priors.get(end)!.rate);
+  if (recent.length === 0) return null;
+  const sorted = [...recent].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  // For even-length arrays, average the two middle values — the conventional
+  // median definition. For odd, return the middle element.
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+}
+
+export type AnchoredPredictorOpts = {
+  /** Tier-default $/pp rate, used when no observed cycle data is available. */
+  tierDefault: number;
+  /** Maximum prior cycles to consult for the median fallback. */
+  priorK: number;
+  /** Minimum pp travel for a prior cycle to count toward the median. */
+  priorMinTravel: number;
+  /** Minimum $ spent for a prior cycle to count toward the median. */
+  priorMinDollars: number;
+  /** Travel (pp) at which the active cycle's own rate fully replaces the
+   *  prior rate. Below this, the two are blended linearly (with prior
+   *  dominating when travel ≈ 0). 30pp is enough for the 1pp-quantized
+   *  utilization to carry signal above its rounding noise. */
+  travelForFullConfidence: number;
+};
+
+const ANCHORED_OPTS_7D: AnchoredPredictorOpts = {
+  tierDefault: 12.0,
+  priorK: 5,
+  priorMinTravel: 10,
+  priorMinDollars: 5,
+  travelForFullConfidence: 30,
+};
+
+const ANCHORED_OPTS_5H: AnchoredPredictorOpts = {
+  tierDefault: 2.0,
+  priorK: 10,
+  priorMinTravel: 20,
+  priorMinDollars: 5,
+  travelForFullConfidence: 30,
+};
+
+export function getAnchoredOpts(window: "5h" | "7d", tier: PlanTier): AnchoredPredictorOpts {
+  const base = window === "5h" ? ANCHORED_OPTS_5H : ANCHORED_OPTS_7D;
+  const tierDefault = (window === "5h" ? RATE_PER_PCT_5H : RATE_PER_PCT_7D)[tier];
+  return { ...base, tierDefault };
+}
+
+// The predictor: returns predicted utilization (pp) at time `t`, given the
+// cycle's observed snapshots, prior cycle rates, and cycle metadata.
+//
+// Behavior:
+// - between two adjacent snaps a, b in the same cycle:
+//     pred(t) = pct_a + (pct_b - pct_a) × ($_a→t / $_a→b)
+//   so the curve passes through every observed point exactly.
+// - past the latest snap of an in-progress cycle:
+//     pred(t) = pct_last + ($_last→t / blendedRate)
+// - before the first snap of a cycle (cold-start back-fill):
+//     pred(t) = max(0, pct_first - ($_t→first / blendedRate))
+// - cycle has no snaps at all: returns the tier-default linear projection
+//   from cycle start so cold-start back-fill before any daemon data still
+//   draws a curve.
+export function predictAnchored(
+  spend: SpendIndex,
+  cycleSnaps: CycleSnap[],
+  priors: Map<number, PriorRateInfo>,
+  cycleEndMs: number,
+  cycleHours: number,
+  t: number,
+  opts: AnchoredPredictorOpts,
+): number {
+  const cycleStart = cycleEndMs - cycleHours * HOUR_MS;
+
+  // Cycle has no observations yet — pure tier-default projection.
+  if (cycleSnaps.length === 0) {
+    return Math.max(0, dollarsInRange(spend, cycleStart, t) / opts.tierDefault);
+  }
+
+  // aIdx = last snap with ts <= t
+  let aIdx = -1;
+  for (let i = 0; i < cycleSnaps.length; i++) {
+    if (cycleSnaps[i]!.ts <= t) aIdx = i;
+    else break;
+  }
+
+  if (aIdx >= 0 && aIdx + 1 < cycleSnaps.length) {
+    // Spend-weighted linear interpolation between adjacent snaps.
+    const a = cycleSnaps[aIdx]!;
+    const b = cycleSnaps[aIdx + 1]!;
+    if (b.pct === a.pct) return a.pct;
+    const totalDollars = dollarsInRange(spend, a.ts, b.ts);
+    if (totalDollars <= 0) {
+      // Daemon recorded a pct change with zero JSONL spend (e.g. non-Anthropic
+      // models, or events outside our scan). Fall back to time-linear.
+      const frac = (t - a.ts) / (b.ts - a.ts);
+      return a.pct + (b.pct - a.pct) * frac;
+    }
+    const tDollars = dollarsInRange(spend, a.ts, t);
+    return a.pct + (b.pct - a.pct) * (tDollars / totalDollars);
+  }
+
+  // Forward-extrapolate past last snap, or backward-extrapolate before first.
+  const rate = blendedRate(spend, cycleSnaps, priors, cycleEndMs, opts);
+
+  if (aIdx >= 0) {
+    const last = cycleSnaps[aIdx]!;
+    return last.pct + dollarsInRange(spend, last.ts, t) / rate;
+  }
+  // t is before every snap of this cycle.
+  const first = cycleSnaps[0]!;
+  return Math.max(0, first.pct - dollarsInRange(spend, t, first.ts) / rate);
+}
+
+function blendedRate(
+  spend: SpendIndex,
+  cycleSnaps: CycleSnap[],
+  priors: Map<number, PriorRateInfo>,
+  cycleEndMs: number,
+  opts: AnchoredPredictorOpts,
+): number {
+  // The active cycle's own observed rate, if it has at least 2 snaps with
+  // positive travel and spend.
+  let curRate: number | null = null;
+  let curTravel = 0;
+  if (cycleSnaps.length >= 2) {
+    const a = cycleSnaps[0]!;
+    const b = cycleSnaps[cycleSnaps.length - 1]!;
+    const travel = b.pct - a.pct;
+    if (travel > 0) {
+      const dollars = dollarsInRange(spend, a.ts, b.ts);
+      if (dollars > 0) {
+        curRate = dollars / travel;
+        curTravel = travel;
       }
     }
   }
-  return Array.from(byCycle.values())
-    .map((b) => ({
-      cycleEndMs: b.cycleEndMs,
-      cycleStartMs: b.firstSnapMs,
-      lastSnapMs: b.lastSnapMs,
-      closingPct: b.lastUtil,
-    }))
-    .sort((a, b) => a.cycleEndMs - b.cycleEndMs);
-}
 
-function fitRate(
-  cycles: CycleObservation[],
-  cycleHours: number,
-  events: CalibrationEvent[],
-  maxCycles: number,
-  now: number,
-  fallback: number,
-  minPct: number,
-): { rate: number; used: number; source: RateSource } {
-  // Tolerance: 5% of cycle length on each end. Drops cycles where the daemon
-  // wasn't running close to either start or close — those produce biased
-  // $/pp estimates (under-counted spend or under-read closing util).
-  const tolMs = cycleHours * HOUR_MS * 0.05;
-  const completed = cycles.filter((c) => {
-    if (c.cycleEndMs > now) return false;
-    if (c.closingPct < minPct) return false;
-    const expectedStart = c.cycleEndMs - cycleHours * HOUR_MS;
-    if (c.cycleStartMs > expectedStart + tolMs) return false;
-    if (c.lastSnapMs < c.cycleEndMs - tolMs) return false;
-    return true;
-  });
-  const recent = completed.slice(-maxCycles);
-  const fitted: Array<{ rate: number; weight: number }> = [];
-  recent.forEach((c, idx) => {
-    const dollars = dollarsInWindow(events, c.cycleStartMs, c.cycleEndMs);
-    if (dollars <= 0) return;
-    // Linear-decay weight: oldest of the kept cycles → 1, newest → maxCycles.
-    fitted.push({ rate: dollars / c.closingPct, weight: idx + 1 });
-  });
-  if (fitted.length === 0) return { rate: fallback, used: 0, source: "tier_default" };
-  const sumW = fitted.reduce((a, x) => a + x.weight, 0);
-  const weighted = fitted.reduce((a, x) => a + x.rate * x.weight, 0) / sumW;
-  return { rate: weighted, used: fitted.length, source: "user_calibrated" };
-}
+  const priorRate = priorMedianRate(
+    priors,
+    cycleEndMs,
+    opts.priorK,
+    opts.priorMinTravel,
+    opts.priorMinDollars,
+  );
 
-// Fit $-per-percentage-point against this user's own completed cycles. The
-// tier default is the cold-start fallback; once even one well-covered cycle
-// closes we replace it with the observed rate. A cycle is well-covered when
-// the daemon was running within 5% of cycle length of both start and close.
-export function computeUserRates(
-  events: CalibrationEvent[],
-  snapshots: SnapshotForCalibration[],
-  tier: PlanTier,
-  opts?: { now?: number; minPct?: number; maxCycles7d?: number; maxCycles5h?: number },
-): UserRates {
-  const now = opts?.now ?? Date.now();
-  const minPct = opts?.minPct ?? 5;
-  const maxC7d = opts?.maxCycles7d ?? 3;
-  const maxC5h = opts?.maxCycles5h ?? 10;
-
-  const cycles7d = collectCycles(snapshots, (s) => s.seven_day);
-  const cycles5h = collectCycles(snapshots, (s) => s.five_hour);
-
-  const fit7d = fitRate(cycles7d, 168, events, maxC7d, now, RATE_PER_PCT_7D[tier], minPct);
-  const fit5h = fitRate(cycles5h, 5, events, maxC5h, now, RATE_PER_PCT_5H[tier], minPct);
-
-  return {
-    rate7d: fit7d.rate,
-    rate5h: fit5h.rate,
-    cyclesUsed7d: fit7d.used,
-    cyclesUsed5h: fit5h.used,
-    source7d: fit7d.source,
-    source5h: fit5h.source,
-  };
+  if (curRate != null && priorRate != null) {
+    const w = Math.min(curTravel / opts.travelForFullConfidence, 1);
+    return curRate * w + priorRate * (1 - w);
+  }
+  return curRate ?? priorRate ?? opts.tierDefault;
 }
