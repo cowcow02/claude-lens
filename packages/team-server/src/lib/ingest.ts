@@ -130,9 +130,9 @@ async function upsertMembershipCyclePeaks(
   for (const c of all) {
     await client.query(
       `INSERT INTO membership_cycle_peaks
-         (team_id, membership_id, window, ends_at, peak_pct, source, is_current, updated_at)
+         (team_id, membership_id, "window", ends_at, peak_pct, source, is_current, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-       ON CONFLICT (team_id, membership_id, window, ends_at) DO UPDATE
+       ON CONFLICT (team_id, membership_id, "window", ends_at) DO UPDATE
          SET peak_pct = EXCLUDED.peak_pct,
              source = EXCLUDED.source,
              is_current = EXCLUDED.is_current,

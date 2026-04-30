@@ -153,9 +153,11 @@ export async function loadMembership7dCyclePeaks(
     source: string;
     is_current: boolean;
   }>(
+    // "window" is a reserved keyword in some Postgres parser contexts
+    // (it's an OLAP window-function clause), so always quote the column.
     `SELECT membership_id, ends_at, peak_pct, source, is_current
      FROM membership_cycle_peaks
-     WHERE team_id = $1 AND window = '7d'
+     WHERE team_id = $1 AND "window" = '7d'
      ORDER BY membership_id, ends_at DESC`,
     [teamId],
   );
