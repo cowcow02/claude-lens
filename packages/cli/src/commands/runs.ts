@@ -137,7 +137,7 @@ function etimeToSec(s: string): number {
 function listActiveRuns(): ActiveRun[] {
   // `etime` is portable across macOS + Linux; `etimes` (seconds) is
   // Linux-only and errors out on Darwin.
-  let out = "";
+  let out: string;
   try {
     out = execSync("ps -axww -o pid,etime,time,command", { encoding: "utf-8" });
   } catch {
