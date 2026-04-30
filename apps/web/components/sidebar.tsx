@@ -14,6 +14,9 @@ import {
   Activity,
   Gauge,
   Lightbulb,
+  Radio,
+  Settings,
+  CalendarDays,
 } from "lucide-react";
 import { formatRelative, prettyProjectName } from "@/lib/format";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -181,11 +184,17 @@ export function Sidebar({
           Projects
         </NavLink>
         <NavLink
-          href="/parallelism"
-          active={pathname === "/parallelism"}
-          icon={<GitBranch size={15} />}
+          href="/day"
+          active={
+            pathname === "/day" ||
+            pathname.startsWith("/day/") ||
+            pathname === "/digest" ||
+            pathname.startsWith("/digest/") ||
+            pathname === "/parallelism"
+          }
+          icon={<CalendarDays size={15} />}
         >
-          Timeline
+          Day
         </NavLink>
         <NavLink
           href="/usage"
@@ -200,6 +209,13 @@ export function Sidebar({
           icon={<Lightbulb size={15} />}
         >
           Insights
+        </NavLink>
+        <NavLink
+          href="/runs"
+          active={pathname === "/runs" || pathname.startsWith("/runs/")}
+          icon={<Radio size={15} />}
+        >
+          Runs
         </NavLink>
       </nav>
 
@@ -267,6 +283,24 @@ export function Sidebar({
         <span style={{ flex: 1, minWidth: 0 }}>
           {totalSessions} sessions · {projects.length} projects
         </span>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            color: pathname === "/settings" ? "var(--af-text)" : "var(--af-text-tertiary)",
+            background: pathname === "/settings" ? "var(--af-surface-hover)" : "transparent",
+            textDecoration: "none",
+          }}
+        >
+          <Settings size={14} />
+        </Link>
         <ThemeToggle />
       </div>
     </aside>

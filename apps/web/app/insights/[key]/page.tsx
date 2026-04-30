@@ -1,59 +1,117 @@
-/**
- * Saved-report viewer. Deep-linkable, bookmarkable, server-rendered.
- *
- * /insights           → history + picker (client-state machine)
- * /insights/[key]     → this page — reads the saved JSON off disk
- * /insights/print/[key] → headless-Chrome target for PDF export
- */
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
-import { InsightReport } from "@/components/insight-report";
-import { getSavedReport } from "@/lib/ai/saved-reports";
+import {
+  readSettings, readWeekDigest, readMonthDigest,
+  getCurrentWeekDigestFromCache, getCurrentMonthDigestFromCache,
+} from "@claude-lens/entries/node";
+import { WeekDigestView } from "@/components/week-digest-view";
+import { MonthDigestView } from "@/components/month-digest-view";
+import { InsightsTopBar } from "@/components/insights-top-bar";
+import { currentWeekMonday, currentYearMonth } from "@/lib/entries";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+const WEEK_KEY = /^week-(\d{4}-\d{2}-\d{2})$/;
+const MONTH_KEY = /^month-(\d{4}-\d{2})$/;
 
 export default async function SavedInsightPage({
   params,
 }: { params: Promise<{ key: string }> }) {
   const { key } = await params;
-  const report = await getSavedReport(key);
-  if (!report) notFound();
+  const aiOn = readSettings().ai_features.enabled;
 
-  return (
-    <div>
-      <div className="no-print" style={topNavStyle}>
-        <Link href="/insights" style={backBtnStyle}>
-          <ArrowLeft size={12} /> Reports
-        </Link>
-        <span style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-          saved · key: {key}
-        </span>
+  const weekMatch = WEEK_KEY.exec(key);
+  if (weekMatch) {
+    const monday = weekMatch[1]!;
+    const cached = monday === currentWeekMonday()
+      ? getCurrentWeekDigestFromCache(monday, Date.now())
+      : readWeekDigest(monday);
+
+    const prev = shiftMonday(monday, -7);
+    const nextRaw = shiftMonday(monday, +7);
+    const today = currentWeekMonday();
+    const nextMonday = nextRaw > today ? null : nextRaw;
+    const priorDigest = readWeekDigest(prev);
+    const prevCached = !!priorDigest;
+    const nextCached = nextMonday ? !!readWeekDigest(nextMonday) : false;
+
+    return (
+      <div>
+        <InsightsTopBar
+          scope="week"
+          currentLabel={`Week of ${monday}`}
+          rangeLabel={shortRangeMonday(monday)}
+          prev={{ key: `week-${prev}`, label: shortLabelMonday(prev), cached: prevCached }}
+          next={nextMonday ? { key: `week-${nextMonday}`, label: shortLabelMonday(nextMonday), cached: nextCached } : null}
+        />
+        <WeekDigestView initial={cached} monday={monday} aiEnabled={aiOn} prior={priorDigest} />
       </div>
-      <InsightReport data={report} savedKey={key} />
-    </div>
-  );
+    );
+  }
+
+  const monthMatch = MONTH_KEY.exec(key);
+  if (monthMatch) {
+    const yearMonth = monthMatch[1]!;
+    const cached = yearMonth === currentYearMonth()
+      ? getCurrentMonthDigestFromCache(yearMonth, Date.now())
+      : readMonthDigest(yearMonth);
+
+    const prev = shiftYearMonth(yearMonth, -1);
+    const nextRaw = shiftYearMonth(yearMonth, +1);
+    const today = currentYearMonth();
+    const nextYM = nextRaw > today ? null : nextRaw;
+    const prevCached = !!readMonthDigest(prev);
+    const nextCached = nextYM ? !!readMonthDigest(nextYM) : false;
+
+    return (
+      <div>
+        <InsightsTopBar
+          scope="month"
+          currentLabel={shortLabelMonth(yearMonth)}
+          prev={{ key: `month-${prev}`, label: shortLabelMonth(prev), cached: prevCached }}
+          next={nextYM ? { key: `month-${nextYM}`, label: shortLabelMonth(nextYM), cached: nextCached } : null}
+        />
+        <MonthDigestView initial={cached} yearMonth={yearMonth} aiEnabled={aiOn} />
+      </div>
+    );
+  }
+
+  notFound();
 }
 
-const topNavStyle: React.CSSProperties = {
-  maxWidth: 980,
-  margin: "0 auto",
-  padding: "16px 44px 0",
-  display: "flex",
-  alignItems: "center",
-  gap: 12,
-};
+function shortRangeMonday(monday: string): string {
+  const start = new Date(`${monday}T12:00:00`);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${fmt(start)} — ${fmt(end)}`;
+}
 
-const backBtnStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "7px 12px",
-  border: "1px solid var(--af-border)",
-  borderRadius: 8,
-  background: "var(--af-surface)",
-  color: "var(--af-text)",
-  fontSize: 12,
-  fontWeight: 500,
-  textDecoration: "none",
-};
+function shiftMonday(monday: string, days: number): string {
+  const d = new Date(`${monday}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function shiftYearMonth(yearMonth: string, months: number): string {
+  const [y, m] = yearMonth.split("-");
+  const d = new Date(Number(y), Number(m) - 1 + months, 1);
+  const ny = d.getFullYear();
+  const nm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${ny}-${nm}`;
+}
+
+function shortLabelMonday(monday: string): string {
+  const d = new Date(`${monday}T12:00:00`);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function shortLabelMonth(yearMonth: string): string {
+  const [y, m] = yearMonth.split("-");
+  const d = new Date(Number(y), Number(m) - 1, 1);
+  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+}
+

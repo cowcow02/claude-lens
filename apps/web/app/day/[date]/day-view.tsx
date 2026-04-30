@@ -1,0 +1,193 @@
+"use client";
+
+import { useState } from "react";
+import { ChevronDown, ChevronRight, Layers } from "lucide-react";
+import type { DayDigest, Entry } from "@claude-lens/entries";
+import type { GanttDay, ParallelismBurst } from "@claude-lens/parser";
+import { DayDigestView } from "@/components/day-digest-view";
+import { GanttChart, type SessionEntrySummary } from "../../parallelism/gantt-chart";
+import { BackfillDrawer, type BackfillRow } from "@/components/backfill-drawer";
+import { DateNav, type DayInfo } from "@/components/date-nav";
+
+export function DayView({
+  date,
+  today,
+  prev,
+  next,
+  initial,
+  entries,
+  aiEnabled,
+  gantt,
+  bursts,
+  sessionEntries,
+  backfillRows,
+  dayStats,
+}: {
+  date: string;
+  today: string;
+  prev: string;
+  next: string | null;
+  initial: DayDigest | null;
+  entries: Entry[];
+  aiEnabled: boolean;
+  gantt: GanttDay;
+  bursts: ParallelismBurst[];
+  sessionEntries: Record<string, SessionEntrySummary>;
+  backfillRows: BackfillRow[];
+  dayStats: DayInfo[];
+}) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Narrative section is suppressed when every entry is `skipped_trivial` —
+  // that's a "warm-up only" day with nothing to summarize, so the section
+  // would just be a header above an empty placeholder. Keep the timeline
+  // accessible via its own collapsible.
+  const allTrivial = entries.length > 0
+    && entries.every((e) => e.enrichment.status === "skipped_trivial");
+  const hasNarrative = entries.length > 0 && !allTrivial;
+  const hasTimeline = gantt.sessions.length > 0;
+
+  const fmtDate = new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric", year: "numeric",
+  });
+
+  const pendingCount = backfillRows.filter((r) => r.status === "pending").length;
+
+  return (
+    <>
+      <nav
+        style={{
+          padding: "14px 40px",
+          display: "flex",
+          gap: 12,
+          fontSize: 12,
+          borderBottom: "1px solid var(--af-border-subtle)",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        <DateNav
+          date={date}
+          today={today}
+          prevDay={prev}
+          nextDay={next ?? undefined}
+          dayStats={dayStats}
+        />
+
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          style={{
+            marginLeft: "auto",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            padding: "5px 10px",
+            background: "transparent",
+            border: "1px solid var(--af-border-subtle)",
+            borderRadius: 6,
+            fontSize: 11,
+            color: "var(--af-text-secondary)",
+            cursor: "pointer",
+          }}
+          title="Open the backfill multi-select drawer"
+        >
+          <Layers size={12} />
+          Backfill digests
+          {pendingCount > 0 && (
+            <span
+              style={{
+                fontSize: 10,
+                color: "#ed8936",
+                fontWeight: 700,
+              }}
+            >
+              {pendingCount}
+            </span>
+          )}
+        </button>
+      </nav>
+
+      {!hasNarrative && !hasTimeline ? (
+        <div
+          style={{
+            padding: "60px 40px",
+            textAlign: "center",
+            color: "var(--af-text-secondary)",
+          }}
+        >
+          <div style={{ fontSize: 14, marginBottom: 6 }}>{fmtDate}</div>
+          <div style={{ fontSize: 13, color: "var(--af-text-tertiary)" }}>
+            No Claude Code activity on this day.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          {hasNarrative && (
+            <Section label="Narrative" defaultOpen>
+              <DayDigestView
+                initial={initial}
+                entries={entries}
+                date={date}
+                aiEnabled={aiEnabled}
+              />
+            </Section>
+          )}
+          {hasTimeline && (
+            <Section label="Timeline & concurrency" defaultOpen>
+              <div style={{ padding: "8px 40px 40px" }}>
+                <GanttChart gantt={gantt} bursts={bursts} sessionEntries={sessionEntries} />
+              </div>
+            </Section>
+          )}
+        </div>
+      )}
+
+      <BackfillDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        rows={backfillRows}
+        aiEnabled={aiEnabled}
+      />
+    </>
+  );
+}
+
+function Section({
+  label,
+  defaultOpen = true,
+  children,
+}: {
+  label: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ borderBottom: "1px solid var(--af-border-subtle)" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          padding: "12px 40px",
+          background: "transparent",
+          border: "none",
+          textAlign: "left",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          cursor: "pointer",
+          fontSize: 11,
+          fontWeight: 700,
+          color: "var(--af-text-tertiary)",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+        }}
+      >
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        {label}
+      </button>
+      {open && <div>{children}</div>}
+    </div>
+  );
+}

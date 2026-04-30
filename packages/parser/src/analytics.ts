@@ -44,7 +44,14 @@ export function sessionDay(meta: SessionMeta): string | undefined {
  *   canonicalProjectName("/Users/foo/Repo/bar")
  *     === "/Users/foo/Repo/bar"
  */
-const WORKTREE_MARKERS = ["/.claude/worktrees/", "/.worktrees/"] as const;
+// `/claude/worktrees/` (no leading dot) covers anomalous upstream paths
+// where the leading dot was dropped (rendered as `//claude/worktrees/...`
+// before slash normalization).
+const WORKTREE_MARKERS = [
+  "/.claude/worktrees/",
+  "/.worktrees/",
+  "/claude/worktrees/",
+] as const;
 
 function findWorktreeMarker(projectName: string): { idx: number; marker: string } | null {
   for (const marker of WORKTREE_MARKERS) {
@@ -55,16 +62,20 @@ function findWorktreeMarker(projectName: string): { idx: number; marker: string 
 }
 
 export function canonicalProjectName(projectName: string): string {
-  const hit = findWorktreeMarker(projectName);
-  if (hit) return projectName.slice(0, hit.idx);
-  return projectName;
+  // Some upstream sources produce anomalous repeated slashes
+  // (e.g. //claude/worktrees/...). Collapse before pattern-matching.
+  const normalized = projectName.replace(/\/{2,}/g, "/");
+  const hit = findWorktreeMarker(normalized);
+  if (hit) return normalized.slice(0, hit.idx);
+  return normalized;
 }
 
 /** Extract the worktree branch name from a worktree path, or null. */
 export function worktreeName(projectName: string): string | null {
-  const hit = findWorktreeMarker(projectName);
+  const normalized = projectName.replace(/\/{2,}/g, "/");
+  const hit = findWorktreeMarker(normalized);
   if (!hit) return null;
-  const tail = projectName.slice(hit.idx + hit.marker.length);
+  const tail = normalized.slice(hit.idx + hit.marker.length);
   const slash = tail.indexOf("/");
   return slash >= 0 ? tail.slice(0, slash) : tail;
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SessionMeta } from "@claude-lens/parser";
+import type { DayOutcome, EntryEnrichmentStatus } from "@claude-lens/entries";
 import {
   formatDuration,
   formatRelative,
@@ -16,57 +17,71 @@ import { LiveBadge } from "@/components/live-badge";
 import { TeamBadge } from "@/components/team-badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useViewToggle } from "@/components/view-toggle";
+import { OutcomePill, outcomePriority } from "@/components/outcome-pill";
 
-export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
+export type SessionRow = {
+  session: SessionMeta;
+  outcome: DayOutcome | null;
+  briefSummary: string | null;
+  enrichmentStatus: EntryEnrichmentStatus | null;
+  latestLocalDay: string | null;
+};
+
+export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("all");
-  const [sortBy, setSortBy] = useState<"newest" | "longest" | "most-tokens">("newest");
+  const [sortBy, setSortBy] = useState<"newest" | "longest" | "most-tokens" | "outcome">("newest");
   const { mode: viewMode, toggle: viewToggle } = useViewToggle("cclens:sessions:view");
 
   const projects = useMemo(() => {
-    const s = new Set(sessions.map((x) => x.projectName));
+    const s = new Set(rows.map((r) => r.session.projectName));
     return ["all", ...Array.from(s).sort()];
-  }, [sessions]);
+  }, [rows]);
 
   const filtered = useMemo(() => {
-    let rows = sessions.slice();
-    if (project !== "all") rows = rows.filter((s) => s.projectName === project);
+    let items = rows.slice();
+    if (project !== "all") items = items.filter((r) => r.session.projectName === project);
     if (query) {
       const q = query.toLowerCase();
-      rows = rows.filter(
-        (s) =>
+      items = items.filter(
+        ({ session: s, briefSummary }) =>
           s.id.toLowerCase().includes(q) ||
+          (briefSummary ?? "").toLowerCase().includes(q) ||
           (s.firstUserPreview ?? "").toLowerCase().includes(q) ||
           (s.lastAgentPreview ?? "").toLowerCase().includes(q) ||
           s.projectName.toLowerCase().includes(q),
       );
     }
     if (sortBy === "newest")
-      rows.sort(
+      items.sort(
         (a, b) =>
-          (b.firstTimestamp ? Date.parse(b.firstTimestamp) : 0) -
-          (a.firstTimestamp ? Date.parse(a.firstTimestamp) : 0),
+          (b.session.firstTimestamp ? Date.parse(b.session.firstTimestamp) : 0) -
+          (a.session.firstTimestamp ? Date.parse(a.session.firstTimestamp) : 0),
       );
     else if (sortBy === "longest")
-      rows.sort(
+      items.sort(
         (a, b) =>
-          (b.airTimeMs ?? b.durationMs ?? 0) - (a.airTimeMs ?? a.durationMs ?? 0),
+          (b.session.airTimeMs ?? b.session.durationMs ?? 0) -
+          (a.session.airTimeMs ?? a.session.durationMs ?? 0),
       );
     else if (sortBy === "most-tokens")
-      rows.sort(
+      items.sort(
         (a, b) =>
-          b.totalUsage.input +
-          b.totalUsage.output +
-          b.totalUsage.cacheRead -
-          (a.totalUsage.input + a.totalUsage.output + a.totalUsage.cacheRead),
+          b.session.totalUsage.input +
+          b.session.totalUsage.output +
+          b.session.totalUsage.cacheRead -
+          (a.session.totalUsage.input +
+            a.session.totalUsage.output +
+            a.session.totalUsage.cacheRead),
       );
-    return rows;
-  }, [sessions, project, query, sortBy]);
+    else if (sortBy === "outcome")
+      items.sort((a, b) => outcomePriority(b.outcome) - outcomePriority(a.outcome));
+    return items;
+  }, [rows, project, query, sortBy]);
 
   return (
     <div>
-      {/* Toolbar */}
       <div
         style={{
           display: "flex",
@@ -76,14 +91,7 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
           alignItems: "center",
         }}
       >
-        <div
-          style={{
-            position: "relative",
-            flex: 1,
-            minWidth: 260,
-            maxWidth: 480,
-          }}
-        >
+        <div style={{ position: "relative", flex: 1, minWidth: 260, maxWidth: 480 }}>
           <Search
             size={13}
             color="var(--af-text-tertiary)"
@@ -112,6 +120,7 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
           <option value="newest">Newest</option>
           <option value="longest">Longest</option>
           <option value="most-tokens">Most tokens</option>
+          <option value="outcome">Outcome</option>
         </select>
         <span
           style={{
@@ -129,10 +138,10 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
       {filtered.length === 0 ? (
         <div className="af-empty">No sessions found.</div>
       ) : viewMode === "table" ? (
-        <DataTable<SessionMeta>
+        <DataTable<SessionRow>
           rows={filtered}
-          getRowKey={(s) => `${s.projectDir}/${s.id}`}
-          onRowClick={(s) => router.push(`/sessions/${s.id}`)}
+          getRowKey={(r) => `${r.session.projectDir}/${r.session.id}`}
+          onRowClick={(r) => router.push(`/sessions/${r.session.id}`)}
           defaultSortKey="lastActive"
           defaultSortDir="desc"
           columns={sessionTableColumns}
@@ -145,12 +154,8 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
             gap: 14,
           }}
         >
-          {filtered.map((s) => (
-            // Compose key from projectDir + id because Claude Code reuses
-            // session UUIDs when the same conversation continues across
-            // git worktrees — same UUID in two project dirs is a real
-            // pattern in `~/.claude/projects/`.
-            <SessionCard key={`${s.projectDir}/${s.id}`} session={s} />
+          {filtered.map((r) => (
+            <SessionCard key={`${r.session.projectDir}/${r.session.id}`} row={r} />
           ))}
         </div>
       )}
@@ -158,12 +163,18 @@ export function SessionsGrid({ sessions }: { sessions: SessionMeta[] }) {
   );
 }
 
-const sessionTableColumns: Column<SessionMeta>[] = [
+const sessionTableColumns: Column<SessionRow>[] = [
+  {
+    key: "outcome",
+    header: "Outcome",
+    sortValue: (r) => outcomePriority(r.outcome),
+    render: (r) => <OutcomeCell row={r} />,
+  },
   {
     key: "project",
     header: "Project",
-    sortValue: (s) => s.projectName,
-    render: (s) => (
+    sortValue: (r) => r.session.projectName,
+    render: (r) => (
       <div
         style={{
           maxWidth: 180,
@@ -171,7 +182,7 @@ const sessionTableColumns: Column<SessionMeta>[] = [
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
         }}
-        title={s.projectName}
+        title={r.session.projectName}
       >
         <div style={{ fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
           <span
@@ -182,9 +193,9 @@ const sessionTableColumns: Column<SessionMeta>[] = [
               minWidth: 0,
             }}
           >
-            {prettyProjectName(s.projectName)}
+            {prettyProjectName(r.session.projectName)}
           </span>
-          <TeamBadge session={s} />
+          <TeamBadge session={r.session} />
         </div>
         <div
           style={{
@@ -193,107 +204,106 @@ const sessionTableColumns: Column<SessionMeta>[] = [
             fontFamily: "var(--font-mono)",
           }}
         >
-          {shortId(s.id)}
+          {shortId(r.session.id)}
         </div>
       </div>
     ),
   },
   {
     key: "preview",
-    header: "First message",
+    header: "Summary",
     sortable: false,
-    render: (s) => (
-      <div
-        style={{
-          maxWidth: 360,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: "var(--af-text-secondary)",
-        }}
-        title={s.firstUserPreview}
-      >
-        {s.firstUserPreview || "—"}
-      </div>
-    ),
+    render: (r) => {
+      const text = r.briefSummary ?? r.session.firstUserPreview ?? "";
+      const isFallback = !r.briefSummary;
+      return (
+        <div
+          style={{
+            maxWidth: 360,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: isFallback ? "var(--af-text-tertiary)" : "var(--af-text-secondary)",
+            fontStyle: isFallback ? "italic" : "normal",
+          }}
+          title={isFallback ? `(raw user message) ${text}` : text}
+        >
+          {text || "—"}
+        </div>
+      );
+    },
   },
   {
     key: "created",
     header: "Created",
-    sortValue: (s) => (s.firstTimestamp ? Date.parse(s.firstTimestamp) : 0),
+    sortValue: (r) => (r.session.firstTimestamp ? Date.parse(r.session.firstTimestamp) : 0),
     align: "right",
-    render: (s) => (
-      <span
-        suppressHydrationWarning
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}
-      >
-        {s.firstTimestamp ? formatRelative(s.firstTimestamp) : "—"}
+    render: (r) => (
+      <span suppressHydrationWarning style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        {r.session.firstTimestamp ? formatRelative(r.session.firstTimestamp) : "—"}
       </span>
     ),
   },
   {
     key: "lastActive",
     header: "Last active",
-    sortValue: (s) => (s.lastTimestamp ? Date.parse(s.lastTimestamp) : 0),
+    sortValue: (r) => (r.session.lastTimestamp ? Date.parse(r.session.lastTimestamp) : 0),
     align: "right",
-    render: (s) => (
-      <span
-        suppressHydrationWarning
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}
-      >
-        {s.lastTimestamp ? formatRelative(s.lastTimestamp) : "—"}
+    render: (r) => (
+      <span suppressHydrationWarning style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        {r.session.lastTimestamp ? formatRelative(r.session.lastTimestamp) : "—"}
       </span>
     ),
   },
   {
     key: "airtime",
     header: "Agent time",
-    sortValue: (s) => s.airTimeMs ?? s.durationMs ?? 0,
+    sortValue: (r) => r.session.airTimeMs ?? r.session.durationMs ?? 0,
     align: "right",
-    render: (s) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        {formatDuration(s.airTimeMs ?? s.durationMs ?? 0)}
+        {formatDuration(r.session.airTimeMs ?? r.session.durationMs ?? 0)}
       </span>
     ),
   },
   {
     key: "turns",
     header: "Turns",
-    sortValue: (s) => s.turnCount ?? 0,
+    sortValue: (r) => r.session.turnCount ?? 0,
     align: "right",
-    render: (s) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        {(s.turnCount ?? 0).toLocaleString()}
+        {(r.session.turnCount ?? 0).toLocaleString()}
       </span>
     ),
   },
   {
     key: "tools",
     header: "Tool calls",
-    sortValue: (s) => s.toolCallCount ?? 0,
+    sortValue: (r) => r.session.toolCallCount ?? 0,
     align: "right",
-    render: (s) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        {(s.toolCallCount ?? 0).toLocaleString()}
+        {(r.session.toolCallCount ?? 0).toLocaleString()}
       </span>
     ),
   },
   {
     key: "tokens",
     header: "Tokens",
-    sortValue: (s) =>
-      s.totalUsage.input +
-      s.totalUsage.output +
-      s.totalUsage.cacheRead +
-      s.totalUsage.cacheWrite,
+    sortValue: (r) =>
+      r.session.totalUsage.input +
+      r.session.totalUsage.output +
+      r.session.totalUsage.cacheRead +
+      r.session.totalUsage.cacheWrite,
     align: "right",
-    render: (s) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
         {formatTokens(
-          s.totalUsage.input +
-            s.totalUsage.output +
-            s.totalUsage.cacheRead +
-            s.totalUsage.cacheWrite,
+          r.session.totalUsage.input +
+            r.session.totalUsage.output +
+            r.session.totalUsage.cacheRead +
+            r.session.totalUsage.cacheWrite,
         )}
       </span>
     ),
@@ -301,16 +311,38 @@ const sessionTableColumns: Column<SessionMeta>[] = [
   {
     key: "status",
     header: "Status",
-    sortValue: (s) => (s.status === "running" ? 1 : 0),
+    sortValue: (r) => (r.session.status === "running" ? 1 : 0),
     align: "center",
-    render: (s) =>
-      s.status === "running" ? <LiveBadge /> : <span style={{ opacity: 0.4 }}>—</span>,
+    render: (r) =>
+      r.session.status === "running" ? <LiveBadge /> : <span style={{ opacity: 0.4 }}>—</span>,
   },
 ];
 
-function SessionCard({ session: s }: { session: SessionMeta }) {
+function OutcomeCell({ row }: { row: SessionRow }) {
+  if (row.outcome) return <OutcomePill outcome={row.outcome} size="sm" label="text" />;
+  if (row.enrichmentStatus && row.latestLocalDay && row.enrichmentStatus !== "skipped_trivial") {
+    return (
+      <OutcomePill
+        outcome={null}
+        pending
+        sessionId={row.session.id}
+        localDay={row.latestLocalDay}
+        size="sm"
+      />
+    );
+  }
+  return <span style={{ color: "var(--af-text-tertiary)", fontSize: 10 }}>—</span>;
+}
+
+function SessionCard({ row }: { row: SessionRow }) {
+  const { session: s, briefSummary, outcome, latestLocalDay, enrichmentStatus } = row;
   const totalTokens =
     s.totalUsage.input + s.totalUsage.output + s.totalUsage.cacheRead + s.totalUsage.cacheWrite;
+  const showPending =
+    !outcome && enrichmentStatus && enrichmentStatus !== "skipped_trivial" && latestLocalDay;
+  const body = briefSummary ?? s.firstUserPreview ?? "";
+  const bodyIsFallback = !briefSummary;
+
   return (
     <Link
       href={`/sessions/${s.id}`}
@@ -322,7 +354,6 @@ function SessionCard({ session: s }: { session: SessionMeta }) {
         padding: "14px 16px",
       }}
     >
-      {/* Header: project + id + time */}
       <div
         style={{
           display: "flex",
@@ -347,11 +378,7 @@ function SessionCard({ session: s }: { session: SessionMeta }) {
         >
           <LiveBadge mtimeIso={s.lastTimestamp} />
           <span
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
+            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
           >
             {prettyProjectName(s.projectName)}
           </span>
@@ -370,11 +397,27 @@ function SessionCard({ session: s }: { session: SessionMeta }) {
         </div>
       </div>
 
-      {/* First user message (prompt) */}
+      {(outcome || showPending) && (
+        <div onClick={(e) => e.stopPropagation()}>
+          {outcome ? (
+            <OutcomePill outcome={outcome} size="md" />
+          ) : showPending ? (
+            <OutcomePill
+              outcome={null}
+              pending
+              sessionId={s.id}
+              localDay={latestLocalDay!}
+              size="md"
+            />
+          ) : null}
+        </div>
+      )}
+
       <div
         style={{
           fontSize: 13,
-          color: "var(--af-text)",
+          color: bodyIsFallback ? "var(--af-text-secondary)" : "var(--af-text)",
+          fontStyle: bodyIsFallback ? "italic" : "normal",
           display: "-webkit-box",
           WebkitBoxOrient: "vertical",
           WebkitLineClamp: 2,
@@ -382,32 +425,30 @@ function SessionCard({ session: s }: { session: SessionMeta }) {
           minHeight: 36,
           lineHeight: 1.4,
         }}
-        title={s.firstUserPreview}
+        title={bodyIsFallback ? `(raw user message) ${body}` : body}
       >
-        {s.firstUserPreview || (
-          <em style={{ color: "var(--af-text-tertiary)" }}>(no user message)</em>
-        )}
+        {body || <em style={{ color: "var(--af-text-tertiary)" }}>(no user message)</em>}
       </div>
 
-      {/* Last agent message (conclusion) */}
-      <div
-        style={{
-          fontSize: 11.5,
-          color: "var(--af-text-secondary)",
-          display: "-webkit-box",
-          WebkitBoxOrient: "vertical",
-          WebkitLineClamp: 2,
-          overflow: "hidden",
-          lineHeight: 1.4,
-          paddingLeft: 10,
-          borderLeft: "2px solid var(--af-accent-subtle)",
-        }}
-        title={s.lastAgentPreview}
-      >
-        {s.lastAgentPreview || <em style={{ color: "var(--af-text-tertiary)" }}>—</em>}
-      </div>
+      {bodyIsFallback && (
+        <div
+          style={{
+            fontSize: 11.5,
+            color: "var(--af-text-secondary)",
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: 2,
+            overflow: "hidden",
+            lineHeight: 1.4,
+            paddingLeft: 10,
+            borderLeft: "2px solid var(--af-accent-subtle)",
+          }}
+          title={s.lastAgentPreview}
+        >
+          {s.lastAgentPreview || <em style={{ color: "var(--af-text-tertiary)" }}>—</em>}
+        </div>
+      )}
 
-      {/* Footer stats */}
       <div
         style={{
           display: "flex",
@@ -420,12 +461,12 @@ function SessionCard({ session: s }: { session: SessionMeta }) {
           fontFamily: "var(--font-mono)",
         }}
       >
-        <Stat icon={<MessagesSquare size={11} />} label={`${s.turnCount ?? 0} turn${s.turnCount === 1 ? "" : "s"}`} />
-        <Stat icon={<Wrench size={11} />} label={`${s.toolCallCount ?? 0} tools`} />
         <Stat
-          icon={<Clock size={11} />}
-          label={formatDuration(s.airTimeMs ?? s.durationMs)}
+          icon={<MessagesSquare size={11} />}
+          label={`${s.turnCount ?? 0} turn${s.turnCount === 1 ? "" : "s"}`}
         />
+        <Stat icon={<Wrench size={11} />} label={`${s.toolCallCount ?? 0} tools`} />
+        <Stat icon={<Clock size={11} />} label={formatDuration(s.airTimeMs ?? s.durationMs)} />
         <span style={{ marginLeft: "auto" }}>{formatTokens(totalTokens)}</span>
       </div>
     </Link>

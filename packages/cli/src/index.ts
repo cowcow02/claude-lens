@@ -30,19 +30,19 @@ async function main() {
       await update();
       break;
     }
-    case "stats": {
-      const { stats } = await import("./commands/stats.js");
-      await stats(args.slice(1));
-      break;
-    }
     case "usage": {
       const { usage } = await import("./commands/usage.js");
       await usage(args.slice(1));
       break;
     }
-    case "capsules": {
-      const { capsules } = await import("./commands/capsules.js");
-      await capsules(args.slice(1));
+    case "entries": {
+      const { entries } = await import("./commands/entries.js");
+      await entries(args.slice(1));
+      break;
+    }
+    case "digest": {
+      const { digest } = await import("./commands/digest.js");
+      await digest(args.slice(1));
       break;
     }
     case "daemon": {
@@ -53,6 +53,11 @@ async function main() {
     case "team": {
       const { team } = await import("./commands/team.js");
       await team(args.slice(1));
+      break;
+    }
+    case "runs": {
+      const { runs } = await import("./commands/runs.js");
+      await runs(args.slice(1));
       break;
     }
     case "version":
@@ -72,10 +77,13 @@ Common:
   update                            Update to the latest version
 
 Terminal:
-  stats [--week|--4weeks|--days N] [--json]  Period aggregates (for insights pipeline)
   usage [--save]                             Plan utilization snapshot (5h/7d)
   usage --history [-s D] [--days N]          Daily token/cost table
-  capsules [--days N] [--json]               Per-session insight capsules
+  entries [--day D|--session ID|--all] [--json]    Perception-layer entries
+  digest day   [--date D|--yesterday|--today] [--json]    Day digest
+  digest week  [--week D|--last-week|--this-week] [--json]   Week digest
+  digest month [--month YYYY-MM|--last-month|--this-month] [--json]  Month digest
+  runs [--watch] [--json] [--since 24h]      Live LLM call activity + token spend
 
 Advanced:
   web [page] [--no-open]            Open dashboard in browser without auto-starting daemon

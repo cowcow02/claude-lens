@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/data";
 import { loadTeamForSession, findTeamLead } from "@claude-lens/parser/fs";
+import { listEntriesForSession } from "@claude-lens/entries/fs";
 import {
   teamViewToTimelineData,
   type TimelineData,
@@ -17,6 +18,9 @@ export default async function SessionDetailPage({
   const { id } = await params;
   const session = await getSession(id);
   if (!session) return notFound();
+  const entries = listEntriesForSession(id).sort((a, b) =>
+    b.local_day.localeCompare(a.local_day),
+  );
 
   // Only attempt the team load when this session is actually orchestrating
   // a team. A bare teamName tag (without TeamCreate or outbound SendMessage)
@@ -50,5 +54,12 @@ export default async function SessionDetailPage({
     events: session.events.map((e) => ({ ...e, raw: undefined })),
   };
 
-  return <SessionView session={stripped} team={teamProps} teamLead={teamLeadInfo} />;
+  return (
+    <SessionView
+      session={stripped}
+      team={teamProps}
+      teamLead={teamLeadInfo}
+      entries={entries}
+    />
+  );
 }

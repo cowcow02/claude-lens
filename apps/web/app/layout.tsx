@@ -2,9 +2,15 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Sidebar } from "@/components/sidebar";
 import { LiveRefresher } from "@/components/live-refresher";
-import { LiveSessionsWidget, type LiveSessionPick } from "@/components/live-sessions-widget";
+import {
+  LiveSessionsWidget,
+  type LiveSessionPick,
+  type LiveEntrySummary,
+} from "@/components/live-sessions-widget";
+import { JobQueueWidget } from "@/components/job-queue-widget";
 import { listProjects, listSessions, walkJsonlFiles } from "@claude-lens/parser/fs";
 import { latestUsageSnapshot } from "@/lib/usage-data";
+import { buildEntriesIndex } from "@/lib/entries-index";
 import pkg from "../package.json" with { type: "json" };
 import "./globals.css";
 
@@ -16,12 +22,13 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const [projects, allFiles, recentSessions] = await Promise.all([
+  const [projects, allFiles, recentSessions, entriesIndex] = await Promise.all([
     listProjects(),
     walkJsonlFiles(),
     // Only need the newest-mtime slice — the widget filters to the 45s
     // live window client-side.
     listSessions({ limit: 20 }),
+    buildEntriesIndex(),
   ]);
   const totalSessions = allFiles.length;
   const currentUsage = latestUsageSnapshot();
@@ -39,6 +46,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     teamName: s.teamName,
     agentName: s.agentName,
   }));
+
+  const liveEntrySummaries: Record<string, LiveEntrySummary> = {};
+  for (const s of recentSessions) {
+    const list = entriesIndex.bySession.get(s.id) ?? [];
+    if (list.length === 0) continue;
+    const latest = list[list.length - 1]!;
+    liveEntrySummaries[s.id] = {
+      outcome: latest.enrichment.outcome ?? null,
+      enrichmentStatus: latest.enrichment.status,
+      localDay: latest.local_day,
+    };
+  }
 
   // Read the theme cookie set by the client-side ThemeToggle.
   // After the first visit the cookie is always present, so the server
@@ -76,7 +95,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             {children}
           </main>
         </div>
-        <LiveSessionsWidget sessions={liveSessionPicks} />
+        <LiveSessionsWidget sessions={liveSessionPicks} entrySummaries={liveEntrySummaries} />
+        <JobQueueWidget />
       </body>
     </html>
   );

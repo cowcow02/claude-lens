@@ -6,11 +6,33 @@ import {
   detectPrMarkers,
   sessionAirTimeMs,
 } from "@claude-lens/parser";
+import type { DayOutcome, DayHelpfulness } from "@claude-lens/entries";
 import { DashboardView } from "@/components/dashboard-view";
 import { LiveBadge } from "@/components/live-badge";
 import { TeamBadge } from "@/components/team-badge";
+import { OutcomePill, OUTCOME_STYLES } from "@/components/outcome-pill";
+import { HelpfulnessSparkline } from "@/components/helpfulness-sparkline";
+import { buildEntriesIndex, listCachedDayDigests } from "@/lib/entries-index";
 import { formatDuration, formatRelative, prettyProjectName } from "@/lib/format";
 import { ArrowLeft } from "lucide-react";
+
+function lastNDays(n: number): string[] {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${day}`);
+  }
+  return out;
+}
+
+const OUTCOME_PRI: Record<DayOutcome, number> = {
+  shipped: 6, partial: 5, blocked: 4, exploratory: 3, trivial: 2, idle: 1,
+};
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +70,50 @@ export default async function ProjectDetail({ params }: { params: Promise<{ slug
 
   const recentSessions = projectSessions.slice(0, 12);
   const hasPrs = prMarkers.length > 0;
+
+  // Build the recent-7-days strip + helpfulness sparkline.
+  const days = lastNDays(7);
+  const [entriesIndex, cachedDigests] = await Promise.all([
+    buildEntriesIndex(),
+    listCachedDayDigests(),
+  ]);
+  const projectEntries = entriesIndex.byProject.get(decodedCanonical) ?? [];
+  const entriesByDay = new Map<string, typeof projectEntries>();
+  for (const e of projectEntries) {
+    const arr = entriesByDay.get(e.local_day);
+    if (arr) arr.push(e); else entriesByDay.set(e.local_day, [e]);
+  }
+  const recentDays: Array<{
+    date: string;
+    outcome: DayOutcome | null;
+    activeMin: number;
+    prCount: number;
+  }> = days.map((d) => {
+    const list = entriesByDay.get(d) ?? [];
+    let best: DayOutcome | null = null;
+    let bestPri = 0;
+    for (const e of list) {
+      const o = e.enrichment.outcome as DayOutcome | null;
+      if (!o) continue;
+      if ((OUTCOME_PRI[o] ?? 0) > bestPri) {
+        bestPri = OUTCOME_PRI[o] ?? 0;
+        best = o;
+      }
+    }
+    const activeMin = list.reduce((a, e) => a + (e.numbers.active_min ?? 0), 0);
+    const prCount = list.reduce((a, e) => a + e.pr_titles.length, 0);
+    return { date: d, outcome: best, activeMin, prCount };
+  });
+  const helpfulnessDays: Array<{ date: string; helpfulness: DayHelpfulness; cached: boolean }> =
+    days.map((d) => {
+      const dig = cachedDigests.get(d);
+      return {
+        date: d,
+        helpfulness: dig?.helpfulness_day ?? null,
+        cached: !!dig,
+      };
+    });
+  const hasAnyOutcome = recentDays.some((d) => d.outcome !== null);
 
   return (
     <div
@@ -95,6 +161,93 @@ export default async function ProjectDetail({ params }: { params: Promise<{ slug
         sessions={projectSessions}
         override={{ activeTimeMs: refinedAirMs || undefined }}
       />
+
+      {hasAnyOutcome && (
+        <section className="af-panel">
+          <div className="af-panel-header">
+            <span>Recent days</span>
+            <span style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontWeight: 400 }}>
+              last 7 local days
+            </span>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(7, 1fr)",
+              gap: 8,
+              padding: 14,
+            }}
+          >
+            {recentDays.map((d) => {
+              const dt = new Date(`${d.date}T12:00:00`);
+              const dow = dt.toLocaleDateString("en-US", { weekday: "short" });
+              const md = dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+              return (
+                <Link
+                  key={d.date}
+                  href={`/digest/${d.date}`}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    alignItems: "center",
+                    padding: "10px 8px",
+                    border: "1px solid var(--af-border-subtle)",
+                    borderRadius: 8,
+                    background: "var(--af-surface)",
+                    textDecoration: "none",
+                    color: "var(--af-text)",
+                    fontSize: 11,
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{dow}</span>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      color: "var(--af-text-tertiary)",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {md}
+                  </span>
+                  {d.outcome ? (
+                    <span style={{ fontSize: 16, lineHeight: 1 }} aria-hidden>
+                      {OUTCOME_STYLES[d.outcome]?.icon ?? ""}
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 14, color: "var(--af-text-tertiary)" }}>—</span>
+                  )}
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10,
+                      color: "var(--af-text-secondary)",
+                    }}
+                  >
+                    {d.activeMin > 0 ? `${Math.round(d.activeMin)}m` : "—"}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 9,
+                      color: "var(--af-text-tertiary)",
+                    }}
+                  >
+                    {d.prCount > 0 ? `${d.prCount} PR` : "—"}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+          <div
+            style={{
+              padding: "12px 16px",
+              borderTop: "1px solid var(--af-border-subtle)",
+            }}
+          >
+            <HelpfulnessSparkline days={helpfulnessDays} />
+          </div>
+        </section>
+      )}
 
       {/* Pull requests shipped + Recent sessions — two columns (or one if no PRs) */}
       <section

@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --passWithNoTests --coverage"
   },
   "dependencies": {
+    "@claude-lens/entries": "workspace:^",
     "@claude-lens/parser": "workspace:*",
     "@tanstack/react-virtual": "^3.13.23",
     "clsx": "^2.1.1",
@@ -24,7 +25,8 @@
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
     "recharts": "^2.15.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.0",
