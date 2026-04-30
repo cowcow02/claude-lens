@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { loadCalibrationCurve } from "@claude-lens/parser/fs";
-import type { PlanTier } from "@claude-lens/parser";
+import type { PlanTier, RateSource } from "@claude-lens/parser";
 
 // One point on the calibration overlay — pairs the daemon's measured
 // utilization (when a snapshot landed in the slot) with the JSONL-derived
@@ -32,6 +32,12 @@ export type CalibrationDump = {
   coefs_5h?: number[];
   coefs_7d?: number[];
   rate_per_pct?: number;
+  rate_per_pct_5h?: number;
+  rate_per_pct_7d?: number;
+  rate_source_5h?: RateSource;
+  rate_source_7d?: RateSource;
+  cycles_used_5h?: number;
+  cycles_used_7d?: number;
   tier?: string;
 };
 
@@ -155,6 +161,12 @@ export const readCalibrationDump = cache(
     return {
       curve: result.curve,
       rate_per_pct: result.rate_per_pct,
+      rate_per_pct_5h: result.rate_per_pct_5h,
+      rate_per_pct_7d: result.rate_per_pct_7d,
+      rate_source_5h: result.rate_source_5h,
+      rate_source_7d: result.rate_source_7d,
+      cycles_used_5h: result.cycles_used_5h,
+      cycles_used_7d: result.cycles_used_7d,
       tier: result.tier,
     };
   },

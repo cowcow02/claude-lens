@@ -32,8 +32,8 @@ import type { SessionDetail, SessionEvent, SessionMeta, SubagentRun, Usage } fro
 import {
   type CalibrationEvent,
   type PlanTier,
-  RATE_PER_PCT_5H,
-  RATE_PER_PCT_7D,
+  type RateSource,
+  computeUserRates,
   modelFamily,
   predictUtilization,
 } from "./calibration.js";
@@ -1018,6 +1018,14 @@ export type CalibrationCurve = {
   rate_per_pct: number;
   rate_per_pct_5h: number;
   rate_per_pct_7d: number;
+  /** "user_calibrated" once a well-covered completed cycle has been
+   * observed; "tier_default" until then. Surfaced so the UI can label the
+   * predicted overlay (e.g. "calibrated from 3 cycles") instead of just
+   * showing a line of unknown provenance. */
+  rate_source_5h: RateSource;
+  rate_source_7d: RateSource;
+  cycles_used_5h: number;
+  cycles_used_7d: number;
   granularity_min: number;
   curve: CalibrationCurvePoint[];
   first_snapshot_ts: string | null;
@@ -1107,8 +1115,11 @@ function clippedWindowStartMs(
  *
  * Window definition is naive (cycle_end − cycle_hours). It's MAE ~1–2pp
  * on full 7-day cycles but can over-count when Anthropic resets a cycle
- * early (4-day cycles, etc). Per-cycle multiplier refinement is a future
- * follow-up; the live-cycle accuracy is what users see most.
+ * early (4-day cycles, etc).
+ *
+ * The $/pp rate is per-user calibrated against this account's own completed
+ * cycles when at least one well-covered cycle has been observed; otherwise
+ * it falls back to the tier default. See computeUserRates in calibration.ts.
  */
 export function buildCalibrationCurve(
   events: CalibrationEvent[],
@@ -1117,8 +1128,9 @@ export function buildCalibrationCurve(
   granularityMin = 30,
 ): CalibrationCurve | null {
   if (snapshots.length === 0 || events.length === 0) return null;
-  const rate7d = RATE_PER_PCT_7D[tier];
-  const rate5h = RATE_PER_PCT_5H[tier];
+  const userRates = computeUserRates(events, snapshots, tier);
+  const rate7d = userRates.rate7d;
+  const rate5h = userRates.rate5h;
 
   // (snap_ts, reset_ts) pairs, sorted
   const snap5h: Array<[number, number]> = [];
@@ -1202,6 +1214,10 @@ export function buildCalibrationCurve(
     rate_per_pct: rate7d,
     rate_per_pct_5h: rate5h,
     rate_per_pct_7d: rate7d,
+    rate_source_5h: userRates.source5h,
+    rate_source_7d: userRates.source7d,
+    cycles_used_5h: userRates.cyclesUsed5h,
+    cycles_used_7d: userRates.cyclesUsed7d,
     granularity_min: granularityMin,
     curve,
     first_snapshot_ts: snapshots[0]!.captured_at ?? null,

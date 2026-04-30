@@ -96,3 +96,150 @@ export function predictUtilization(
   if (ratePerPct <= 0) return 0;
   return dollarsInWindow(events, startMs, endMs) / ratePerPct;
 }
+
+// ──────────────────────────────────────────────────────────────────
+//                Per-user rate calibration from completed cycles
+// ──────────────────────────────────────────────────────────────────
+
+// Minimal structural shape of a daemon snapshot — defined here so this module
+// stays free of fs/network deps. Compatible with the richer UsageSnapshot
+// types in cli/usage/api.ts and apps/web/lib/usage-data.ts.
+export type SnapshotForCalibration = {
+  captured_at?: string | null;
+  five_hour?: { utilization?: number | null; resets_at?: string | null } | null;
+  seven_day?: { utilization?: number | null; resets_at?: string | null } | null;
+};
+
+export type RateSource = "user_calibrated" | "tier_default";
+
+export type UserRates = {
+  rate7d: number;
+  rate5h: number;
+  cyclesUsed7d: number;
+  cyclesUsed5h: number;
+  source7d: RateSource;
+  source5h: RateSource;
+};
+
+const HOUR_MS = 3_600_000;
+
+type CycleObservation = {
+  cycleEndMs: number;
+  cycleStartMs: number;
+  lastSnapMs: number;
+  closingPct: number;
+};
+
+function collectCycles(
+  snapshots: SnapshotForCalibration[],
+  pick: (s: SnapshotForCalibration) =>
+    | { utilization?: number | null; resets_at?: string | null }
+    | null
+    | undefined,
+): CycleObservation[] {
+  type Bucket = {
+    cycleEndMs: number;
+    firstSnapMs: number;
+    lastSnapMs: number;
+    lastUtil: number;
+  };
+  const byCycle = new Map<number, Bucket>();
+  for (const s of snapshots) {
+    if (!s.captured_at) continue;
+    const w = pick(s);
+    if (!w?.resets_at || typeof w.utilization !== "number") continue;
+    const snapMs = Date.parse(s.captured_at);
+    const resetMs = Date.parse(w.resets_at);
+    if (Number.isNaN(snapMs) || Number.isNaN(resetMs)) continue;
+    const k = Math.round(resetMs / HOUR_MS) * HOUR_MS;
+    const ex = byCycle.get(k);
+    if (ex === undefined) {
+      byCycle.set(k, {
+        cycleEndMs: k,
+        firstSnapMs: snapMs,
+        lastSnapMs: snapMs,
+        lastUtil: w.utilization,
+      });
+    } else {
+      if (snapMs < ex.firstSnapMs) ex.firstSnapMs = snapMs;
+      if (snapMs >= ex.lastSnapMs) {
+        ex.lastSnapMs = snapMs;
+        ex.lastUtil = w.utilization;
+      }
+    }
+  }
+  return Array.from(byCycle.values())
+    .map((b) => ({
+      cycleEndMs: b.cycleEndMs,
+      cycleStartMs: b.firstSnapMs,
+      lastSnapMs: b.lastSnapMs,
+      closingPct: b.lastUtil,
+    }))
+    .sort((a, b) => a.cycleEndMs - b.cycleEndMs);
+}
+
+function fitRate(
+  cycles: CycleObservation[],
+  cycleHours: number,
+  events: CalibrationEvent[],
+  maxCycles: number,
+  now: number,
+  fallback: number,
+  minPct: number,
+): { rate: number; used: number; source: RateSource } {
+  // Tolerance: 5% of cycle length on each end. Drops cycles where the daemon
+  // wasn't running close to either start or close — those produce biased
+  // $/pp estimates (under-counted spend or under-read closing util).
+  const tolMs = cycleHours * HOUR_MS * 0.05;
+  const completed = cycles.filter((c) => {
+    if (c.cycleEndMs > now) return false;
+    if (c.closingPct < minPct) return false;
+    const expectedStart = c.cycleEndMs - cycleHours * HOUR_MS;
+    if (c.cycleStartMs > expectedStart + tolMs) return false;
+    if (c.lastSnapMs < c.cycleEndMs - tolMs) return false;
+    return true;
+  });
+  const recent = completed.slice(-maxCycles);
+  const fitted: Array<{ rate: number; weight: number }> = [];
+  recent.forEach((c, idx) => {
+    const dollars = dollarsInWindow(events, c.cycleStartMs, c.cycleEndMs);
+    if (dollars <= 0) return;
+    // Linear-decay weight: oldest of the kept cycles → 1, newest → maxCycles.
+    fitted.push({ rate: dollars / c.closingPct, weight: idx + 1 });
+  });
+  if (fitted.length === 0) return { rate: fallback, used: 0, source: "tier_default" };
+  const sumW = fitted.reduce((a, x) => a + x.weight, 0);
+  const weighted = fitted.reduce((a, x) => a + x.rate * x.weight, 0) / sumW;
+  return { rate: weighted, used: fitted.length, source: "user_calibrated" };
+}
+
+// Fit $-per-percentage-point against this user's own completed cycles. The
+// tier default is the cold-start fallback; once even one well-covered cycle
+// closes we replace it with the observed rate. A cycle is well-covered when
+// the daemon was running within 5% of cycle length of both start and close.
+export function computeUserRates(
+  events: CalibrationEvent[],
+  snapshots: SnapshotForCalibration[],
+  tier: PlanTier,
+  opts?: { now?: number; minPct?: number; maxCycles7d?: number; maxCycles5h?: number },
+): UserRates {
+  const now = opts?.now ?? Date.now();
+  const minPct = opts?.minPct ?? 5;
+  const maxC7d = opts?.maxCycles7d ?? 3;
+  const maxC5h = opts?.maxCycles5h ?? 10;
+
+  const cycles7d = collectCycles(snapshots, (s) => s.seven_day);
+  const cycles5h = collectCycles(snapshots, (s) => s.five_hour);
+
+  const fit7d = fitRate(cycles7d, 168, events, maxC7d, now, RATE_PER_PCT_7D[tier], minPct);
+  const fit5h = fitRate(cycles5h, 5, events, maxC5h, now, RATE_PER_PCT_5H[tier], minPct);
+
+  return {
+    rate7d: fit7d.rate,
+    rate5h: fit5h.rate,
+    cyclesUsed7d: fit7d.used,
+    cyclesUsed5h: fit5h.used,
+    source7d: fit7d.source,
+    source5h: fit5h.source,
+  };
+}
