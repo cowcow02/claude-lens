@@ -3,14 +3,18 @@ import { UtilizationSparkline } from "./utilization-sparkline";
 import { CyclePeaksStrip } from "./cycle-peaks-strip";
 import type { MemberPlanSummary, MembershipCyclePeak } from "../lib/plan-queries";
 
+// Plain-language status framed around "is this person on track with
+// their license consumption?" — the question an admin actually asks.
+// We keep the underlying recommendation engine but rephrase output so
+// the page reads as a utilization signal, not a sales pitch.
 const ACTION_LABEL: Record<Recommendation["action"], string> = {
   insufficient_data: "Collecting data",
-  review_manually: "Review manually",
-  top_up_needed: "Hitting the wall",
-  upgrade_urgent: "Upgrade urgent",
-  upgrade: "Upgrade suggested",
-  downgrade: "Downgrade candidate",
-  stay: "Plan well-matched",
+  review_manually: "Custom plan — review manually",
+  top_up_needed: "At the cap — needs more headroom",
+  upgrade_urgent: "At the cap — upgrade urgent",
+  upgrade: "Trending toward the cap",
+  downgrade: "Way under the cap",
+  stay: "On track",
 };
 
 type Tone = "good" | "warn" | "danger" | "info";
@@ -50,8 +54,8 @@ export function MemberPlanBlock({
   return (
     <section style={{ marginBottom: 24 }}>
       <div className="subsection-head">
-        <h2>Plan match</h2>
-        <span className="kicker">verdict · cycle peaks · throttling history</span>
+        <h2>Plan utilization</h2>
+        <span className="kicker">are they on track with license consumption?</span>
       </div>
 
       {/* Verdict banner — the answer to "is this plan right for them" */}
@@ -82,7 +86,9 @@ export function MemberPlanBlock({
           )}
         </div>
         <div style={{ fontSize: 14, marginTop: 6, color: "var(--ink)" }}>
-          {summary.recommendation.rationale}
+          {currentInFlight
+            ? buildCurrentCycleStatus(currentInFlight)
+            : summary.recommendation.rationale}
         </div>
       </div>
 
@@ -209,6 +215,34 @@ function peakColor(pct: number): string {
   if (pct >= 90) return "#c5283d";
   if (pct >= 70) return "#b58400";
   return "#2f8f5a";
+}
+
+// Verdict rationale — focused on the in-progress cycle, not historical
+// averages. Admin glance question is "where are they NOW and how long
+// until reset", not "what was the 30-day average". Format:
+//   "current 42% · 4d 2h to next reset (May 3, 3 PM UTC)"
+function buildCurrentCycleStatus(c: { peakPct: number; endsAt: string }): string {
+  const reset = new Date(c.endsAt);
+  const ms = reset.getTime() - Date.now();
+  if (ms <= 0) return `current ${c.peakPct.toFixed(0)}% · cycle reset due now`;
+  const totalHours = Math.floor(ms / 3_600_000);
+  const days = Math.floor(totalHours / 24);
+  const remHours = totalHours % 24;
+  const ago =
+    days > 0
+      ? remHours > 0
+        ? `${days}d ${remHours}h`
+        : `${days}d`
+      : `${totalHours}h`;
+  const fmt = reset.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+    timeZoneName: "short",
+  });
+  return `current ${c.peakPct.toFixed(0)}% · ${ago} to next reset (${fmt})`;
 }
 
 function WallStat({ label, count, hint }: { label: string; count: number; hint: string }) {

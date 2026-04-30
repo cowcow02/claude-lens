@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { MemberTierEditor } from "./member-tier-editor";
 
 type TeamRow = { id: string; name: string; slug: string; created_at: string };
 type MemberRow = {
@@ -98,13 +97,11 @@ export function SettingsPanel({ team, members, teamSlug }: { team: TeamRow; memb
         )}
       </section>
 
-      <section className="settings-section">
-        <div className="subsection-head">
-          <h2>Plan tiers</h2>
-          <span className="kicker">Used by the Plan view&rsquo;s optimizer + burndown</span>
-        </div>
-        <MemberTierEditor members={members.filter((m) => !m.revoked_at)} />
-      </section>
+      {/* "Plan tiers" tier-picker dropdown removed — the daemon now reads
+          each user's tier directly from /api/oauth/profile every 5 min
+          and the server upserts memberships.plan_tier on receipt. Manual
+          override is still possible by writing the column directly if a
+          user has a custom plan that profile doesn't expose. */}
 
       <section className="settings-section">
         <div className="subsection-head">
