@@ -77,36 +77,44 @@ export function MemberProfile({ member, rollups }: { member: MemberRow; rollups:
         </div>
       )}
 
-      <div className="subsection-head">
-        <h2>Daily breakdown</h2>
-        <span className="kicker">Newest first</span>
-      </div>
-      {rollups.length === 0 ? (
-        <div style={{ color: "var(--mute)", fontSize: 13, padding: "24px 0" }}>No data.</div>
-      ) : (
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Day</th>
-              <th>Agent</th>
-              <th>Sessions</th>
-              <th>Tool calls</th>
-              <th>Tokens</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rollups.slice().reverse().map((r) => (
-              <tr key={r.day}>
-                <td>{r.day}</td>
-                <td>{formatAgentTime(Number(r.agent_time_ms))}</td>
-                <td>{r.sessions}</td>
-                <td>{r.tool_calls}</td>
-                <td>{formatTokens(Number(r.tokens_input) + Number(r.tokens_output) + Number(r.tokens_cache_read) + Number(r.tokens_cache_write))}</td>
+      {/* Collapsed by default — the day-bar chart above already conveys
+          shape; the table is for admins who want the exact numbers per
+          day, not the default view. */}
+      <details>
+        <summary
+          className="subsection-head"
+          style={{ cursor: "pointer", listStyle: "revert" }}
+        >
+          <h2 style={{ display: "inline" }}>Daily breakdown</h2>
+          <span className="kicker"> · per-day numbers · click to expand</span>
+        </summary>
+        {rollups.length === 0 ? (
+          <div style={{ color: "var(--mute)", fontSize: 13, padding: "24px 0" }}>No data.</div>
+        ) : (
+          <table className="data" style={{ marginTop: 12 }}>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Agent</th>
+                <th>Sessions</th>
+                <th>Tool calls</th>
+                <th>Tokens</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {rollups.slice().reverse().map((r) => (
+                <tr key={r.day}>
+                  <td>{r.day}</td>
+                  <td>{formatAgentTime(Number(r.agent_time_ms))}</td>
+                  <td>{r.sessions}</td>
+                  <td>{r.tool_calls}</td>
+                  <td>{formatTokens(Number(r.tokens_input) + Number(r.tokens_output) + Number(r.tokens_cache_read) + Number(r.tokens_cache_write))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </details>
     </>
   );
 }

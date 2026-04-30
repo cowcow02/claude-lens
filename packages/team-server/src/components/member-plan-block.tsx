@@ -122,11 +122,15 @@ export function MemberPlanBlock({
         />
       </div>
 
-      {/* Wall hits — turns "100% peak" into "but did they actually hit the cap?" */}
+      {/* Throttling counters. "100% peak" looks alarming on its own —
+          this panel turns it into "did they actually hit the wall, and
+          for how many days?" Anthropic stops accepting new work once a
+          rolling window hits its cap, so these days are when the user
+          was *blocked* (or routed to a slower model), not just busy. */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
           gap: 16,
           marginBottom: 24,
           padding: "14px 16px",
@@ -135,14 +139,14 @@ export function MemberPlanBlock({
         }}
       >
         <WallStat
-          label="Days at the 7-day cap"
+          label="Throttled (weekly limit)"
           count={summary.wallHits7d}
-          hint="Distinct days where the rolling 7-day usage reached 100%"
+          hint="Days they exhausted the rolling 7-day budget — Claude refuses or routes to a fallback until the window rolls forward"
         />
         <WallStat
-          label="Days at the 5-hour cap"
+          label="Throttled (5-hour burst)"
           count={summary.wallHits5h}
-          hint="Distinct days a 5-hour burst hit 100% — bursty work, throttling risk"
+          hint="Days a 5-hour burst hit 100% — bursty work, mid-session throttling that resolves on the next 5-hour reset"
         />
       </div>
 
@@ -306,7 +310,9 @@ function WallStat({ label, count, hint }: { label: string; count: number; hint: 
         className="mono"
         style={{ fontSize: 18, marginTop: 4, color: toneColor(tone), fontWeight: 600 }}
       >
-        {count === 0 ? "0 days" : `${count} day${count === 1 ? "" : "s"}`}
+        {count === 0
+          ? "Never · 0 / 30 days"
+          : `${count} / 30 day${count === 1 ? "" : "s"}`}
       </div>
       <div style={{ fontSize: 11, marginTop: 4, color: "var(--mute)", lineHeight: 1.4 }}>
         {hint}
