@@ -173,10 +173,12 @@ export async function* runWeekDigestPipeline(
     const topSlices = topSlicesPrep.filter((x): x is NonNullable<typeof x> => x !== null);
 
     if (aiOn) {
-      // Fire week narrative + all top-session deep-dives concurrently.
-      // The week LLM has no input dependency on top-sessions and vice
-      // versa; running in parallel cuts wall-clock by ~3-5 min on a
-      // typical week.
+      // Parallel mode: fire the week narrative + all top-session deep-dives
+      // concurrently. The week LLM and top-session LLMs have no input
+      // dependency on each other, so wall-clock = max(week, max(top_sessions))
+      // instead of the sum. With --effort medium and the MCP fix in place,
+      // contention on the shared 5-hour subscription budget is much lower
+      // than what we observed pre-fix.
       yield {
         type: "status", phase: "synth",
         text: topSlices.length > 0

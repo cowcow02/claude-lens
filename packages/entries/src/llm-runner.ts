@@ -34,6 +34,10 @@ function detectKindFromSystemPrompt(sp: string): string {
   if (head.includes("editorial perception layer for one session")) return "top_session";
   if (head.includes("single local day into a short, honest narrative")) return "day_digest";
   if (head.includes("month") && head.includes("digest")) return "month_digest";
+  // Enrichment prompt opens with "analyzing one (session × local-day) slice".
+  // Older marker keywords ("brief_summary", "per-entry") aren't in the head,
+  // so without this match enrich calls used to land as "unknown".
+  if (head.includes("session × local-day") || head.includes("(session × local-day)")) return "entry_enrich";
   if (head.includes("brief_summary") || head.includes("per-entry") || head.includes("per entry")) return "entry_enrich";
   return "unknown";
 }
@@ -80,11 +84,36 @@ export function runClaudeSubprocess(args: RunSubprocessArgs): Promise<LLMRespons
       },
     }) + "\n");
 
+    // Persist the exact prompts so a stuck or misbehaving call can be diagnosed
+    // without re-running. This is local-only; if a future privacy switch is
+    // needed, gate via env (FLEETLENS_TRACE_PROMPTS=0). All three are passed
+    // verbatim to claude -p (system via --append-system-prompt, user+reminder
+    // via stdin separated by "\n\n---\n\n").
+    safeAppend(trace, JSON.stringify({
+      _meta: {
+        type: "payload",
+        run_id: runId,
+        system_prompt: args.systemPrompt,
+        user_prompt: args.userPrompt,
+        reminder: args.reminder ?? null,
+      },
+    }) + "\n");
+
     const claudeArgs = [
       "-p", "--output-format", "stream-json", "--verbose",
       "--model", args.model, "--tools", "",
       "--disable-slash-commands", "--no-session-persistence",
       "--setting-sources", "",
+      // Drop the user's connected MCP manifest from each call. Without these
+      // flags, claude -p preloads ~68K cache_creation tokens of tool defs
+      // (Slack/Linear/Gmail/etc) per invocation, saturating the 5-hour
+      // subscription budget within a few digests. With them: ~6K tokens.
+      "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+      // Explicit effort. Sonnet 4.6 defaults to adaptive thinking with no
+      // effort param — the model decides per-turn budget, and on structured
+      // JSON synthesis it tends to allocate less. "medium" sets an explicit
+      // floor without burning budget the way "high" or "xhigh" would.
+      "--effort", "medium",
       "--append-system-prompt", args.systemPrompt,
     ];
     const proc = spawn("claude", claudeArgs, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env } });

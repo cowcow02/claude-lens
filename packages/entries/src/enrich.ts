@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { classifyUserInputSource } from "./signals.js";
 import {
   buildEnrichmentUserPrompt,
   ENRICHMENT_SYSTEM_PROMPT,
   EnrichmentResponseSchema,
 } from "./prompts/enrich.js";
+import { runClaudeSubprocess } from "./llm-runner.js";
 import type { Entry, EntryEnrichment } from "./types.js";
 
 export type LLMResponse = {
@@ -62,103 +62,25 @@ export function computeCostUsd(model: string, inTokens: number, outTokens: numbe
   return (inTokens * p.input + outTokens * p.output) / 1_000_000;
 }
 
-async function defaultCallLLM(args: {
+// Delegate to the shared runner so entry-enrichment calls get the same
+// MCP-strict + --effort medium flags AND write per-call traces to
+// ~/.cclens/llm-runs/, making them visible on the /runs page alongside
+// digest synth calls. Previously this site had its own duplicated spawn
+// path that silently preloaded ~68K MCP cache_creation tokens per call —
+// the worst offender for subscription-budget burn since enrichment runs
+// once per session per day.
+function defaultCallLLM(args: {
   model: string;
   userPrompt: string;
   reminder?: string;
   onProgress?: (info: LLMProgress) => void;
 }): Promise<LLMResponse> {
-  return new Promise((resolve, reject) => {
-    const claudeArgs = [
-      "-p",
-      "--output-format", "stream-json",
-      "--verbose",
-      "--model", args.model,
-      "--tools", "",
-      "--disable-slash-commands",
-      "--no-session-persistence",
-      "--setting-sources", "",
-      "--append-system-prompt", ENRICHMENT_SYSTEM_PROMPT,
-    ];
-    const proc = spawn("claude", claudeArgs, {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-
-    const stdinPayload = args.reminder
-      ? `${args.userPrompt}\n\n---\n\n${args.reminder}`
-      : args.userPrompt;
-    proc.stdin.write(stdinPayload);
-    proc.stdin.end();
-
-    let buffer = "";
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let modelUsed = args.model;
-    let stderr = "";
-    const startMs = Date.now();
-    let lastReportedKb = -1;
-
-    proc.stdout.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf8");
-      for (const line of text.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const obj = JSON.parse(trimmed) as Record<string, unknown>;
-          if (obj.type === "assistant") {
-            const msg = obj.message as Record<string, unknown> | undefined;
-            const content = msg?.content as Array<Record<string, unknown>> | undefined;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (block.type === "text" && typeof block.text === "string") {
-                  buffer += block.text;
-                  if (args.onProgress) {
-                    const kb = Math.floor(buffer.length / 1024);
-                    if (kb > lastReportedKb) {
-                      lastReportedKb = kb;
-                      args.onProgress({ bytes: buffer.length, elapsedMs: Date.now() - startMs });
-                    }
-                  }
-                }
-              }
-            }
-            const msgModel = (msg as { model?: string } | undefined)?.model;
-            if (msgModel) modelUsed = msgModel;
-          }
-          if (obj.type === "result") {
-            const usage = obj.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-            if (usage) {
-              inputTokens = usage.input_tokens ?? 0;
-              outputTokens = usage.output_tokens ?? 0;
-            }
-          }
-        } catch {
-          // skip non-JSON lines (verbose debug framing)
-        }
-      }
-    });
-
-    proc.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-
-    proc.on("close", (code) => {
-      if (code !== 0 && !buffer) {
-        reject(new Error(`claude exited ${code}: ${stderr.trim().slice(0, 300)}`));
-        return;
-      }
-      resolve({
-        content: buffer,
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        model: modelUsed,
-      });
-    });
-
-    proc.on("error", (err) => {
-      reject(new Error(`Failed to spawn claude: ${err.message}`));
-    });
+  return runClaudeSubprocess({
+    systemPrompt: ENRICHMENT_SYSTEM_PROMPT,
+    model: args.model,
+    userPrompt: args.userPrompt,
+    reminder: args.reminder,
+    onProgress: args.onProgress,
   });
 }
 
