@@ -42,15 +42,6 @@ export async function runTeamSync(
     const sessions = await listSessions({ limit: 10_000 });
     const rollups = buildRollupsForRange(sessions, config.lastSyncedDay);
 
-    if (rollups.length === 0) {
-      log("info", "team push: nothing to sync");
-      return { paired: true, pushed: 0, queued: 0, queuedDrained: 0 };
-    }
-
-    let pushed = 0;
-    let queued = 0;
-    let failedDay: string | undefined;
-
     // Snapshot represents *current* utilization, not historical days. Attach
     // only to the most recent rollup so a multi-day backfill doesn't repeat
     // the same captured_at across older days.
@@ -63,6 +54,43 @@ export async function runTeamSync(
     // /usage trend strip. Pushing the COMPUTED OUTCOME keeps the team server
     // free of any prediction math: it stores and renders, never derives.
     const cyclePeaks = await buildCyclePeaksForPush(planTier, loadCalibrationCurve);
+
+    if (rollups.length === 0) {
+      // No new daily activity (idle day / weekend) — but the daemon polls
+      // /api/oauth/usage every 5 minutes regardless, so we still push the
+      // fresh snapshot / tier / cyclePeaks so the team server's live views
+      // don't freeze.
+      const hasLiveData = Boolean(usageSnapshot || planTier || cyclePeaks);
+      if (!hasLiveData) {
+        log("info", "team push: nothing to sync");
+        return { paired: true, pushed: 0, queued: 0, queuedDrained: 0 };
+      }
+      const payload = buildIngestPayload(undefined, usageSnapshot, planTier, cyclePeaks);
+      const result = await pushToTeamServer(config, payload);
+      if (!result.ok) {
+        log("warn", `team push (live-only) failed (${result.status}); queueing`);
+        enqueuePayload(payload);
+        return { paired: true, pushed: 0, queued: 1, queuedDrained: 0 };
+      }
+      // Try to drain any queued backlog while the server is reachable.
+      let queuedDrained = 0;
+      const backlog = dequeuePayloads() as IngestPayload[];
+      for (let i = 0; i < backlog.length; i++) {
+        const qResult = await pushToTeamServer(config, backlog[i]);
+        if (!qResult.ok) {
+          for (const remaining of backlog.slice(i)) enqueuePayload(remaining);
+          break;
+        }
+        queuedDrained++;
+      }
+      log("info", `team push ok: live-only (no new daily activity)` +
+        (queuedDrained ? `, ${queuedDrained} queued retried` : ""));
+      return { paired: true, pushed: 1, queued: 0, queuedDrained };
+    }
+
+    let pushed = 0;
+    let queued = 0;
+    let failedDay: string | undefined;
 
     for (let i = 0; i < rollups.length; i++) {
       const rollup = rollups[i]!;
@@ -150,20 +178,17 @@ async function buildCyclePeaksForPush(
     }
     const out: import("./push.js").WireCyclePeak[] = [];
     for (const [endMs, points] of Array.from(byCycle.entries()).sort((a, b) => a[0] - b[0])) {
+      // Take the max across BOTH real and predicted — when the daemon goes
+      // dark before cycle close, the cycle's true peak is the predicted
+      // close, not the last poll. Mirrors previousCyclesTrend in the
+      // personal /usage chart.
       let peak = 0;
       let source: "real" | "predicted" = "predicted";
       for (const p of points) {
         const r = p[realKey];
-        if (typeof r === "number" && r > peak) {
-          peak = r;
-          source = "real";
-        }
-      }
-      if (source === "predicted") {
-        for (const p of points) {
-          const v = p[predKey] ?? 0;
-          if (v > peak) peak = v;
-        }
+        if (typeof r === "number" && r > peak) { peak = r; source = "real"; }
+        const v = p[predKey] ?? 0;
+        if (v > peak) { peak = v; source = "predicted"; }
       }
       out.push({
         endsAt: new Date(endMs).toISOString(),

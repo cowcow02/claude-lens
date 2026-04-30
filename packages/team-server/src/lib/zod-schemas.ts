@@ -52,6 +52,11 @@ export const UsageHistoryPayload = z.object({
   planTier: PlanTierKeySchema.optional(),
 });
 
+// dailyRollup is optional so the daemon can push fresh tier / snapshot /
+// cycle-peaks updates on idle days when the user hasn't run a Claude Code
+// session (no new daily activity to roll up). The server skips the
+// daily_rollups upsert in that case but still applies the rest of the
+// payload — keeps live views fresh on weekends and breaks.
 export const IngestPayload = z.object({
   ingestId: z.string(),
   observedAt: z.string().datetime(),
@@ -67,7 +72,7 @@ export const IngestPayload = z.object({
       cacheRead: z.number().int().nonnegative(),
       cacheWrite: z.number().int().nonnegative(),
     }).passthrough(),
-  }).passthrough(),
+  }).passthrough().optional(),
   usageSnapshot: UsageSnapshotSchema.optional(),
   planTier: PlanTierKeySchema.optional(),
   cyclePeaks: WireCyclePeaksSchema.optional(),

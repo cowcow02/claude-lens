@@ -57,7 +57,7 @@ describe("IngestPayload", () => {
       },
     };
     const result = IngestPayload.parse(input);
-    expect((result.dailyRollup.tokens as any).cacheWriteInference).toBe(50);
+    expect((result.dailyRollup!.tokens as any).cacheWriteInference).toBe(50);
   });
 });
 

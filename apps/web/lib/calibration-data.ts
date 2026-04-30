@@ -138,7 +138,8 @@ function readTier(): PlanTier {
   if (!existsSync(PROFILE_CACHE)) return DEFAULT_TIER;
   try {
     const raw = JSON.parse(readFileSync(PROFILE_CACHE, "utf8"));
-    const t = raw?.planTier as PlanTier | undefined;
+    // Cache shape from writeCachedProfile: { fetchedAtMs, profile: { planTier, ... } }.
+    const t = raw?.profile?.planTier as PlanTier | undefined;
     if (t === "pro" || t === "pro-max" || t === "pro-max-20x" || t === "custom") return t;
   } catch {
     /* ignore — fall back to default */

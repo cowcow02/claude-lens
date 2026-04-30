@@ -36,7 +36,11 @@ export async function loadOptimizerInputs(
         EXTRACT(EPOCH FROM MAX(last_captured_at))::float8 * 1000 AS last_seen_ms
       FROM membership_weekly_utilization
       WHERE team_id = $1
-        AND window_end >= now() - make_interval(days => $2::int)
+        -- Anchor the lookback on window_start_day so a cycle that opened
+        -- before the 30-day horizon doesn't leak its 7-day span into the
+        -- aggregate. Mirrors the 12-week trailing query below that already
+        -- uses window_start_day for the same reason.
+        AND window_start_day >= now() - make_interval(days => $2::int)
       GROUP BY membership_id
     )
     SELECT
@@ -311,7 +315,7 @@ export async function loadMemberPlanSummary(
          EXTRACT(EPOCH FROM MAX(last_captured_at))::float8 * 1000 AS last_seen_ms
        FROM membership_weekly_utilization
        WHERE team_id = $1 AND membership_id = $2
-         AND window_end >= now() - interval '30 days'`,
+         AND window_start_day >= now() - interval '30 days'`,
       [teamId, membershipId],
     ),
     pool.query<{ peak_seven_day_pct: number }>(

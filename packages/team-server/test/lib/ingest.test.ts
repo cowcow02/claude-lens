@@ -131,10 +131,17 @@ describe("processIngest", () => {
     await expect(processIngest(bad, membershipId, teamId, pool)).rejects.toThrow();
   });
 
-  it("throws ZodError when dailyRollup is missing", async () => {
-    await expect(
-      processIngest({ ingestId: "x", observedAt: new Date().toISOString() }, membershipId, teamId, pool)
-    ).rejects.toThrow();
+  it("accepts payloads without a dailyRollup (idle-day live-only push)", async () => {
+    // dailyRollup is optional so the daemon can push fresh tier/snapshot/
+    // cycle-peaks updates even on idle days. The server should accept the
+    // payload, skip the daily_rollups upsert, and return ok.
+    const result = await processIngest(
+      { ingestId: `idle-${Date.now()}`, observedAt: new Date().toISOString() },
+      membershipId,
+      teamId,
+      pool,
+    );
+    expect(result).toMatchObject({ accepted: true });
   });
 
   it("inserts plan_utilization row when usageSnapshot present", async () => {

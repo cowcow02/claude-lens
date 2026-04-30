@@ -12,7 +12,6 @@ export async function processIngest(
 ) {
   const p = pool || getPool();
   const payload = IngestPayload.parse(raw);
-  const r = payload.dailyRollup;
 
   const client = await p.connect();
   try {
@@ -27,21 +26,24 @@ export async function processIngest(
       return { accepted: true, deduplicated: true };
     }
 
-    await client.query(`
-      INSERT INTO daily_rollups (team_id, membership_id, day, agent_time_ms, sessions, tool_calls, turns,
-                                 tokens_input, tokens_output, tokens_cache_read, tokens_cache_write)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT (team_id, membership_id, day) DO UPDATE SET
-        agent_time_ms = EXCLUDED.agent_time_ms,
-        sessions = EXCLUDED.sessions,
-        tool_calls = EXCLUDED.tool_calls,
-        turns = EXCLUDED.turns,
-        tokens_input = EXCLUDED.tokens_input,
-        tokens_output = EXCLUDED.tokens_output,
-        tokens_cache_read = EXCLUDED.tokens_cache_read,
-        tokens_cache_write = EXCLUDED.tokens_cache_write
-    `, [teamId, membershipId, r.day, r.agentTimeMs, r.sessions, r.toolCalls, r.turns,
-        r.tokens.input, r.tokens.output, r.tokens.cacheRead, r.tokens.cacheWrite]);
+    if (payload.dailyRollup) {
+      const r = payload.dailyRollup;
+      await client.query(`
+        INSERT INTO daily_rollups (team_id, membership_id, day, agent_time_ms, sessions, tool_calls, turns,
+                                   tokens_input, tokens_output, tokens_cache_read, tokens_cache_write)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (team_id, membership_id, day) DO UPDATE SET
+          agent_time_ms = EXCLUDED.agent_time_ms,
+          sessions = EXCLUDED.sessions,
+          tool_calls = EXCLUDED.tool_calls,
+          turns = EXCLUDED.turns,
+          tokens_input = EXCLUDED.tokens_input,
+          tokens_output = EXCLUDED.tokens_output,
+          tokens_cache_read = EXCLUDED.tokens_cache_read,
+          tokens_cache_write = EXCLUDED.tokens_cache_write
+      `, [teamId, membershipId, r.day, r.agentTimeMs, r.sessions, r.toolCalls, r.turns,
+          r.tokens.input, r.tokens.output, r.tokens.cacheRead, r.tokens.cacheWrite]);
+    }
 
     if (payload.planTier) {
       // Server-trusted source of truth — the daemon read this directly from

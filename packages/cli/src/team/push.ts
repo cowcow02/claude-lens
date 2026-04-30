@@ -55,7 +55,10 @@ export type WireCyclePeaks = {
 export type IngestPayload = {
   ingestId: string;
   observedAt: string;
-  dailyRollup: DailyRollup;
+  // Optional so the daemon can push tier/snapshot/cyclePeaks updates on
+  // idle days when there's no new daily activity to roll up. Server skips
+  // the daily_rollups upsert when missing but still applies the rest.
+  dailyRollup?: DailyRollup;
   usageSnapshot?: WireUsageSnapshot;
   // Anthropic-detected tier ("pro"|"pro-max"|"pro-max-20x"|"custom"). Server
   // upserts memberships.plan_tier when this is set so admins don't have to
@@ -141,7 +144,7 @@ export function buildRollupsForRange(sessions: SessionMeta[], sinceDay?: string)
 }
 
 export function buildIngestPayload(
-  rollup: DailyRollup,
+  rollup: DailyRollup | undefined,
   usageSnapshot?: WireUsageSnapshot,
   planTier?: string,
   cyclePeaks?: WireCyclePeaks,
@@ -149,7 +152,7 @@ export function buildIngestPayload(
   return {
     ingestId: randomUUID(),
     observedAt: new Date().toISOString(),
-    dailyRollup: rollup,
+    ...(rollup ? { dailyRollup: rollup } : {}),
     ...(usageSnapshot ? { usageSnapshot } : {}),
     ...(planTier ? { planTier } : {}),
     ...(cyclePeaks ? { cyclePeaks } : {}),

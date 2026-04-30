@@ -37,6 +37,18 @@ vi.mock("@claude-lens/parser/fs", () => ({
   loadCalibrationCurve: async () => null,
 }));
 
+// Stub the daemon's local-state readers to null so "no daily activity"
+// tests exercise the truly-empty path (no rollups + no live data → no
+// push). Tests that exercise the live-only push path can override these.
+vi.mock("../../src/usage/storage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/usage/storage.js")>();
+  return { ...actual, latestSnapshot: () => null };
+});
+vi.mock("../../src/usage/profile.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/usage/profile.js")>();
+  return { ...actual, getPlanTier: async () => null };
+});
+
 // Mock config module so readTeamConfig / writeTeamConfig don't touch real disk
 vi.mock("../../src/team/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/team/config.js")>();
