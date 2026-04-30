@@ -29,10 +29,25 @@ function makeSession(dayISO: string, overrides: Partial<SessionMeta> = {}): Sess
 
 // ---------- module mocks ----------
 
-// Mock parser/fs so listSessions returns our fixture
+// Mock parser/fs so listSessions returns our fixture. loadCalibrationCurve
+// returns null in tests — sync is meant to handle missing JSONL gracefully
+// (cold-start, no daemon data) so this also exercises that branch.
 vi.mock("@claude-lens/parser/fs", () => ({
   listSessions: vi.fn(),
+  loadCalibrationCurve: async () => null,
 }));
+
+// Stub the daemon's local-state readers to null so "no daily activity"
+// tests exercise the truly-empty path (no rollups + no live data → no
+// push). Tests that exercise the live-only push path can override these.
+vi.mock("../../src/usage/storage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/usage/storage.js")>();
+  return { ...actual, latestSnapshot: () => null };
+});
+vi.mock("../../src/usage/profile.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/usage/profile.js")>();
+  return { ...actual, getPlanTier: async () => null };
+});
 
 // Mock config module so readTeamConfig / writeTeamConfig don't touch real disk
 vi.mock("../../src/team/config.js", async (importOriginal) => {

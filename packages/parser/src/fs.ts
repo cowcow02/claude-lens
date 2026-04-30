@@ -29,6 +29,19 @@ import { parseTranscript } from "./parser.js";
 import { canonicalProjectName, toLocalDay, worktreeName } from "./analytics.js";
 import { groupByTeam, type TeamView } from "./team.js";
 import type { SessionDetail, SessionEvent, SessionMeta, SubagentRun, Usage } from "./types.js";
+import {
+  type CalibrationEvent,
+  type PlanTier,
+  type RateSource,
+  RATE_PER_PCT_5H,
+  RATE_PER_PCT_7D,
+  buildSpendIndex,
+  collectSnapPairRates,
+  groupSnapsByCycle,
+  modelFamily,
+  predictAnchored,
+  userSoloRate,
+} from "./calibration.js";
 
 export const DEFAULT_ROOT = path.join(os.homedir(), ".claude", "projects");
 
@@ -851,8 +864,8 @@ const USAGE_LOG = path.join(os.homedir(), ".cclens", "usage.jsonl");
 
 type UsageSnapshot = {
   captured_at?: string;
-  five_hour?: { utilization?: number };
-  seven_day?: { utilization?: number };
+  five_hour?: { utilization?: number; resets_at?: string };
+  seven_day?: { utilization?: number; resets_at?: string };
   seven_day_sonnet?: { utilization?: number } | null;
 };
 
@@ -906,4 +919,314 @@ export async function loadUsageByDay(
     cur.setDate(cur.getDate() + 1);
   }
   return { by_day: out };
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Calibration: JSONL → predicted utilization
+// ──────────────────────────────────────────────────────────────────
+
+/**
+ * Walk all JSONL transcripts under `root` and return one CalibrationEvent
+ * per unique message.id. Multi-block assistant messages emit thinking +
+ * text + tool_use lines that all carry the same final usage block; summing
+ * every line inflates tokens 2-3x. We keep the LAST line per id (its
+ * "final state" usage). Non-Claude (glm-*) and synthetic events are
+ * dropped — they aren't priced by Anthropic.
+ */
+export async function loadCalibrationEvents(
+  root: string = DEFAULT_ROOT,
+): Promise<CalibrationEvent[]> {
+  const files = await walkJsonlFiles(root);
+  const byId = new Map<string, CalibrationEvent>();
+  for (const f of files) {
+    let lines: unknown[];
+    try {
+      lines = await readJsonlFile(f.fullPath);
+    } catch {
+      continue;
+    }
+    for (const raw of lines) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as Record<string, unknown>;
+      if (r.type !== "assistant") continue;
+      const ts = typeof r.timestamp === "string" ? r.timestamp : undefined;
+      if (!ts) continue;
+      const m = r.message as Record<string, unknown> | undefined;
+      if (!m) continue;
+      const u = m.usage as Record<string, unknown> | undefined;
+      if (!u) continue;
+      const family = modelFamily(typeof m.model === "string" ? m.model : undefined);
+      if (family === null) continue;
+      const mid = typeof m.id === "string" ? m.id : `__noid_${f.fullPath}_${ts}`;
+      const cc = (u.cache_creation as Record<string, unknown> | undefined) ?? {};
+      const toNum = (v: unknown) => (typeof v === "number" ? v : 0);
+      byId.set(mid, {
+        ts,
+        family,
+        input: toNum(u.input_tokens),
+        output: toNum(u.output_tokens),
+        cacheRead: toNum(u.cache_read_input_tokens),
+        cache_1h: toNum(cc.ephemeral_1h_input_tokens),
+        cache_5m: toNum(cc.ephemeral_5m_input_tokens),
+      });
+    }
+  }
+  const events = Array.from(byId.values());
+  events.sort((a, b) => a.ts.localeCompare(b.ts));
+  return events;
+}
+
+/** All snapshots from ~/.cclens/usage.jsonl, sorted by captured_at. */
+export async function loadCalibrationSnapshots(): Promise<UsageSnapshot[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(USAGE_LOG, "utf8");
+  } catch {
+    return [];
+  }
+  const out: UsageSnapshot[] = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const s = JSON.parse(t) as UsageSnapshot;
+      if (s.captured_at) out.push(s);
+    } catch {
+      /* skip malformed */
+    }
+  }
+  out.sort((a, b) => (a.captured_at ?? "").localeCompare(b.captured_at ?? ""));
+  return out;
+}
+
+/**
+ * One point on the calibration curve — pairs the daemon's measured
+ * utilization (when a snapshot landed in the slot) with the JSONL-derived
+ * prediction at that timestamp.
+ */
+export type CalibrationCurvePoint = {
+  ts: string;
+  real_5h: number | null;
+  pred_5h: number;
+  real_7d: number | null;
+  pred_7d: number;
+  /** ISO timestamp of the 5h cycle this point belongs to (= resets_at).
+   * Lets consumers group points into cycles without having to detect
+   * resets heuristically from value drops. */
+  cycle_end_5h: string | null;
+  cycle_end_7d: string | null;
+};
+
+export type CalibrationCurve = {
+  model: string;
+  tier: PlanTier;
+  rate_per_pct: number;
+  rate_per_pct_5h: number;
+  rate_per_pct_7d: number;
+  /** "user_calibrated" once a well-covered completed cycle has been
+   * observed; "tier_default" until then. Surfaced so the UI can label the
+   * predicted overlay (e.g. "calibrated from 3 cycles") instead of just
+   * showing a line of unknown provenance. */
+  rate_source_5h: RateSource;
+  rate_source_7d: RateSource;
+  cycles_used_5h: number;
+  cycles_used_7d: number;
+  granularity_min: number;
+  curve: CalibrationCurvePoint[];
+  first_snapshot_ts: string | null;
+  real_count: number;
+  total_count: number;
+};
+
+/**
+ * Walk forward from each snapshot's `resets_at` to find the most recent
+ * earlier snapshot whose reset value matches `ts`. Used to figure out
+ * "which 5h or 7d cycle does this timestamp belong to" so we can pick
+ * the right window start.
+ */
+function inferResetsAt(
+  ts: number,
+  snapResets: Array<[number, number]>,
+  cycleHours: number,
+): number | null {
+  if (snapResets.length === 0) return null;
+  for (const [snapMs, resetMs] of snapResets) {
+    if (snapMs >= ts && resetMs > ts) {
+      let r = resetMs;
+      const cycleMs = cycleHours * 3_600_000;
+      while (r - cycleMs > ts) r -= cycleMs;
+      return r;
+    }
+  }
+  // ts is after every known snapshot — extrapolate forward
+  let last = snapResets[snapResets.length - 1]![1];
+  const cycleMs = cycleHours * 3_600_000;
+  while (last < ts) last += cycleMs;
+  return last;
+}
+
+/**
+ * Build a continuous predicted-utilization curve aligned with daemon
+ * snapshots. The predictor passes EXACTLY through every observed OAuth
+ * snapshot via spend-weighted interpolation between adjacent snaps in the
+ * same cycle. Past the latest snap of a cycle (forward extrapolation) it
+ * uses a $/pp rate fitted from the upper percentile of snap-pair rates
+ * across all cycles — closest to the user's solo rate on shared accounts
+ * where teammates contribute pp travel that we never see in JSONL.
+ * See predictAnchored / collectSnapPairRates in calibration.ts.
+ *
+ * Cold-start back-fill: the curve extends up to 14 days before the first
+ * snapshot so /usage shows estimates from JSONL spend even when the daemon
+ * is brand new. After the first snapshot, real values are paired with
+ * predictions for direct comparison.
+ */
+export function buildCalibrationCurve(
+  events: CalibrationEvent[],
+  snapshots: UsageSnapshot[],
+  tier: PlanTier = "pro-max-20x",
+  granularityMin = 30,
+): CalibrationCurve | null {
+  if (snapshots.length === 0 || events.length === 0) return null;
+
+  const spend = buildSpendIndex(events);
+  const tierDefault7d = RATE_PER_PCT_7D[tier];
+  const tierDefault5h = RATE_PER_PCT_5H[tier];
+
+  const snapsByCycle5h = groupSnapsByCycle(snapshots, (s) => s.five_hour);
+  const snapsByCycle7d = groupSnapsByCycle(snapshots, (s) => s.seven_day);
+  // Keep only pairs with ≥$10 (7d) / ≥$1 (5h) of user spend — filters out
+  // low-spend pairs whose rates are dominated by 1pp utilization rounding
+  // noise. The remaining pairs cluster tightly around the user's solo rate
+  // on shared accounts (verified in /tmp/calibrate-bench-shared.mjs:
+  // dropping the noise floor moved the p90 from $15.9 → $21.8 with no
+  // sensitivity to maxGap). Cap at 24h to drop daemon-off pairs where
+  // teammate contribution is unknowable.
+  const pairs7d = collectSnapPairRates(snapsByCycle7d, spend, {
+    minTravelPct: 1, minDollars: 10, maxGapMs: 24 * 3_600_000,
+  });
+  const pairs5h = collectSnapPairRates(snapsByCycle5h, spend, {
+    minTravelPct: 1, minDollars: 1, maxGapMs: 2 * 3_600_000,
+  });
+  const fwdRate7d = userSoloRate(pairs7d, 0.9) ?? tierDefault7d;
+  const fwdRate5h = userSoloRate(pairs5h, 0.9) ?? tierDefault5h;
+  // Distinct cycles contributing to the fitted rate — surfaced as
+  // `cycles_used_*` so the UI can label provenance.
+  const cycles7d = new Set(pairs7d.map((p) => p.cycleEndMs)).size;
+  const cycles5h = new Set(pairs5h.map((p) => p.cycleEndMs)).size;
+
+  // (snap_ts, reset_ts) pairs for inferResetsAt — used to attribute each
+  // curve-point timestamp to the cycle it belongs to.
+  const snap5h: Array<[number, number]> = [];
+  const snap7d: Array<[number, number]> = [];
+  for (const s of snapshots) {
+    const ms = Date.parse(s.captured_at!);
+    if (Number.isNaN(ms)) continue;
+    if (s.five_hour?.resets_at) {
+      const r = Date.parse(s.five_hour.resets_at);
+      if (!Number.isNaN(r)) snap5h.push([ms, r]);
+    }
+    if (s.seven_day?.resets_at) {
+      const r = Date.parse(s.seven_day.resets_at);
+      if (!Number.isNaN(r)) snap7d.push([ms, r]);
+    }
+  }
+  const HOUR = 3_600_000;
+
+  // Real-value lookup at minute granularity
+  const realByMinute = new Map<number, [number | null, number | null]>();
+  for (const s of snapshots) {
+    const ms = Date.parse(s.captured_at!);
+    if (Number.isNaN(ms)) continue;
+    const k = Math.floor(ms / 60_000);
+    realByMinute.set(k, [
+      s.five_hour?.utilization ?? null,
+      s.seven_day?.utilization ?? null,
+    ]);
+  }
+
+  const firstSnapMs = Date.parse(snapshots[0]!.captured_at!);
+  const lastSnapMs = Date.parse(snapshots[snapshots.length - 1]!.captured_at!);
+  const firstEventMs = Date.parse(events[0]!.ts);
+  const rangeStart = Math.max(firstEventMs, firstSnapMs - 14 * 86_400_000);
+  const rangeEnd = lastSnapMs;
+  const stepMs = granularityMin * 60_000;
+
+  const curve: CalibrationCurvePoint[] = [];
+  let cur = rangeStart;
+  while (cur <= rangeEnd) {
+    let real5: number | null = null;
+    let real7: number | null = null;
+    for (let off = 0; off < granularityMin; off++) {
+      const k = Math.floor((cur + off * 60_000) / 60_000);
+      const r = realByMinute.get(k);
+      if (r) { real5 = r[0]; real7 = r[1]; break; }
+    }
+
+    const r5 = inferResetsAt(cur, snap5h, 5);
+    const r7 = inferResetsAt(cur, snap7d, 168);
+    // groupSnapsByCycle keys are hour-rounded so sub-second jitter on
+    // resets_at doesn't fragment a cycle into multiple buckets. Round
+    // the inferResetsAt result the same way so the lookup hits.
+    const r5k = r5 != null ? Math.round(r5 / HOUR) * HOUR : null;
+    const r7k = r7 != null ? Math.round(r7 / HOUR) * HOUR : null;
+
+    const cycle5Snaps = r5k != null ? (snapsByCycle5h.get(r5k) ?? []) : [];
+    const cycle7Snaps = r7k != null ? (snapsByCycle7d.get(r7k) ?? []) : [];
+    const cycleEnd5 = r5k ?? cur + 5 * HOUR;
+    const cycleEnd7 = r7k ?? cur + 168 * HOUR;
+
+    const p5 = predictAnchored(spend, cycle5Snaps, fwdRate5h, cycleEnd5, 5, cur);
+    const p7 = predictAnchored(spend, cycle7Snaps, fwdRate7d, cycleEnd7, 168, cur);
+
+    curve.push({
+      ts: new Date(cur).toISOString(),
+      real_5h: real5,
+      pred_5h: Math.max(0, Math.min(200, p5)),
+      real_7d: real7,
+      pred_7d: Math.max(0, Math.min(200, p7)),
+      cycle_end_5h: r5k != null ? new Date(r5k).toISOString() : null,
+      cycle_end_7d: r7k != null ? new Date(r7k).toISOString() : null,
+    });
+    cur += stepMs;
+  }
+
+  // "user_calibrated" when we fit a rate from this account's snap-pairs;
+  // "tier_default" while still cold-starting (fewer than 3 usable pairs).
+  const rateSource7d: RateSource = pairs7d.length >= 3 ? "user_calibrated" : "tier_default";
+  const rateSource5h: RateSource = pairs5h.length >= 3 ? "user_calibrated" : "tier_default";
+
+  return {
+    model: `anchored-${tier}`,
+    tier,
+    rate_per_pct: fwdRate7d,
+    rate_per_pct_5h: fwdRate5h,
+    rate_per_pct_7d: fwdRate7d,
+    rate_source_5h: rateSource5h,
+    rate_source_7d: rateSource7d,
+    cycles_used_5h: cycles5h,
+    cycles_used_7d: cycles7d,
+    granularity_min: granularityMin,
+    curve,
+    first_snapshot_ts: snapshots[0]!.captured_at ?? null,
+    real_count: curve.filter((c) => c.real_7d !== null).length,
+    total_count: curve.length,
+  };
+}
+
+/**
+ * Convenience entry point: load events + snapshots, build the curve.
+ * Heavy on first call (walks every JSONL); fast afterward thanks to the
+ * module-scoped cache. Wrap in React's `cache()` from the calling layer
+ * to make it per-request memoized.
+ */
+export async function loadCalibrationCurve(
+  tier: PlanTier = "pro-max-20x",
+  root: string = DEFAULT_ROOT,
+  granularityMin = 30,
+): Promise<CalibrationCurve | null> {
+  const [events, snapshots] = await Promise.all([
+    loadCalibrationEvents(root),
+    loadCalibrationSnapshots(),
+  ]);
+  return buildCalibrationCurve(events, snapshots, tier, granularityMin);
 }

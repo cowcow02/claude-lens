@@ -1,5 +1,62 @@
 import { z } from "zod";
 
+const UsageWindowSchema = z.object({
+  utilization: z.number().nullable(),
+  resetsAt: z.string().datetime({ offset: true }).nullable(),
+}).passthrough();
+
+const ExtraUsageSchema = z.object({
+  isEnabled: z.boolean(),
+  monthlyLimitUsd: z.number().nullable(),
+  usedCreditsUsd: z.number().nullable(),
+  utilization: z.number().nullable(),
+}).passthrough();
+
+export const UsageSnapshotSchema = z.object({
+  capturedAt: z.string().datetime({ offset: true }),
+  fiveHour: UsageWindowSchema,
+  sevenDay: UsageWindowSchema,
+  sevenDayOpus: UsageWindowSchema.nullable(),
+  sevenDaySonnet: UsageWindowSchema.nullable(),
+  sevenDayOauthApps: UsageWindowSchema.nullable(),
+  sevenDayCowork: UsageWindowSchema.nullable(),
+  extraUsage: ExtraUsageSchema.nullable(),
+}).passthrough();
+
+export type UsageSnapshot = z.infer<typeof UsageSnapshotSchema>;
+
+// Mirrors `members.plan_tier` CHECK in 0002_plan_utilization.sql. Daemon
+// either knows the tier (mapped from Anthropic's rate_limit_tier) or omits
+// the field entirely. Server treats anything outside this enum as "skip
+// upsert" so a future Anthropic tier code never silently downgrades us.
+export const PlanTierKeySchema = z.enum(["pro", "pro-max", "pro-max-20x", "custom"]);
+
+// Per-cycle peak utilization computed by the daemon (using the same parser
+// logic that drives the personal /usage page). One entry per completed
+// cycle plus the in-progress one. Server stores as-is; never recomputes.
+export const WireCyclePeakSchema = z.object({
+  endsAt: z.string().datetime({ offset: true }),
+  peakPct: z.number().min(0).max(200),
+  source: z.enum(["real", "predicted"]),
+  current: z.boolean(),
+});
+
+export const WireCyclePeaksSchema = z.object({
+  fiveHour: z.array(WireCyclePeakSchema).max(60),
+  sevenDay: z.array(WireCyclePeakSchema).max(60),
+});
+
+// Cap per-request to keep transactions bounded; the daemon batches.
+export const UsageHistoryPayload = z.object({
+  snapshots: z.array(UsageSnapshotSchema).min(1).max(1000),
+  planTier: PlanTierKeySchema.optional(),
+});
+
+// dailyRollup is optional so the daemon can push fresh tier / snapshot /
+// cycle-peaks updates on idle days when the user hasn't run a Claude Code
+// session (no new daily activity to roll up). The server skips the
+// daily_rollups upsert in that case but still applies the rest of the
+// payload — keeps live views fresh on weekends and breaks.
 export const IngestPayload = z.object({
   ingestId: z.string(),
   observedAt: z.string().datetime(),
@@ -15,7 +72,10 @@ export const IngestPayload = z.object({
       cacheRead: z.number().int().nonnegative(),
       cacheWrite: z.number().int().nonnegative(),
     }).passthrough(),
-  }).passthrough(),
+  }).passthrough().optional(),
+  usageSnapshot: UsageSnapshotSchema.optional(),
+  planTier: PlanTierKeySchema.optional(),
+  cyclePeaks: WireCyclePeaksSchema.optional(),
 }).passthrough();
 
 export const ClaimPayload = z.object({

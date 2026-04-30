@@ -24,6 +24,7 @@ export function UsageChart({
   seriesKey,
   windowMs,
   colorVar,
+  predictedSeries,
   onExpand,
 }: {
   snapshots: UsageSnapshot[];
@@ -31,6 +32,10 @@ export function UsageChart({
   windowMs: number;
   /** CSS variable for this window's color (e.g. 'var(--af-success)') */
   colorVar: string;
+  /** Optional JSONL-derived utilization estimates, drawn as a dashed overlay
+   * for cold-start validation. Omitted on charts where we don't predict
+   * (e.g. seven_day_sonnet). */
+  predictedSeries?: { capturedAt: number; util: number }[];
   /** If provided, render a fullscreen-expand button that calls this handler. */
   onExpand?: () => void;
 }) {
@@ -63,15 +68,27 @@ export function UsageChart({
       .filter((x) => x.capturedAt >= windowStart && x.capturedAt <= resetsAt)
       .map((x) => [x.capturedAt, 100 - (x.window.utilization ?? 0)] as const);
 
-    return { points, windowStart, windowEnd: resetsAt, now, currentRemaining, latest };
-  }, [snapshots, seriesKey, windowMs]);
+    // Predicted series: clip to window, clamp util to [0, 100] (model is
+    // unbounded but utilization can't physically exceed the cap), then
+    // convert to remaining-budget. Sorted ascending for path drawing.
+    const predicted = (predictedSeries ?? [])
+      .filter((p) => p.capturedAt >= windowStart && p.capturedAt <= resetsAt)
+      .map((p) => [p.capturedAt, 100 - Math.max(0, Math.min(100, p.util))] as const)
+      .sort((a, b) => a[0] - b[0]);
+
+    return { points, predicted, windowStart, windowEnd: resetsAt, now, currentRemaining, latest };
+  }, [snapshots, seriesKey, windowMs, predictedSeries]);
 
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
-  const [hover, setHover] = useState<{ x: number; t: number; actual: number; ideal: number } | null>(
-    null,
-  );
+  const [hover, setHover] = useState<{
+    x: number;
+    t: number;
+    actual: number;
+    ideal: number;
+    predicted: number | null;
+  } | null>(null);
 
   if (!computed) {
     return (
@@ -89,7 +106,7 @@ export function UsageChart({
     );
   }
 
-  const { points, windowStart, windowEnd, now, currentRemaining, latest } = computed;
+  const { points, predicted, windowStart, windowEnd, now, currentRemaining, latest } = computed;
 
   const xScale = (t: number): number =>
     padding.left + ((t - windowStart) / (windowEnd - windowStart)) * plotW;
@@ -120,6 +137,13 @@ export function UsageChart({
           .join(" ")
       : "";
 
+  const predictedPath =
+    predicted.length > 1
+      ? predicted
+          .map(([t, v], i) => `${i === 0 ? "M" : "L"} ${xScale(t).toFixed(1)} ${yScale(v).toFixed(1)}`)
+          .join(" ")
+      : "";
+
   const areaPath =
     points.length > 0
       ? `${linePath} L ${xScale(points[points.length - 1]![0]).toFixed(1)} ${yScale(0).toFixed(1)} L ${xScale(points[0]![0]).toFixed(1)} ${yScale(0).toFixed(1)} Z`
@@ -143,7 +167,29 @@ export function UsageChart({
         nearestDist = d;
       }
     }
-    setHover({ x: xScale(nearest[0]), t: nearest[0], actual: nearest[1], ideal: idealAt(nearest[0]) });
+    // Find nearest predicted point so the tooltip can display both at the
+    // same hovered x — predicted snapshots are independent of real ones,
+    // pick the closest one in time.
+    let predictedAt: number | null = null;
+    if (predicted.length > 0) {
+      let bestPred = predicted[0]!;
+      let bestPredDist = Math.abs(bestPred[0] - nearest[0]);
+      for (const p of predicted) {
+        const d = Math.abs(p[0] - nearest[0]);
+        if (d < bestPredDist) {
+          bestPred = p;
+          bestPredDist = d;
+        }
+      }
+      predictedAt = bestPred[1];
+    }
+    setHover({
+      x: xScale(nearest[0]),
+      t: nearest[0],
+      actual: nearest[1],
+      ideal: idealAt(nearest[0]),
+      predicted: predictedAt,
+    });
   };
 
   return (
@@ -365,6 +411,22 @@ export function UsageChart({
             <circle key={i} cx={xScale(t)} cy={yScale(v)} r="3" fill={colorVar} />
           ))}
 
+          {/* Predicted line drawn AFTER the actual line so it's visually on top.
+           * Same shape as before — kept here as an overlay to avoid being
+           * masked by the actual line + dots. */}
+          {predictedPath && (
+            <path
+              d={predictedPath}
+              fill="none"
+              stroke="#ff7a00"
+              strokeOpacity="0.9"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray="5 4"
+            />
+          )}
+
           {/* Hover crosshair + highlight dot */}
           {hover && (
             <g>
@@ -429,10 +491,30 @@ export function UsageChart({
                   {hover.ideal.toFixed(1)}%
                 </span>
               </div>
+              {hover.predicted !== null && (
+                <div>
+                  <span style={{ color: "var(--af-text-tertiary)" }}>Estimated</span>{" "}
+                  <span
+                    style={{
+                      fontWeight: 600,
+                      fontVariantNumeric: "tabular-nums",
+                      color: "#b58400",
+                    }}
+                  >
+                    {hover.predicted.toFixed(1)}%
+                  </span>
+                </div>
+              )}
             </div>
             <div style={{ marginTop: 2, color: "var(--af-text-tertiary)" }}>
               Δ {hover.actual - hover.ideal >= 0 ? "+" : ""}
               {(hover.actual - hover.ideal).toFixed(1)}%
+              {hover.predicted !== null && (
+                <span style={{ marginLeft: 8 }}>
+                  · estimate {hover.predicted >= hover.actual ? "+" : ""}
+                  {(hover.predicted - hover.actual).toFixed(1)}pp vs actual
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -451,6 +533,11 @@ export function UsageChart({
       >
         {points.length} snapshot{points.length === 1 ? "" : "s"} · last{" "}
         {formatRelative(new Date(latest.capturedAt).toISOString())}
+        {predicted.length > 0 && (
+          <span style={{ marginLeft: 8, color: "#ff7a00" }}>
+            · {predicted.length} estimate{predicted.length === 1 ? "" : "s"} overlaid
+          </span>
+        )}
       </div>
     </div>
   );

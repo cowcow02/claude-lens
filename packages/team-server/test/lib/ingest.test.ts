@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { resetDb } from "../helpers/db.js";
 import { getPool } from "../../src/db/pool.js";
-import { processIngest } from "../../src/lib/ingest.js";
+import { processIngest, processUsageHistory } from "../../src/lib/ingest.js";
 import { addClient } from "../../src/lib/sse.js";
 import { createUserAccount } from "../../src/lib/auth.js";
 import { createTeamWithAdmin } from "../../src/lib/teams.js";
@@ -131,9 +131,273 @@ describe("processIngest", () => {
     await expect(processIngest(bad, membershipId, teamId, pool)).rejects.toThrow();
   });
 
-  it("throws ZodError when dailyRollup is missing", async () => {
+  it("accepts payloads without a dailyRollup (idle-day live-only push)", async () => {
+    // dailyRollup is optional so the daemon can push fresh tier/snapshot/
+    // cycle-peaks updates even on idle days. The server should accept the
+    // payload, skip the daily_rollups upsert, and return ok.
+    const result = await processIngest(
+      { ingestId: `idle-${Date.now()}`, observedAt: new Date().toISOString() },
+      membershipId,
+      teamId,
+      pool,
+    );
+    expect(result).toMatchObject({ accepted: true });
+  });
+
+  it("inserts plan_utilization row when usageSnapshot present", async () => {
+    const capturedAt = new Date("2026-04-22T10:30:00Z").toISOString();
+    const payload = makePayload({
+      usageSnapshot: {
+        capturedAt,
+        fiveHour: { utilization: 23.7, resetsAt: "2026-04-22T14:00:00Z" },
+        sevenDay: { utilization: 47.2, resetsAt: "2026-04-26T00:00:00Z" },
+        sevenDayOpus: { utilization: 61.0, resetsAt: "2026-04-26T00:00:00Z" },
+        sevenDaySonnet: { utilization: 31.4, resetsAt: "2026-04-26T00:00:00Z" },
+        sevenDayOauthApps: null,
+        sevenDayCowork: null,
+        extraUsage: null,
+      },
+    });
+    await processIngest(payload, membershipId, teamId, pool);
+
+    const { rows } = await pool.query(
+      `SELECT seven_day_utilization, seven_day_opus_utilization, extra_usage_enabled
+       FROM plan_utilization WHERE team_id=$1 AND membership_id=$2 AND captured_at=$3`,
+      [teamId, membershipId, capturedAt]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].seven_day_utilization).toBeCloseTo(47.2, 4);
+    expect(rows[0].seven_day_opus_utilization).toBeCloseTo(61.0, 4);
+    expect(rows[0].extra_usage_enabled).toBe(false);
+  });
+
+  it("skips plan_utilization insert when usageSnapshot absent", async () => {
+    const before = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id = $1",
+      [membershipId]
+    );
+    await processIngest(makePayload(), membershipId, teamId, pool);
+    const after = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id = $1",
+      [membershipId]
+    );
+    expect(after.rows[0].count).toBe(before.rows[0].count);
+  });
+
+  it("plan_utilization is idempotent on (team, membership, captured_at)", async () => {
+    const capturedAt = new Date("2026-04-23T08:00:00Z").toISOString();
+    const snapshot = {
+      capturedAt,
+      fiveHour: { utilization: 10, resetsAt: "2026-04-23T13:00:00Z" },
+      sevenDay: { utilization: 20, resetsAt: "2026-04-27T00:00:00Z" },
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      sevenDayOauthApps: null,
+      sevenDayCowork: null,
+      extraUsage: null,
+    };
+    // Two distinct ingestIds, same captured_at: only one plan_utilization row.
+    await processIngest(makePayload({ usageSnapshot: snapshot }), membershipId, teamId, pool);
+    await processIngest(makePayload({ usageSnapshot: snapshot }), membershipId, teamId, pool);
+
+    const { rows } = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id=$1 AND captured_at=$2",
+      [membershipId, capturedAt]
+    );
+    expect(rows[0].count).toBe("1");
+  });
+
+  it("captures extra_usage credits when present", async () => {
+    const capturedAt = new Date("2026-04-24T12:00:00Z").toISOString();
+    await processIngest(
+      makePayload({
+        usageSnapshot: {
+          capturedAt,
+          fiveHour: { utilization: 15, resetsAt: "2026-04-24T17:00:00Z" },
+          sevenDay: { utilization: 88, resetsAt: "2026-04-28T00:00:00Z" },
+          sevenDayOpus: null,
+          sevenDaySonnet: null,
+          sevenDayOauthApps: null,
+          sevenDayCowork: null,
+          extraUsage: {
+            isEnabled: true,
+            monthlyLimitUsd: 50,
+            usedCreditsUsd: 12.5,
+            utilization: 25,
+          },
+        },
+      }),
+      membershipId,
+      teamId,
+      pool,
+    );
+
+    const { rows } = await pool.query(
+      `SELECT extra_usage_enabled, extra_usage_monthly_limit_usd, extra_usage_used_credits_usd
+       FROM plan_utilization WHERE captured_at = $1`,
+      [capturedAt],
+    );
+    expect(rows[0].extra_usage_enabled).toBe(true);
+    expect(rows[0].extra_usage_monthly_limit_usd).toBeCloseTo(50, 4);
+    expect(rows[0].extra_usage_used_credits_usd).toBeCloseTo(12.5, 4);
+  });
+
+  // Anthropic's API serializes `+00:00` rather than `Z`. Without
+  // datetime({offset:true}) the schema rejected every real payload, leaving
+  // plan_utilization permanently empty. See PR #23 review.
+  it("accepts usage timestamps with +00:00 offsets (real Anthropic shape)", async () => {
+    const capturedAt = "2026-04-29T03:00:00.000+00:00";
+    await processIngest(
+      makePayload({
+        usageSnapshot: {
+          capturedAt,
+          fiveHour: { utilization: 19, resetsAt: "2026-04-29T07:10:00.207984+00:00" },
+          sevenDay: { utilization: 18, resetsAt: "2026-05-04T12:00:00.208003+00:00" },
+          sevenDayOpus: null,
+          sevenDaySonnet: null,
+          sevenDayOauthApps: null,
+          sevenDayCowork: null,
+          extraUsage: null,
+        },
+      }),
+      membershipId,
+      teamId,
+      pool,
+    );
+    const { rows } = await pool.query(
+      "SELECT count(*)::text AS count FROM plan_utilization WHERE membership_id = $1 AND captured_at = $2",
+      [membershipId, capturedAt],
+    );
+    expect(rows[0].count).toBe("1");
+  });
+});
+
+describe("processUsageHistory", () => {
+  function makeSnap(capturedAt: string, fiveHourPct = 25, sevenDayPct = 40) {
+    return {
+      capturedAt,
+      fiveHour: { utilization: fiveHourPct, resetsAt: "2026-05-04T12:00:00+00:00" },
+      sevenDay: { utilization: sevenDayPct, resetsAt: "2026-05-04T12:00:00+00:00" },
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      sevenDayOauthApps: null,
+      sevenDayCowork: null,
+      extraUsage: null,
+    };
+  }
+
+  it("bulk-inserts snapshots and reports counts", async () => {
+    const result = await processUsageHistory(
+      {
+        snapshots: [
+          makeSnap("2026-04-20T01:00:00+00:00", 10, 20),
+          makeSnap("2026-04-20T02:00:00+00:00", 15, 22),
+          makeSnap("2026-04-20T03:00:00+00:00", 17, 25),
+        ],
+      },
+      membershipId,
+      teamId,
+      pool,
+    );
+    expect(result.received).toBe(3);
+    expect(result.inserted).toBe(3);
+    expect(result.skipped).toBe(0);
+  });
+
+  it("is idempotent on (team, membership, captured_at)", async () => {
+    const snap = makeSnap("2026-04-21T01:00:00+00:00");
+    const first = await processUsageHistory({ snapshots: [snap] }, membershipId, teamId, pool);
+    expect(first.inserted).toBe(1);
+    const again = await processUsageHistory({ snapshots: [snap] }, membershipId, teamId, pool);
+    expect(again.inserted).toBe(0);
+    expect(again.skipped).toBe(1);
+  });
+
+  it("rejects empty snapshot arrays", async () => {
     await expect(
-      processIngest({ ingestId: "x", observedAt: new Date().toISOString() }, membershipId, teamId, pool)
+      processUsageHistory({ snapshots: [] }, membershipId, teamId, pool),
     ).rejects.toThrow();
+  });
+
+  it("rejects oversized batches above the 1000-row cap", async () => {
+    const big = Array.from({ length: 1001 }, (_, i) =>
+      makeSnap(`2026-04-22T${String(i % 24).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00+00:00`),
+    );
+    await expect(
+      processUsageHistory({ snapshots: big }, membershipId, teamId, pool),
+    ).rejects.toThrow();
+  });
+
+  it("upserts memberships.plan_tier and audit-logs when planTier accompanies the batch", async () => {
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max' WHERE id = $1", [membershipId]);
+    await processUsageHistory(
+      {
+        snapshots: [makeSnap("2026-04-23T01:00:00+00:00")],
+        planTier: "pro-max-20x",
+      },
+      membershipId,
+      teamId,
+      pool,
+    );
+    const { rows } = await pool.query(
+      "SELECT plan_tier FROM memberships WHERE id = $1",
+      [membershipId],
+    );
+    expect(rows[0].plan_tier).toBe("pro-max-20x");
+
+    const events = await pool.query(
+      "SELECT payload FROM events WHERE action = 'members.plan_tier_auto_detected' AND team_id = $1 ORDER BY id DESC LIMIT 1",
+      [teamId],
+    );
+    expect(events.rows[0].payload.previousTier).toBe("pro-max");
+    expect(events.rows[0].payload.newTier).toBe("pro-max-20x");
+    expect(events.rows[0].payload.source).toBe("anthropic_profile");
+  });
+
+  it("does not audit-log when daemon-reported tier matches existing", async () => {
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max-20x' WHERE id = $1", [membershipId]);
+    const beforeCount = await pool.query<{ c: string }>(
+      "SELECT COUNT(*)::text AS c FROM events WHERE action = 'members.plan_tier_auto_detected' AND team_id = $1",
+      [teamId],
+    );
+    await processUsageHistory(
+      { snapshots: [makeSnap("2026-04-24T01:00:00+00:00")], planTier: "pro-max-20x" },
+      membershipId,
+      teamId,
+      pool,
+    );
+    const afterCount = await pool.query<{ c: string }>(
+      "SELECT COUNT(*)::text AS c FROM events WHERE action = 'members.plan_tier_auto_detected' AND team_id = $1",
+      [teamId],
+    );
+    expect(afterCount.rows[0].c).toBe(beforeCount.rows[0].c);
+  });
+});
+
+describe("processIngest planTier auto-upsert", () => {
+  it("updates memberships.plan_tier when ingest payload carries planTier", async () => {
+    await pool.query("UPDATE memberships SET plan_tier = 'pro-max' WHERE id = $1", [membershipId]);
+    const day = "2025-09-09";
+    await processIngest(
+      makePayload({
+        dailyRollup: {
+          day,
+          agentTimeMs: 100,
+          sessions: 1,
+          toolCalls: 1,
+          turns: 1,
+          tokens: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
+        },
+        planTier: "pro-max-20x",
+      }),
+      membershipId,
+      teamId,
+      pool,
+    );
+    const { rows } = await pool.query(
+      "SELECT plan_tier FROM memberships WHERE id = $1",
+      [membershipId],
+    );
+    expect(rows[0].plan_tier).toBe("pro-max-20x");
   });
 });

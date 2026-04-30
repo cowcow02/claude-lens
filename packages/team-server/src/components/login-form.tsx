@@ -27,6 +27,7 @@ export function LoginForm({ allowSignup }: { allowSignup: boolean }) {
       window.location.href = data.landingSlug ? `/team/${data.landingSlug}` : "/";
     } catch (err) {
       setError((err as Error).message);
+    } finally {
       setLoading(false);
     }
   }

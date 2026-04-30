@@ -15,6 +15,13 @@
       "when": 1777015943702,
       "tag": "0001_update_check_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777115113385,
+      "tag": "0002_plan_utilization",
+      "breakpoints": true
     }
   ]
 }

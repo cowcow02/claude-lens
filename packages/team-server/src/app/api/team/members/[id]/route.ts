@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireSession, requireTeamMembership, requireAdmin } from "../../../../../lib/route-helpers";
 import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
 import { revokeMembership } from "../../../../../lib/members";
+import { PLAN_TIERS } from "../../../../../lib/plan-tiers";
 
 export async function GET(
   req: NextRequest,
@@ -48,4 +49,53 @@ export async function DELETE(
     [member.team_id, session.user.id, JSON.stringify({ membershipId: id })]
   );
   return NextResponse.json({ revoked: true });
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = await requireSession(req);
+  if (session instanceof NextResponse) return session;
+
+  const { id } = await params;
+  const member = await loadMember(id, session.pool);
+  if (!member) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const ctx = await requireTeamMembership(req, member.team_id);
+  if (ctx instanceof NextResponse) return ctx;
+  const adminErr = requireAdmin(ctx);
+  if (adminErr) return adminErr;
+
+  const body = (await req.json()) as { planTier?: string };
+  if (body.planTier !== undefined) {
+    if (!(body.planTier in PLAN_TIERS)) {
+      return NextResponse.json(
+        { error: `Unknown plan tier: ${body.planTier}` },
+        { status: 400 },
+      );
+    }
+    const prevRes = await session.pool.query<{ plan_tier: string }>(
+      "SELECT plan_tier FROM memberships WHERE id = $1",
+      [id],
+    );
+    await session.pool.query("UPDATE memberships SET plan_tier = $1 WHERE id = $2", [
+      body.planTier,
+      id,
+    ]);
+    await session.pool.query(
+      "INSERT INTO events (team_id, actor_id, action, payload) VALUES ($1, $2, 'members.plan_tier_changed', $3)",
+      [
+        member.team_id,
+        session.user.id,
+        JSON.stringify({
+          membershipId: id,
+          from: prevRes.rows[0]?.plan_tier ?? null,
+          to: body.planTier,
+        }),
+      ],
+    );
+  }
+
+  return NextResponse.json({ updated: true });
 }

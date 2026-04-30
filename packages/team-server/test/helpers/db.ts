@@ -14,6 +14,7 @@ export async function resetDb(): Promise<ReturnType<typeof getPool>> {
   await pool.query(`
     TRUNCATE TABLE
       events, daily_rollups, ingest_log, invites,
+      plan_utilization,
       memberships, sessions, server_config,
       update_check_cache,
       user_accounts, teams

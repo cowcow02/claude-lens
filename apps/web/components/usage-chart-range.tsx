@@ -76,6 +76,7 @@ export function UsageChartRange({
   endMs,
   windowMs,
   colorVar,
+  predictedSeries,
 }: {
   snapshots: UsageSnapshot[];
   seriesKey: SeriesKey;
@@ -84,6 +85,10 @@ export function UsageChartRange({
   /** Window duration in ms — 5h or 7d depending on seriesKey */
   windowMs: number;
   colorVar: string;
+  /** JSONL-derived utilization estimates (one per snapshot timestamp).
+   * Drawn per cycle as a dashed overlay so historical cycles can be
+   * compared against the prediction. */
+  predictedSeries?: { capturedAt: number; util: number }[];
 }) {
   const width = 1280;
   const height = 320;
@@ -100,12 +105,17 @@ export function UsageChartRange({
     }
     if (valid.length === 0) return null;
 
-    // 2. Group into cycles by resets_at. All snapshots sharing the same
-    //    resets_at belong to the same rolling window.
-    const byReset = new Map<string, typeof valid>();
+    // 2. Group into cycles by resets_at. Anthropic jitters resets_at by
+    //    milliseconds across snapshots in the same cycle, so we hour-round
+    //    the bucket key — without this, "complete cycles" inflates from
+    //    ~4 to ~2000 over a 30-day window.
+    const HOUR = 3_600_000;
+    const byReset = new Map<number, typeof valid>();
     for (const p of valid) {
       if (!p.resetsAt) continue;
-      const key = p.resetsAt;
+      const ms = new Date(p.resetsAt).getTime();
+      if (Number.isNaN(ms)) continue;
+      const key = Math.round(ms / HOUR) * HOUR;
       let bucket = byReset.get(key);
       if (!bucket) {
         bucket = [];
@@ -115,8 +125,7 @@ export function UsageChartRange({
     }
 
     const cycles: CycleData[] = [];
-    for (const [resetsAtIso, points] of byReset) {
-      const resetsAtMs = new Date(resetsAtIso).getTime();
+    for (const [resetsAtMs, points] of byReset) {
       const cycleStartMs = resetsAtMs - windowMs;
       // Sort points by time
       points.sort((a, b) => a.t - b.t);
@@ -438,6 +447,49 @@ export function UsageChartRange({
               </g>
             );
           })}
+
+          {/* Predicted overlay — single continuous path across the visible
+           * range, broken when pred drops >= 50pp (= cycle reset). One path
+           * covers daemon-backed AND cold-start periods uniformly, so a
+           * 30D / 90D zoomout shows the prediction over its whole span. */}
+          {(() => {
+            const pred = (predictedSeries ?? [])
+              .filter((p) => p.capturedAt >= startMs && p.capturedAt <= endMs)
+              .sort((a, b) => a.capturedAt - b.capturedAt);
+            if (pred.length < 2) return null;
+            const parts: string[] = [];
+            let inSeg = false;
+            let prevUtil = pred[0]!.util;
+            for (let i = 0; i < pred.length; i++) {
+              const p = pred[i]!;
+              const u = Math.max(0, Math.min(100, p.util));
+              const remaining = 100 - u;
+              const drop = prevUtil - u;
+              const isReset = i > 0 && drop >= 50;
+              // Predicted series is sampled at 30-min granularity by the
+              // calibrator (vs 5-min for daemon snapshots), so the snapshot
+              // gap threshold rejects every adjacent pair as a "gap" and the
+              // line never connects. Use 60 min instead — anything beyond
+              // that is a genuine missing range.
+              const isGap = i > 0 && p.capturedAt - pred[i - 1]!.capturedAt > 60 * 60 * 1000;
+              const cmd = !inSeg || isReset || isGap ? "M" : "L";
+              parts.push(`${cmd} ${xScale(p.capturedAt).toFixed(1)} ${yScale(remaining).toFixed(1)}`);
+              inSeg = true;
+              prevUtil = u;
+            }
+            return (
+              <path
+                d={parts.join(" ")}
+                fill="none"
+                stroke="#ff7a00"
+                strokeOpacity="0.85"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray="5 4"
+              />
+            );
+          })()}
 
           {/* Current-time vertical marker */}
           {Date.now() >= startMs && Date.now() <= endMs && (

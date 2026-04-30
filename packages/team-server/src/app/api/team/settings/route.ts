@@ -33,5 +33,14 @@ export async function PUT(req: NextRequest) {
   if (body.retentionDays) {
     await ctx.pool.query("UPDATE teams SET retention_days = $1 WHERE id = $2", [body.retentionDays, ctx.membership.team_id]);
   }
+  if (body.planOptimizer) {
+    // Merge into the jsonb settings column rather than overwriting other keys.
+    await ctx.pool.query(
+      `UPDATE teams
+         SET settings = settings || jsonb_build_object('planOptimizer', $1::jsonb)
+       WHERE id = $2`,
+      [JSON.stringify(body.planOptimizer), ctx.membership.team_id],
+    );
+  }
   return NextResponse.json({ updated: true });
 }
