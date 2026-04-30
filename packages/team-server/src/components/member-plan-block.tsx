@@ -1,7 +1,12 @@
 import type { Recommendation } from "../lib/plan-optimizer";
 import { UtilizationSparkline } from "./utilization-sparkline";
 import { CyclePeaksStrip } from "./cycle-peaks-strip";
-import type { MemberPlanSummary, MembershipCyclePeak } from "../lib/plan-queries";
+import { MemberBurndownChart } from "./member-burndown-chart";
+import type {
+  MemberPlanSummary,
+  MembershipCyclePeak,
+  CurrentCycleData,
+} from "../lib/plan-queries";
 
 // Plain-language status framed around "is this person on track with
 // their license consumption?" — the question an admin actually asks.
@@ -32,9 +37,11 @@ const ACTION_TONE: Record<Recommendation["action"], Tone> = {
 export function MemberPlanBlock({
   summary,
   cyclePeaks = [],
+  currentCycle,
 }: {
   summary: MemberPlanSummary;
   cyclePeaks?: MembershipCyclePeak[];
+  currentCycle?: CurrentCycleData | null;
 }) {
   const tone = ACTION_TONE[summary.recommendation.action];
 
@@ -58,7 +65,12 @@ export function MemberPlanBlock({
         <span className="kicker">are they on track with license consumption?</span>
       </div>
 
-      {/* Verdict banner — the answer to "is this plan right for them" */}
+      {/* Verdict + burndown — the at-a-glance answer to "is this person
+          on track right now". Status label at top, then the burndown
+          chart shows the actual remaining-budget trace through the
+          in-progress cycle. The chart's own header surfaces "X% remaining
+          / on pace / behind / resets in Nd Nh", so we don't duplicate
+          that text in the verdict block. */}
       <div
         style={{
           background: "var(--paper)",
@@ -76,20 +88,20 @@ export function MemberPlanBlock({
             textTransform: "uppercase",
             color: toneColor(tone),
             fontWeight: 600,
+            marginBottom: 12,
           }}
         >
           {ACTION_LABEL[summary.recommendation.action]}
-          {"confidence" in summary.recommendation && (
-            <span style={{ color: "var(--mute)", marginLeft: 8, fontWeight: 400 }}>
-              · {summary.recommendation.confidence} confidence
-            </span>
-          )}
         </div>
-        <div style={{ fontSize: 14, marginTop: 6, color: "var(--ink)" }}>
-          {currentInFlight
-            ? buildCurrentCycleStatus(currentInFlight)
-            : summary.recommendation.rationale}
-        </div>
+        {currentCycle ? (
+          <MemberBurndownChart cycle={currentCycle} />
+        ) : (
+          <div style={{ fontSize: 13, color: "var(--mute)" }}>
+            {currentInFlight
+              ? buildCurrentCycleStatus(currentInFlight)
+              : summary.recommendation.rationale}
+          </div>
+        )}
       </div>
 
       {/* Per-cycle peak history — same data and visual the member sees on

@@ -179,6 +179,73 @@ export async function loadMembership7dCyclePeaks(
   return out;
 }
 
+export type CurrentCycleSnapshot = {
+  capturedAt: Date;
+  utilization: number;  // 0..100
+};
+
+export type CurrentCycleData = {
+  startMs: number;
+  endMs: number;
+  snapshots: CurrentCycleSnapshot[];
+};
+
+// Per-snapshot 7d utilization for the IN-PROGRESS cycle of one member,
+// used to draw a sprint-style burndown. Bounds = the cycle whose
+// resets_at matches the latest snapshot. Snapshots earlier than that
+// (= previous cycle's tail) are excluded so the chart shows ONE clean
+// burndown trace, never a sawtooth.
+export async function loadMember7dCurrentCycle(
+  teamId: string,
+  membershipId: string,
+  pool: pg.Pool,
+): Promise<CurrentCycleData | null> {
+  const latest = await pool.query<{ resets_at: string }>(
+    `SELECT seven_day_resets_at AS resets_at
+     FROM plan_utilization
+     WHERE team_id = $1 AND membership_id = $2 AND seven_day_resets_at IS NOT NULL
+     ORDER BY captured_at DESC
+     LIMIT 1`,
+    [teamId, membershipId],
+  );
+  if (latest.rowCount === 0) return null;
+  const resetIso = latest.rows[0]!.resets_at;
+  const endMs = Date.parse(resetIso);
+  const startMs = endMs - 7 * 86_400_000;
+
+  // Fetch snapshots that share the same resets_at (exact ISO match).
+  // Anthropic's microsecond jitter on resets_at means same-cycle rows
+  // can vary by ±100ms across snapshots — round to the nearest hour to
+  // group all of them.
+  const HOUR = 3_600_000;
+  const bucketMs = Math.round(endMs / HOUR) * HOUR;
+  const rows = await pool.query<{
+    captured_at: string;
+    seven_day_utilization: number;
+    seven_day_resets_at: string;
+  }>(
+    `SELECT captured_at, seven_day_utilization, seven_day_resets_at
+     FROM plan_utilization
+     WHERE team_id = $1 AND membership_id = $2
+       AND seven_day_utilization IS NOT NULL
+       AND seven_day_resets_at IS NOT NULL
+       AND captured_at >= $3
+     ORDER BY captured_at ASC`,
+    [teamId, membershipId, new Date(startMs).toISOString()],
+  );
+
+  const snapshots: CurrentCycleSnapshot[] = [];
+  for (const r of rows.rows) {
+    const rowResetMs = Math.round(Date.parse(r.seven_day_resets_at) / HOUR) * HOUR;
+    if (rowResetMs !== bucketMs) continue;  // different cycle
+    snapshots.push({
+      capturedAt: new Date(r.captured_at),
+      utilization: Number(r.seven_day_utilization),
+    });
+  }
+  return { startMs, endMs, snapshots };
+}
+
 export async function loadMembersWithTier(
   teamId: string,
   pool: pg.Pool,

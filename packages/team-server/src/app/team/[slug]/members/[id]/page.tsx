@@ -3,7 +3,11 @@ import { redirect } from "next/navigation";
 import { getPool } from "../../../../../db/pool";
 import { validateSession } from "../../../../../lib/auth";
 import { loadMember, loadMemberRollups } from "../../../../../lib/queries";
-import { loadMemberPlanSummary, loadMembership7dCyclePeaks } from "../../../../../lib/plan-queries";
+import {
+  loadMemberPlanSummary,
+  loadMembership7dCyclePeaks,
+  loadMember7dCurrentCycle,
+} from "../../../../../lib/plan-queries";
 import { tierEntry } from "../../../../../lib/plan-tiers";
 import { formatAgentTime, formatTokens } from "../../../../../lib/format";
 import { MemberProfile } from "../../../../../components/member-profile";
@@ -42,10 +46,11 @@ export default async function MemberPage({
     );
   }
 
-  const [rollups, planSummary, allCyclePeaks] = await Promise.all([
+  const [rollups, planSummary, allCyclePeaks, currentCycle] = await Promise.all([
     loadMemberRollups(member.team_id, id, 30, pool),
     loadMemberPlanSummary(member.team_id, id, pool),
     loadMembership7dCyclePeaks(member.team_id, pool),
+    loadMember7dCurrentCycle(member.team_id, id, pool),
   ]);
   const cyclePeaks = allCyclePeaks.get(id) ?? [];
   const canSeeRoster = myMembership.role === "admin";
@@ -174,7 +179,11 @@ export default async function MemberPage({
       </header>
 
       {/* ─── 2. PLAN MATCH (verdict + cycle trend + throttling) ─────── */}
-      <MemberPlanBlock summary={planSummary} cyclePeaks={cyclePeaks} />
+      <MemberPlanBlock
+        summary={planSummary}
+        cyclePeaks={cyclePeaks}
+        currentCycle={currentCycle}
+      />
 
       {/* ─── 3. DAILY ACTIVITY (per-day shape + drill-down table) ───── */}
       <MemberProfile rollups={rollups} />
