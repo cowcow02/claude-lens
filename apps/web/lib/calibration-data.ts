@@ -90,20 +90,17 @@ export function previousCyclesTrend(
   const nowMs = Date.now();
   const cycles: CyclePeak[] = [];
   for (const [endMs, points] of Array.from(byCycle.entries()).sort((a, b) => a[0] - b[0])) {
+    // Take the max across BOTH real and predicted — when the daemon goes
+    // dark before cycle close, predicted forward-extrapolation often
+    // exceeds the last observed value, and the cycle's true peak is the
+    // predicted close, not the last poll. `source` reflects which side won.
     let peak = 0;
     let source: "real" | "predicted" = "predicted";
     for (const p of points) {
       const r = p[realKey];
-      if (typeof r === "number" && r > peak) {
-        peak = r;
-        source = "real";
-      }
-    }
-    if (source === "predicted") {
-      for (const p of points) {
-        const v = p[predKey] ?? 0;
-        if (v > peak) peak = v;
-      }
+      if (typeof r === "number" && r > peak) { peak = r; source = "real"; }
+      const v = p[predKey] ?? 0;
+      if (v > peak) { peak = v; source = "predicted"; }
     }
     cycles.push({
       endsAt: new Date(endMs).toISOString(),

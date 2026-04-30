@@ -187,6 +187,25 @@ describe("predictAnchored", () => {
     expect(lowRate).toBeCloseTo(98, 0);
   });
 
+  it("anchors pre-first-snap to (cycleStart, 0) for a clean reset on the cycle boundary", () => {
+    const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
+    const cycleStart = cycleEnd - 7 * DAY;
+    const firstObs = cycleStart + 12 * HOUR;
+    const snaps: CycleSnap[] = [{ ts: firstObs, pct: 8 }];
+    // $40 spent across the 12h pre-observation window
+    const events = eventsCosting(cycleStart, firstObs, 40, 60);
+    const spend = buildSpendIndex(events);
+    // At cycle boundary itself: clean reset, predicted = 0.
+    expect(predictAnchored(spend, snaps, 22, cycleEnd, 168, cycleStart)).toBe(0);
+    // At the first observation: anchored exactly at first.pct = 8.
+    expect(predictAnchored(spend, snaps, 22, cycleEnd, 168, firstObs)).toBeCloseTo(8, 1);
+    // Halfway through pre-observation $-fraction → halfway to first.pct.
+    const tHalf = cycleStart + 6 * HOUR;
+    const pHalf = predictAnchored(spend, snaps, 22, cycleEnd, 168, tHalf);
+    expect(pHalf).toBeGreaterThan(3);
+    expect(pHalf).toBeLessThan(5);
+  });
+
   it("uses the supplied rate for cycles with no observations yet", () => {
     const cycleEnd = Date.parse("2026-04-21T05:00:00Z");
     const cycleStart = cycleEnd - 7 * DAY;

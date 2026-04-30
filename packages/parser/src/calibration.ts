@@ -308,6 +308,19 @@ export function predictAnchored(
     const last = cycleSnaps[aIdx]!;
     return last.pct + dollarsInRange(spend, last.ts, t) / forwardRate;
   }
+  // t is before every observed snap of this cycle. Anchor the cycle start
+  // at pct=0 (clean reset on the cycle boundary) and spend-weighted
+  // interpolate to (first.ts, first.pct) — identical to the inter-snap
+  // interpolation, just with an implicit (cycleStart, 0) endpoint. This
+  // makes the chart visibly reset to 100% remaining at the boundary instead
+  // of using a free-form back-extrapolation rate that misses the anchor.
   const first = cycleSnaps[0]!;
-  return Math.max(0, first.pct - dollarsInRange(spend, t, first.ts) / forwardRate);
+  if (t <= cycleStart) return 0;
+  const totalDollars = dollarsInRange(spend, cycleStart, first.ts);
+  if (totalDollars <= 0) {
+    const frac = (t - cycleStart) / (first.ts - cycleStart);
+    return first.pct * frac;
+  }
+  const tDollars = dollarsInRange(spend, cycleStart, t);
+  return first.pct * (tDollars / totalDollars);
 }
