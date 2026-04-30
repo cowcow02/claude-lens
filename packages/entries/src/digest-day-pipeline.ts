@@ -119,32 +119,47 @@ export async function* runDayDigestPipeline(
         // saturating the subscription rate-limit window.
         const ENRICH_CONCURRENCY = 3;
         let processed = 0;
-        let budgetCapped = false;
-        for (let i = 0; i < pending.length; i += ENRICH_CONCURRENCY) {
+        outer: for (let i = 0; i < pending.length; i += ENRICH_CONCURRENCY) {
           if (monthToDateSpend() >= budget) {
             yield { type: "status", phase: "enrich", text: `budget cap reached — stopping enrichment` };
-            budgetCapped = true;
             break;
           }
           const batch = pending.slice(i, i + ENRICH_CONCURRENCY);
+          // Wrap each enrichment so a thrown error becomes a tagged result
+          // rather than silently disappearing. Lets us emit a progress event
+          // for the failed entry AND keeps the chunk going on partial fail.
           const results = await Promise.all(batch.map(entry =>
             enrichEntry(entry, { model: opts.settings.model, callLLM: opts.callLLM })
+              .then(r => ({ ok: true as const, entry, result: r.entry, usage: r.usage }))
               .catch(err => {
                 console.warn(`[enrich] ${entry.session_id} failed: ${(err as Error).message}`);
-                return null;
+                return { ok: false as const, entry, error: (err as Error).message };
               }),
           ));
           for (const r of results) {
-            if (!r) continue;
-            const { entry: result, usage } = r;
             processed++;
+            if (!r.ok) {
+              // Surface the error to the SSE consumer with a real index so the
+              // "X/Y" progress counter doesn't stall on rejected calls.
+              yield {
+                type: "entry", session_id: r.entry.session_id,
+                index: processed, total: pending.length,
+                status: "error", cost_usd: 0,
+              };
+              continue;
+            }
+            const { result, usage } = r;
             writeEntry(result);
-            if (result.enrichment.status === "done") {
+            // Append spend whenever the call returned token usage — including
+            // failed-validation cases where the LLM consumed cache_creation +
+            // output but the result didn't pass schema. Previously gated on
+            // status="done" only, which silently undercounted budget.
+            if (usage) {
               appendSpend({
                 ts: new Date().toISOString(), caller: opts.caller ?? "web",
                 model: result.enrichment.model ?? opts.settings.model,
-                input_tokens: usage?.input_tokens ?? 0,
-                output_tokens: usage?.output_tokens ?? 0,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
                 cost_usd: result.enrichment.cost_usd ?? 0,
                 kind: "entry_enrich",
                 ref: `${result.session_id}__${result.local_day}`,
@@ -156,8 +171,14 @@ export async function* runDayDigestPipeline(
               status: result.enrichment.status, cost_usd: result.enrichment.cost_usd,
             };
           }
+          // Cap re-checked after each chunk so we don't run forever on a
+          // budget breach mid-batch. The chunk completes (overshoot up to
+          // ENRICH_CONCURRENCY-1) then we stop.
+          if (monthToDateSpend() >= budget) {
+            yield { type: "status", phase: "enrich", text: `budget cap reached — stopping enrichment` };
+            break outer;
+          }
         }
-        void budgetCapped;
       }
     }
 

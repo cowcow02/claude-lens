@@ -100,7 +100,7 @@ describe("writeEntryPreservingEnrichment", () => {
     __setEntriesDirForTest(tmp);
   });
 
-  it("preserves prior 'done' enrichment when sweep rebuilds the entry", () => {
+  it("preserves 'done' enrichment when deterministic input is unchanged", () => {
     // Existing entry on disk: deterministic facets + completed enrichment.
     const existing = makeEntry("sess-1", "2026-04-22");
     existing.enrichment = {
@@ -120,21 +120,50 @@ describe("writeEntryPreservingEnrichment", () => {
     };
     writeEntry(existing);
 
-    // Perception sweep rebuilds from JSONL — fresh entry has pending enrichment
-    // and slightly different deterministic facets (e.g., new events appended).
+    // Perception sweep rebuilds from JSONL — fresh entry has pending
+    // enrichment but the SAME deterministic facets (no events appended,
+    // counts identical, end_iso unchanged). This is the common case during
+    // a state-reset re-sweep: same data on disk, just rebuilt.
     const fresh = makeEntry("sess-1", "2026-04-22");
-    fresh.numbers.active_min = 45; // grew
-    fresh.numbers.turn_count = 7;
     writeEntryPreservingEnrichment(fresh);
 
     const after = readEntry("sess-1", "2026-04-22")!;
-    // Deterministic facets reflect the rebuild
-    expect(after.numbers.active_min).toBe(45);
-    expect(after.numbers.turn_count).toBe(7);
-    // But enrichment is preserved verbatim
     expect(after.enrichment.status).toBe("done");
     expect(after.enrichment.brief_summary).toBe("shipped a thing");
     expect(after.enrichment.cost_usd).toBe(0.05);
+  });
+
+  it("invalidates 'done' enrichment when entry has grown (more events)", () => {
+    // Prior enrichment described a 30m / 5-turn snapshot. The session
+    // continued — fresh entry has 45m / 7 turns + new PR shipped. The old
+    // brief_summary is stale (described less work than now exists), so the
+    // helper should drop the prior enrichment back to pending and let the
+    // next pipeline run re-enrich against the current entry shape.
+    const existing = makeEntry("sess-grow", "2026-04-22");
+    existing.enrichment = {
+      ...existing.enrichment,
+      status: "done",
+      brief_summary: "small partial",
+      outcome: "partial",
+      cost_usd: 0.02,
+      enriched_at: "2026-04-22T01:00:00Z",
+    };
+    writeEntry(existing);
+
+    const fresh = makeEntry("sess-grow", "2026-04-22");
+    fresh.numbers.active_min = 45;
+    fresh.numbers.turn_count = 7;
+    fresh.pr_titles = ["feat: shipped the rest"];
+    fresh.end_iso = "2026-04-22T02:30:00Z";
+    writeEntryPreservingEnrichment(fresh);
+
+    const after = readEntry("sess-grow", "2026-04-22")!;
+    // Deterministic facets reflect the rebuild
+    expect(after.numbers.active_min).toBe(45);
+    expect(after.pr_titles).toEqual(["feat: shipped the rest"]);
+    // Stale enrichment dropped — re-enrichable
+    expect(after.enrichment.status).toBe("pending");
+    expect(after.enrichment.brief_summary).toBeNull();
   });
 
   it("preserves 'skipped_trivial' enrichment", () => {

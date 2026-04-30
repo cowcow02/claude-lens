@@ -719,29 +719,39 @@ function pruneUngroundedFindings(
   value: import("./prompts/digest-week.js").WeekDigestResponse,
   dayDigests: DayDigest[],
   entries: Entry[],
+  promptText: string,
 ): import("./prompts/digest-week.js").WeekDigestResponse {
-  const dayCorpus = new Map<string, string>();
+  // The substring grounding check now runs against the SAME prompt text the
+  // LLM saw. This keeps the validator in sync with the prompt builder
+  // forever: if the prompt adds a new quotable section (day_signature,
+  // suggestion lines, day-signal bullets, interaction-grammar bullets),
+  // the corpus picks them up automatically with no parallel update.
+  //
+  // Per-day fallback corpora supplement the prompt text — they cover
+  // entry-level fields (first_user, final_agent, subagent previews) that
+  // aren't in the week prompt but ARE legitimate evidence sources for
+  // anchored findings.
+  const promptCorpus = normalizeForMatch(promptText);
+  const dayFallback = new Map<string, string>();
   for (const d of dayDigests) {
     const parts = [d.headline, d.what_went_well, d.what_hit_friction]
       .filter((s): s is string => !!s);
-    dayCorpus.set(d.key, normalizeForMatch(parts.join(" \n ")));
+    dayFallback.set(d.key, normalizeForMatch(parts.join(" \n ")));
   }
-  // Augment corpus with first_user + final_agent + subagent prompt previews
-  // from entries — broader pool because what_worked/what_surprised may quote
-  // user input or subagent prompts, not just day-digest prose.
   for (const e of entries) {
     const day = e.local_day;
-    const prior = dayCorpus.get(day) ?? "";
+    const prior = dayFallback.get(day) ?? "";
     const extra = [e.first_user, e.final_agent, ...(e.subagents ?? []).flatMap(sa => [sa.description, sa.prompt_preview])]
       .filter((s): s is string => !!s)
       .join(" \n ");
-    dayCorpus.set(day, normalizeForMatch(prior + " \n " + extra));
+    dayFallback.set(day, normalizeForMatch(prior + " \n " + extra));
   }
 
   const groundedFinding = (f: import("./prompts/digest-week.js").WeekDigestResponse["what_worked"][number]) => {
-    const corpus = dayCorpus.get(f.evidence.date);
-    if (!corpus) return false;
-    return corpus.includes(normalizeForMatch(f.evidence.quote));
+    const quote = normalizeForMatch(f.evidence.quote);
+    if (promptCorpus.includes(quote)) return true;
+    const fallback = dayFallback.get(f.evidence.date);
+    return fallback ? fallback.includes(quote) : false;
   };
 
   return {
@@ -808,7 +818,7 @@ export async function generateWeekDigest(
     inT += r1.input_tokens; outT += r1.output_tokens; lastModel = r1.model;
     const v1 = validateWeek(r1.content);
     if (v1.ok) {
-      return { digest: mergeNarrative(pruneUngroundedFindings(v1.value, dayDigests, entriesArr)), usage: { input_tokens: inT, output_tokens: outT } };
+      return { digest: mergeNarrative(pruneUngroundedFindings(v1.value, dayDigests, entriesArr, userPrompt)), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     const r2 = await callLLM({
@@ -819,7 +829,7 @@ export async function generateWeekDigest(
     inT += r2.input_tokens; outT += r2.output_tokens; lastModel = r2.model;
     const v2 = validateWeek(r2.content);
     if (v2.ok) {
-      return { digest: mergeNarrative(pruneUngroundedFindings(v2.value, dayDigests, entriesArr)), usage: { input_tokens: inT, output_tokens: outT } };
+      return { digest: mergeNarrative(pruneUngroundedFindings(v2.value, dayDigests, entriesArr, userPrompt)), usage: { input_tokens: inT, output_tokens: outT } };
     }
 
     console.warn(`[digest-week] ${monday}: LLM response failed validation after retry (${v2.error})`);

@@ -535,7 +535,16 @@ const PinResponseSchema = z.object({
   // digest falls back to all-null narrative — happened on claude-lens
   // 2026-04-24 with one 286-char overflow killing 5 otherwise-valid pins.
   // 320 is the soft cap; anything over gets sliced at parse time.
-  label: z.string().min(1).transform(s => s.length <= 320 ? s : s.slice(0, 317) + "..."),
+  // Slice is surrogate-pair-safe: if the cut position would land in the
+  // middle of a UTF-16 surrogate pair we back off one code unit so we
+  // never emit an unpaired high surrogate (invalid UTF-16).
+  label: z.string().min(1).transform(s => {
+    if (s.length <= 320) return s;
+    let cut = 317;
+    const code = s.charCodeAt(cut - 1);
+    if (code >= 0xD800 && code <= 0xDBFF) cut -= 1;
+    return s.slice(0, cut) + "...";
+  }),
 });
 
 export const TopSessionResponseSchema = z.object({
@@ -669,13 +678,16 @@ export function buildTopSessionUserPrompt(slice: SessionSlice): string {
     out(`### Turn ${t.turn} — ${t.start_min}m–${t.end_min}m (${t.wall_min}m wall, ${t.active_min}m active${idleNote})`);
     if (t.user) out(`USER (${t.user.chars}c): ${t.user.preview}`);
 
-    // first_agent / last_agent / agent are mutually-exclusive flavors of the
-    // same field — only one is set per turn depending on whether the turn is
-    // a boundary turn (first/last in slice) or a middle turn.
-    const ag = t.first_agent ?? t.last_agent ?? t.agent;
-    if (ag) {
-      const agLabel = t.first_agent ? "FIRST_AGENT" : t.last_agent ? "LAST_AGENT" : "AGENT";
-      out(`${agLabel} (${ag.chars}c): ${ag.preview}`);
+    // Emit each agent flavor that's present. Boundary turns can carry BOTH
+    // first_agent and last_agent (head + tail of a long autonomous span);
+    // middle turns carry just `agent`. The prior implementation collapsed
+    // these via `??` and dropped LAST_AGENT whenever first_agent was set —
+    // breaking the prompt's contract that says "use last_agent text as
+    // evidence for what the autonomous span accomplished."
+    if (t.first_agent) out(`FIRST_AGENT (${t.first_agent.chars}c): ${t.first_agent.preview}`);
+    if (t.last_agent) out(`LAST_AGENT (${t.last_agent.chars}c): ${t.last_agent.preview}`);
+    if (t.agent && !t.first_agent && !t.last_agent) {
+      out(`AGENT (${t.agent.chars}c): ${t.agent.preview}`);
     }
     if (t.tools.length) out(`Tools: ${t.tools.join(", ")}`);
     if (t.skills_loaded?.length) out(`Skills loaded this turn: ${t.skills_loaded.join(", ")}`);
