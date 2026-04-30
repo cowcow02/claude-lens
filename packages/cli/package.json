@@ -21,6 +21,9 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint"
   },
+  "dependencies": {
+    "@claude-lens/entries": "workspace:*"
+  },
   "devDependencies": {
     "@claude-lens/parser": "workspace:*",
     "@types/node": "^20.11.0",

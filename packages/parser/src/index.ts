@@ -9,7 +9,6 @@ export * from "./types.js";
 export * from "./parser.js";
 export * from "./presentation.js";
 export * from "./analytics.js";
-export * from "./capsule.js";
 export * from "./aggregate.js";
 export * from "./calibration.js";
 export { groupByTeam } from "./team.js";

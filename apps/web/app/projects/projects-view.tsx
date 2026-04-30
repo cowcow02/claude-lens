@@ -3,31 +3,32 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ProjectRollup } from "@claude-lens/parser";
+import type { DayOutcome } from "@claude-lens/entries";
 import { formatDuration, formatRelative, formatTokens, prettyProjectName } from "@/lib/format";
 import { DataTable, type Column } from "@/components/data-table";
 import { useViewToggle } from "@/components/view-toggle";
+import { OutcomeMixRow } from "@/components/outcome-mix-row";
 
-export function ProjectsView({ projects }: { projects: ProjectRollup[] }) {
+export type ProjectRow = {
+  project: ProjectRollup;
+  recentDays: Array<{ date: string; outcome: DayOutcome | null }>;
+};
+
+export function ProjectsView({ rows }: { rows: ProjectRow[] }) {
   const router = useRouter();
   const { mode, toggle } = useViewToggle("cclens:projects:view");
 
   return (
     <>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          marginBottom: 14,
-        }}
-      >
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
         {toggle}
       </div>
       {mode === "table" ? (
-        <DataTable<ProjectRollup>
-          rows={projects}
-          getRowKey={(p) => p.projectDir}
-          onRowClick={(p) =>
-            router.push(`/projects/${encodeURIComponent(p.projectDir)}`)
+        <DataTable<ProjectRow>
+          rows={rows}
+          getRowKey={(r) => r.project.projectDir}
+          onRowClick={(r) =>
+            router.push(`/projects/${encodeURIComponent(r.project.projectDir)}`)
           }
           defaultSortKey="lastActive"
           defaultSortDir="desc"
@@ -41,8 +42,8 @@ export function ProjectsView({ projects }: { projects: ProjectRollup[] }) {
             gap: 14,
           }}
         >
-          {projects.map((p) => (
-            <ProjectCard key={p.projectDir} project={p} />
+          {rows.map((r) => (
+            <ProjectCard key={r.project.projectDir} row={r} />
           ))}
         </div>
       )}
@@ -50,23 +51,18 @@ export function ProjectsView({ projects }: { projects: ProjectRollup[] }) {
   );
 }
 
-const projectTableColumns: Column<ProjectRollup>[] = [
+const projectTableColumns: Column<ProjectRow>[] = [
   {
     key: "name",
     header: "Project",
-    sortValue: (p) => p.projectName,
-    render: (p) => (
+    sortValue: (r) => r.project.projectName,
+    render: (r) => (
       <div>
         <div
-          style={{
-            fontWeight: 500,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-          }}
+          style={{ fontWeight: 500, display: "inline-flex", alignItems: "center", gap: 6 }}
         >
-          {prettyProjectName(p.projectName)}
-          {p.worktreeCount > 0 && <WorktreeBadge count={p.worktreeCount} />}
+          {prettyProjectName(r.project.projectName)}
+          {r.project.worktreeCount > 0 && <WorktreeBadge count={r.project.worktreeCount} />}
         </div>
         <div
           style={{
@@ -78,72 +74,78 @@ const projectTableColumns: Column<ProjectRollup>[] = [
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
-          title={p.projectName}
+          title={r.project.projectName}
         >
-          {p.projectName}
+          {r.project.projectName}
         </div>
       </div>
     ),
   },
   {
+    key: "recent",
+    header: "Recent (7d)",
+    sortable: false,
+    render: (r) => <OutcomeMixRow days={r.recentDays} />,
+  },
+  {
     key: "sessions",
     header: "Sessions",
-    sortValue: (p) => p.metrics.sessionCount,
+    sortValue: (r) => r.project.metrics.sessionCount,
     align: "right",
-    render: (p) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        {p.metrics.sessionCount.toLocaleString()}
+        {r.project.metrics.sessionCount.toLocaleString()}
       </span>
     ),
   },
   {
     key: "turns",
     header: "Turns",
-    sortValue: (p) => p.metrics.totalTurns,
+    sortValue: (r) => r.project.metrics.totalTurns,
     align: "right",
-    render: (p) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        {p.metrics.totalTurns.toLocaleString()}
+        {r.project.metrics.totalTurns.toLocaleString()}
       </span>
     ),
   },
   {
     key: "tools",
     header: "Tool calls",
-    sortValue: (p) => p.metrics.totalToolCalls,
+    sortValue: (r) => r.project.metrics.totalToolCalls,
     align: "right",
-    render: (p) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        {p.metrics.totalToolCalls.toLocaleString()}
+        {r.project.metrics.totalToolCalls.toLocaleString()}
       </span>
     ),
   },
   {
     key: "airtime",
     header: "Agent time",
-    sortValue: (p) => p.metrics.totalAirTimeMs,
+    sortValue: (r) => r.project.metrics.totalAirTimeMs,
     align: "right",
-    render: (p) => (
+    render: (r) => (
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        {formatDuration(p.metrics.totalAirTimeMs)}
+        {formatDuration(r.project.metrics.totalAirTimeMs)}
       </span>
     ),
   },
   {
     key: "tokens",
     header: "Tokens",
-    sortValue: (p) =>
-      p.metrics.totalTokens.input +
-      p.metrics.totalTokens.output +
-      p.metrics.totalTokens.cacheRead +
-      p.metrics.totalTokens.cacheWrite,
+    sortValue: (r) =>
+      r.project.metrics.totalTokens.input +
+      r.project.metrics.totalTokens.output +
+      r.project.metrics.totalTokens.cacheRead +
+      r.project.metrics.totalTokens.cacheWrite,
     align: "right",
-    render: (p) => {
+    render: (r) => {
       const total =
-        p.metrics.totalTokens.input +
-        p.metrics.totalTokens.output +
-        p.metrics.totalTokens.cacheRead +
-        p.metrics.totalTokens.cacheWrite;
+        r.project.metrics.totalTokens.input +
+        r.project.metrics.totalTokens.output +
+        r.project.metrics.totalTokens.cacheRead +
+        r.project.metrics.totalTokens.cacheWrite;
       return (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
           {formatTokens(total)}
@@ -154,34 +156,31 @@ const projectTableColumns: Column<ProjectRollup>[] = [
   {
     key: "lastActive",
     header: "Last active",
-    sortValue: (p) => p.lastActiveMs ?? 0,
+    sortValue: (r) => r.project.lastActiveMs ?? 0,
     align: "right",
-    render: (p) => (
-      <span
-        suppressHydrationWarning
-        style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}
-      >
-        {p.lastActiveMs ? formatRelative(new Date(p.lastActiveMs).toISOString()) : "—"}
+    render: (r) => (
+      <span suppressHydrationWarning style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+        {r.project.lastActiveMs
+          ? formatRelative(new Date(r.project.lastActiveMs).toISOString())
+          : "—"}
       </span>
     ),
   },
 ];
 
-function ProjectCard({ project: p }: { project: ProjectRollup }) {
+function ProjectCard({ row }: { row: ProjectRow }) {
+  const p = row.project;
   const totalTokens =
     p.metrics.totalTokens.input +
     p.metrics.totalTokens.output +
     p.metrics.totalTokens.cacheRead +
     p.metrics.totalTokens.cacheWrite;
+  const hasOutcomes = row.recentDays.some((d) => d.outcome !== null);
   return (
     <Link
       href={`/projects/${encodeURIComponent(p.projectDir)}`}
       className="af-card"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 10,
-      }}
+      style={{ display: "flex", flexDirection: "column", gap: 10 }}
     >
       <div
         style={{
@@ -206,14 +205,26 @@ function ProjectCard({ project: p }: { project: ProjectRollup }) {
         {p.worktreeCount > 0 && <WorktreeBadge count={p.worktreeCount} />}
       </div>
       <div
-        style={{
-          fontSize: 11,
-          color: "var(--af-text-tertiary)",
-          fontFamily: "var(--font-mono)",
-        }}
+        style={{ fontSize: 11, color: "var(--af-text-tertiary)", fontFamily: "var(--font-mono)" }}
       >
         {p.projectName}
       </div>
+
+      {hasOutcomes && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 10,
+            color: "var(--af-text-tertiary)",
+          }}
+        >
+          <span>recent:</span>
+          <OutcomeMixRow days={row.recentDays} />
+        </div>
+      )}
+
       <div
         style={{
           display: "grid",

@@ -7,6 +7,8 @@ import {
   highLevelMetrics,
   groupByProject,
   sessionAirTimeMs,
+  canonicalProjectName,
+  worktreeName,
 } from "../src/analytics.js";
 import type { SessionMeta, SessionEvent } from "../src/types.js";
 
@@ -206,5 +208,36 @@ describe("sessionAirTimeMs", () => {
     ];
     const air = sessionAirTimeMs(events, 3 * 60 * 1000);
     expect(air).toBe(7000); // 2000 + 5000
+  });
+});
+
+describe("canonicalProjectName + worktreeName", () => {
+  it("strips /.worktrees/<name>", () => {
+    expect(
+      canonicalProjectName("/Users/me/Repo/foo/.worktrees/feat-x"),
+    ).toBe("/Users/me/Repo/foo");
+    expect(worktreeName("/Users/me/Repo/foo/.worktrees/feat-x")).toBe("feat-x");
+  });
+
+  it("strips /.claude/worktrees/<name>", () => {
+    expect(
+      canonicalProjectName("/Users/me/Repo/foo/.claude/worktrees/loop"),
+    ).toBe("/Users/me/Repo/foo");
+  });
+
+  it("collapses repeated slashes before matching", () => {
+    // Anomalous //claude/worktrees/... — must normalize to /.claude/...
+    expect(
+      canonicalProjectName("/Users/me/Repo/foo//claude/worktrees/orchestrate/sub"),
+    ).toBe("/Users/me/Repo/foo");
+    // Plain extra slash with no worktree marker — collapse but don't strip more
+    expect(canonicalProjectName("/Users//me/Repo/bar")).toBe(
+      "/Users/me/Repo/bar",
+    );
+  });
+
+  it("returns input unchanged when no worktree marker is present", () => {
+    expect(canonicalProjectName("/Users/me/Repo/foo")).toBe("/Users/me/Repo/foo");
+    expect(worktreeName("/Users/me/Repo/foo")).toBe(null);
   });
 });

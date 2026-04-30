@@ -12,8 +12,12 @@ import {
 import { DashboardView } from "@/components/dashboard-view";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { LiveBadge } from "@/components/live-badge";
+import { YesterdayHero } from "@/components/yesterday-hero";
+import { RecentDaysPanel } from "@/components/recent-days-panel";
+import type { DaySummary } from "@/components/heatmap";
 import { cutoffMs, parseRange } from "@/lib/date-range";
 import { listSessions } from "@/lib/data";
+import { buildEntriesIndex, listCachedDayDigests } from "@/lib/entries-index";
 import { formatDuration, formatTokens, formatRelative, prettyProjectName } from "@/lib/format";
 import Link from "next/link";
 
@@ -37,8 +41,26 @@ export default async function DashboardHome({
   const range = parseRange(rangeParam);
   const cutoff = cutoffMs(range);
 
-  const allSessions = await listSessions();
+  const [allSessions, entriesIndex, cachedDigests] = await Promise.all([
+    listSessions(),
+    buildEntriesIndex(),
+    listCachedDayDigests(),
+  ]);
   const sessions = filterByRange(allSessions, cutoff);
+
+  // Heatmap day summaries — outcome from index, headline + helpfulness from cached digests
+  const daySummaries = new Map<string, DaySummary>();
+  for (const [date, outcome] of entriesIndex.dayOutcome) {
+    daySummaries.set(date, { outcome, headline: null, helpfulness: null });
+  }
+  for (const [date, digest] of cachedDigests) {
+    const cur = daySummaries.get(date) ?? { outcome: digest.outcome_day, headline: null, helpfulness: null };
+    daySummaries.set(date, {
+      outcome: cur.outcome ?? digest.outcome_day,
+      headline: digest.headline,
+      helpfulness: digest.helpfulness_day,
+    });
+  }
 
   // Top projects: total tokens desc with session count as tiebreaker.
   const projects = groupByProject(sessions)
@@ -106,13 +128,18 @@ export default async function DashboardHome({
         <DateRangeFilter current={range} />
       </header>
 
-      <DashboardView sessions={sessions} />
+      {/* TodayHero removed: generating a digest mid-day produces a partial
+          snapshot of incomplete work. Yesterday's hero stays since the day
+          is closed and the digest is final. */}
+      <YesterdayHero />
 
-      {/* Top projects + Recent sessions */}
+      <DashboardView sessions={sessions} daySummaries={daySummaries} />
+
+      {/* Top projects + Recent sessions + Recent days */}
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1.4fr",
+          gridTemplateColumns: "minmax(260px, 1fr) minmax(260px, 1.4fr) minmax(260px, 1fr)",
           gap: 16,
         }}
       >
@@ -301,6 +328,8 @@ export default async function DashboardHome({
             )}
           </div>
         </div>
+
+        <RecentDaysPanel />
       </section>
     </div>
   );
