@@ -1,7 +1,8 @@
 import { tierEntry } from "../lib/plan-tiers";
 import type { Recommendation } from "../lib/plan-optimizer";
 import { UtilizationSparkline } from "./utilization-sparkline";
-import type { MemberPlanSummary } from "../lib/plan-queries";
+import { CyclePeaksStrip } from "./cycle-peaks-strip";
+import type { MemberPlanSummary, MembershipCyclePeak } from "../lib/plan-queries";
 
 const ACTION_LABEL: Record<Recommendation["action"], string> = {
   insufficient_data: "Collecting data",
@@ -25,9 +26,28 @@ const ACTION_TONE: Record<Recommendation["action"], Tone> = {
   stay: "good",
 };
 
-export function MemberPlanBlock({ summary }: { summary: MemberPlanSummary }) {
+export function MemberPlanBlock({
+  summary,
+  cyclePeaks = [],
+}: {
+  summary: MemberPlanSummary;
+  cyclePeaks?: MembershipCyclePeak[];
+}) {
   const tier = tierEntry(summary.planTier);
   const tone = ACTION_TONE[summary.recommendation.action];
+
+  // Most recently completed cycle (drops the in-progress one). Used to
+  // render the "Last cycle" callout that mirrors the personal edition's
+  // headline number on the trend strip.
+  const completed = cyclePeaks.filter((c) => !c.isCurrent);
+  const lastCompleted = completed.length > 0 ? completed[completed.length - 1] : null;
+  const trendDelta = (() => {
+    if (completed.length < 2) return null;
+    const last = completed[completed.length - 1]!.peakPct;
+    const prev = completed[completed.length - 2]!.peakPct;
+    return last - prev;
+  })();
+  const currentInFlight = cyclePeaks.find((c) => c.isCurrent) ?? null;
 
   return (
     <>
@@ -140,23 +160,102 @@ export function MemberPlanBlock({ summary }: { summary: MemberPlanSummary }) {
         />
       </div>
 
+      {/* Per-cycle peak history — same data and visual the member sees on
+          their personal /usage page. Bars are ordered oldest → newest;
+          height = peak utilization, color follows danger thresholds,
+          striped = predicted from JSONL (cold-start), dashed border = the
+          in-progress cycle. Hover any bar for exact date + source. */}
       <div style={{ marginBottom: 24 }}>
         <div
-          className="mono"
           style={{
-            fontSize: 11,
-            letterSpacing: "0.1em",
-            color: "var(--mute)",
-            textTransform: "uppercase",
-            marginBottom: 8,
+            display: "flex",
+            alignItems: "baseline",
+            gap: 14,
+            flexWrap: "wrap",
+            marginBottom: 10,
           }}
         >
-          Past 12 weeks · weekly peak utilization
+          <div
+            className="mono"
+            style={{
+              fontSize: 11,
+              letterSpacing: "0.1em",
+              color: "var(--mute)",
+              textTransform: "uppercase",
+            }}
+          >
+            Previous 7d cycles
+          </div>
+          {lastCompleted && (
+            <div style={{ fontSize: 12, color: "var(--ink)" }}>
+              <span style={{ color: "var(--mute)" }}>last cycle peak:</span>{" "}
+              <strong style={{ color: peakColor(lastCompleted.peakPct) }}>
+                {lastCompleted.peakPct.toFixed(0)}%
+              </strong>
+              {trendDelta !== null && Math.abs(trendDelta) >= 5 && (
+                <span style={{ marginLeft: 8, color: "var(--mute)" }}>
+                  · {trendDelta > 0 ? "↑" : "↓"}{" "}
+                  {Math.abs(trendDelta).toFixed(0)}pp from prior
+                </span>
+              )}
+              {trendDelta !== null && Math.abs(trendDelta) < 5 && (
+                <span style={{ marginLeft: 8, color: "var(--mute)" }}>
+                  · flat vs prior
+                </span>
+              )}
+            </div>
+          )}
+          {currentInFlight && (
+            <div
+              style={{
+                marginLeft: "auto",
+                fontSize: 12,
+                color: "var(--ink)",
+              }}
+            >
+              <span style={{ color: "var(--mute)" }}>in progress:</span>{" "}
+              <strong style={{ color: peakColor(currentInFlight.peakPct) }}>
+                {currentInFlight.peakPct.toFixed(0)}%
+              </strong>
+            </div>
+          )}
         </div>
-        <UtilizationSparkline values={summary.trail} width={240} height={48} />
+        {cyclePeaks.length > 0 ? (
+          <CyclePeaksStrip cycles={cyclePeaks} maxBars={12} />
+        ) : (
+          // Fall back to the legacy mat-view sparkline when no cycle-peak
+          // data has been pushed yet (daemon predates the cyclePeaks wire
+          // field, or the membership is brand new).
+          <div>
+            <div style={{ fontSize: 11, color: "var(--mute)", marginBottom: 6 }}>
+              No cycle-peak data yet · showing legacy weekly trail
+            </div>
+            <UtilizationSparkline values={summary.trail} width={240} height={48} />
+          </div>
+        )}
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--mute)",
+            marginTop: 8,
+            fontStyle: "italic",
+          }}
+        >
+          Striped bars = estimated from local JSONL spend (cold-start).
+          Solid bars = measured from daemon. Dashed border = in-progress cycle.
+          Hover for exact date.
+        </div>
       </div>
     </>
   );
+}
+
+// Same color scale used inside CyclePeaksStrip so the callout numbers
+// match what the bars show.
+function peakColor(pct: number): string {
+  if (pct >= 90) return "#c5283d";
+  if (pct >= 70) return "#b58400";
+  return "#2f8f5a";
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
