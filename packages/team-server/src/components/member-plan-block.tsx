@@ -221,8 +221,8 @@ function peakColor(pct: number): string {
 // averages. Admin glance question is "where are they NOW and how long
 // until reset", not "what was the 30-day average". Format:
 //   "current 42% · 4d 2h to next reset (May 3, 3 PM UTC)"
-function buildCurrentCycleStatus(c: { peakPct: number; endsAt: string }): string {
-  const reset = new Date(c.endsAt);
+function buildCurrentCycleStatus(c: MembershipCyclePeak): string {
+  const reset = c.endsAt;
   const ms = reset.getTime() - Date.now();
   if (ms <= 0) return `current ${c.peakPct.toFixed(0)}% · cycle reset due now`;
   const totalHours = Math.floor(ms / 3_600_000);

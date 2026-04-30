@@ -121,42 +121,48 @@ export default async function MemberPage({
               </div>
             )}
           </div>
+          {/* Identity-side metadata: role + joined date stay here, and
+              Plan + Daemon freshness slot in directly below them so all
+              "who is this seat" facts live together — no longer split
+              between two sections. */}
           <div
             className="profile-meta"
-            style={{ textAlign: "right", whiteSpace: "nowrap" }}
+            style={{ textAlign: "right", whiteSpace: "nowrap", lineHeight: 1.5 }}
           >
-            {member.role.toUpperCase()}
-            <br />
-            JOINED{" "}
-            {new Date(member.joined_at)
-              .toLocaleDateString("en-US", {
-                month: "short",
-                day: "2-digit",
-                year: "numeric",
-              })
-              .toUpperCase()}
+            <div>{member.role.toUpperCase()}</div>
+            <div>
+              JOINED{" "}
+              {new Date(member.joined_at)
+                .toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "2-digit",
+                  year: "numeric",
+                })
+                .toUpperCase()}
+            </div>
+            <div style={{ marginTop: 6 }}>
+              {tier.monthlyPriceUsd > 0
+                ? `${tier.label} · $${tier.monthlyPriceUsd}/mo`
+                : tier.label}
+            </div>
+            <div style={{ color: daemonColor(planSummary.lastSeenAtMs) }}>
+              DAEMON · {daemonFreshness(planSummary.lastSeenAtMs)}
+            </div>
           </div>
         </div>
 
+        {/* 30-day activity summary — only volume metrics now, since Plan
+            and Daemon moved up next to the role/joined block. */}
         <div
           style={{
             borderTop: "1px solid var(--rule)",
             paddingTop: 14,
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
             gap: 18,
             fontSize: 12,
           }}
         >
-          <HeaderField
-            label="Plan"
-            value={
-              tier.monthlyPriceUsd > 0
-                ? `${tier.label} · $${tier.monthlyPriceUsd}/mo`
-                : tier.label
-            }
-          />
-          <HeaderField label="Daemon" value={daemonFreshness(planSummary.lastSeenAtMs)} />
           <HeaderField
             label="30-day engagement"
             value={`${planSummary.totalDaysObserved} active days`}
@@ -204,9 +210,19 @@ function daemonFreshness(lastSeenAtMs: number | null): string {
   if (lastSeenAtMs == null) return "—";
   const ageMs = Date.now() - lastSeenAtMs;
   if (ageMs < 0) return "just now";
-  if (ageMs < 10 * 60 * 1000) return "live · last poll just now";
+  if (ageMs < 10 * 60 * 1000) return "live";
   if (ageMs < 60 * 60 * 1000) return `${Math.round(ageMs / 60_000)}m ago`;
   if (ageMs < 24 * 60 * 60 * 1000) return `${Math.round(ageMs / 3_600_000)}h ago`;
-  if (ageMs < 7 * 86_400_000) return `${Math.round(ageMs / 86_400_000)}d ago — daemon stalled?`;
-  return `${Math.round(ageMs / 86_400_000)}d ago — daemon down`;
+  if (ageMs < 7 * 86_400_000) return `${Math.round(ageMs / 86_400_000)}d ago — stalled?`;
+  return `${Math.round(ageMs / 86_400_000)}d ago — down`;
+}
+
+// Color the DAEMON line: green when live, amber when 1h-1d ago, red for
+// >1d (suggests the daemon is stalled or the seat is genuinely idle).
+function daemonColor(lastSeenAtMs: number | null): string {
+  if (lastSeenAtMs == null) return "var(--mute)";
+  const ageMs = Date.now() - lastSeenAtMs;
+  if (ageMs < 60 * 60 * 1000) return "#2c6e49";
+  if (ageMs < 24 * 60 * 60 * 1000) return "#b58400";
+  return "#a93b2c";
 }
