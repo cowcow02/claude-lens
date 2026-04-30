@@ -32,6 +32,40 @@ export function writeEntry(entry: Entry): void {
   renameSync(tmp, final);
 }
 
+/**
+ * Write a deterministic Entry rebuilt from JSONL while preserving any prior
+ * committed enrichment on disk for the same (session_id, local_day) key.
+ *
+ * The perception sweep reconstructs Entries from raw events whenever a JSONL
+ * file grows past its tracked checkpoint — or, more dramatically, whenever
+ * `~/.cclens/perception-state.json` is reset and the sweep re-scans every
+ * file from byte 0. In the reset case, `buildEntries` produces fresh Entries
+ * with `enrichment: { status: "pending" }`. Plain `writeEntry` would clobber
+ * the enriched-on-disk version, wiping the LLM cost the user already paid.
+ *
+ * This helper reads the existing entry first and:
+ *   - If existing.enrichment.status is "done" or "skipped_trivial":
+ *     keep that enrichment (the LLM work was committed and is keyed by
+ *     the same `(session_id, local_day)` tuple).
+ *   - Otherwise (pending / error / not-yet-existing):
+ *     write the fresh entry as-is so a re-run can pick up where it left off.
+ *
+ * Deterministic facets (numbers, flags, signals, top_tools, etc.) always come
+ * from the rebuilt entry — those reflect the latest JSONL state.
+ */
+const PRESERVABLE_STATUSES: ReadonlySet<EntryEnrichmentStatus> = new Set([
+  "done", "skipped_trivial",
+]);
+
+export function writeEntryPreservingEnrichment(fresh: Entry): void {
+  const existing = readEntry(fresh.session_id, fresh.local_day);
+  if (existing && PRESERVABLE_STATUSES.has(existing.enrichment.status)) {
+    writeEntry({ ...fresh, enrichment: existing.enrichment });
+    return;
+  }
+  writeEntry(fresh);
+}
+
 export function readEntry(sessionId: string, localDay: string): Entry | null {
   const p = pathFor(sessionId, localDay);
   if (!existsSync(p)) return null;

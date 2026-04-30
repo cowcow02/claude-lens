@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   writeEntry,
+  writeEntryPreservingEnrichment,
   readEntry,
   listEntriesForDay,
   listEntriesForSession,
@@ -89,6 +90,99 @@ describe("fs storage", () => {
     const path = join(tmp, "bad__2026-04-22.json");
     writeFileSync(path, "{not json");
     expect(() => readEntry("bad", "2026-04-22")).toThrow();
+  });
+});
+
+describe("writeEntryPreservingEnrichment", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "entries-merge-test-"));
+    __setEntriesDirForTest(tmp);
+  });
+
+  it("preserves prior 'done' enrichment when sweep rebuilds the entry", () => {
+    // Existing entry on disk: deterministic facets + completed enrichment.
+    const existing = makeEntry("sess-1", "2026-04-22");
+    existing.enrichment = {
+      status: "done",
+      retry_count: 0,
+      brief_summary: "shipped a thing",
+      friction_detail: null,
+      outcome: "shipped",
+      goal_categories: { build: 30 },
+      user_instructions: ["do the thing"],
+      satisfaction_signal_breakdown: null,
+      user_input_breakdown: null,
+      cost_usd: 0.05,
+      model: "sonnet",
+      error: null,
+      enriched_at: "2026-04-22T01:00:00Z",
+    };
+    writeEntry(existing);
+
+    // Perception sweep rebuilds from JSONL — fresh entry has pending enrichment
+    // and slightly different deterministic facets (e.g., new events appended).
+    const fresh = makeEntry("sess-1", "2026-04-22");
+    fresh.numbers.active_min = 45; // grew
+    fresh.numbers.turn_count = 7;
+    writeEntryPreservingEnrichment(fresh);
+
+    const after = readEntry("sess-1", "2026-04-22")!;
+    // Deterministic facets reflect the rebuild
+    expect(after.numbers.active_min).toBe(45);
+    expect(after.numbers.turn_count).toBe(7);
+    // But enrichment is preserved verbatim
+    expect(after.enrichment.status).toBe("done");
+    expect(after.enrichment.brief_summary).toBe("shipped a thing");
+    expect(after.enrichment.cost_usd).toBe(0.05);
+  });
+
+  it("preserves 'skipped_trivial' enrichment", () => {
+    const existing = makeEntry("sess-2", "2026-04-22");
+    existing.enrichment = { ...existing.enrichment, status: "skipped_trivial" };
+    writeEntry(existing);
+
+    const fresh = makeEntry("sess-2", "2026-04-22");
+    writeEntryPreservingEnrichment(fresh);
+
+    expect(readEntry("sess-2", "2026-04-22")!.enrichment.status).toBe("skipped_trivial");
+  });
+
+  it("overwrites 'pending' enrichment with the fresh entry", () => {
+    // Pending status means no LLM work has been committed yet — safe to replace.
+    const existing = makeEntry("sess-3", "2026-04-22");
+    existing.numbers.active_min = 10;
+    writeEntry(existing); // status defaults to pending via pendingEnrichment()
+
+    const fresh = makeEntry("sess-3", "2026-04-22");
+    fresh.numbers.active_min = 20;
+    writeEntryPreservingEnrichment(fresh);
+
+    expect(readEntry("sess-3", "2026-04-22")!.numbers.active_min).toBe(20);
+  });
+
+  it("overwrites 'error' enrichment with the fresh entry", () => {
+    // Error means a prior enrichment attempt failed — re-running is fine.
+    const existing = makeEntry("sess-4", "2026-04-22");
+    existing.enrichment = {
+      ...existing.enrichment, status: "error", retry_count: 2, error: "boom",
+    };
+    writeEntry(existing);
+
+    const fresh = makeEntry("sess-4", "2026-04-22");
+    writeEntryPreservingEnrichment(fresh);
+
+    const after = readEntry("sess-4", "2026-04-22")!;
+    expect(after.enrichment.status).toBe("pending");
+    expect(after.enrichment.retry_count).toBe(0);
+    expect(after.enrichment.error).toBeNull();
+  });
+
+  it("writes fresh entry verbatim when no existing file", () => {
+    const fresh = makeEntry("sess-5", "2026-04-22");
+    writeEntryPreservingEnrichment(fresh);
+
+    expect(readEntry("sess-5", "2026-04-22")?.session_id).toBe("sess-5");
   });
 });
 

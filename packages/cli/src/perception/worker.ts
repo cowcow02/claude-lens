@@ -3,7 +3,7 @@ import { basename, dirname } from "node:path";
 import { parseTranscript } from "@claude-lens/parser";
 import type { SessionDetail } from "@claude-lens/parser";
 import { buildEntries } from "@claude-lens/entries";
-import { writeEntry } from "@claude-lens/entries/fs";
+import { writeEntryPreservingEnrichment } from "@claude-lens/entries/fs";
 import {
   readState, updateCheckpoint, markSweepStart, markSweepEnd, isSweepStale,
 } from "./state.js";
@@ -85,7 +85,10 @@ export async function runPerceptionSweep(opts: SweepOptions = {}): Promise<Sweep
         for (const e of built) {
           // Stamp real byte_offset so enrichment readers have accurate provenance
           e.source_checkpoint.byte_offset = stat.size;
-          writeEntry(e);
+          // Preserve any committed enrichment on disk — `buildEntries` always
+          // emits status="pending", but a prior sweep may have already paid
+          // the LLM cost to enrich this exact (session, local_day) tuple.
+          writeEntryPreservingEnrichment(e);
           entries++;
         }
         updateCheckpoint(f, {
