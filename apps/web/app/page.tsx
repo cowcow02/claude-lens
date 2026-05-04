@@ -110,19 +110,15 @@ export default async function DashboardHome({
           </h1>
           <p style={{ fontSize: 13, color: "var(--af-text-secondary)", marginTop: 4 }}>
             {sessions.length} of {allSessions.length} session
-            {allSessions.length === 1 ? "" : "s"}, read from{" "}
-            <code
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                background: "var(--af-border-subtle)",
-                padding: "1px 6px",
-                borderRadius: 4,
-              }}
-            >
-              ~/.claude/projects
-            </code>
-            .
+            {allSessions.length === 1 ? "" : "s"} across{" "}
+            {(() => {
+              const claude = allSessions.filter((s) => (s.agent ?? "claude-code") === "claude-code").length;
+              const codex = allSessions.filter((s) => s.agent === "codex").length;
+              const parts: string[] = [];
+              if (claude) parts.push(`${claude} Claude Code`);
+              if (codex) parts.push(`${codex} Codex`);
+              return parts.length ? parts.join(" + ") : "no observed agents yet";
+            })()}.
           </p>
         </div>
         <DateRangeFilter current={range} />
@@ -246,7 +242,7 @@ export default async function DashboardHome({
           </div>
           <div>
             {recentSessions.length === 0 ? (
-              <div className="af-empty">No sessions found in ~/.claude/projects</div>
+              <div className="af-empty">No sessions found from any registered agent source.</div>
             ) : (
               recentSessions.map((s) => (
                 <Link

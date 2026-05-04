@@ -121,6 +121,7 @@ export function clearCaches(): void {
   detailCache.clear();
   calibrationEventsCache.clear();
   fileListCache = null;
+  clearCodexCaches();
 }
 
 /**
@@ -877,6 +878,9 @@ const USAGE_LOG = path.join(os.homedir(), ".cclens", "usage.jsonl");
 
 type UsageSnapshot = {
   captured_at?: string;
+  /** Source agent. Absent on legacy snapshots written before multi-agent
+   *  support — readers MUST treat undefined as "claude-code". */
+  agent?: "claude-code" | "codex";
   five_hour?: { utilization?: number; resets_at?: string };
   seven_day?: { utilization?: number; resets_at?: string };
   seven_day_sonnet?: { utilization?: number } | null;
@@ -909,6 +913,9 @@ export async function loadUsageByDay(
     try {
       const snap = JSON.parse(trimmed) as UsageSnapshot;
       if (!snap.captured_at) continue;
+      // Same rationale as loadCalibrationSnapshots: peak Claude utilization
+      // can't include Codex's 5h reading or downstream charts skew.
+      if ((snap.agent ?? "claude-code") !== "claude-code") continue;
       const ms = Date.parse(snap.captured_at);
       if (Number.isNaN(ms)) continue;
       if (ms < startMs) continue;
@@ -1005,7 +1012,15 @@ export async function loadCalibrationEvents(
   return out;
 }
 
-/** All snapshots from ~/.cclens/usage.jsonl, sorted by captured_at. */
+/**
+ * All Claude Code snapshots from ~/.cclens/usage.jsonl, sorted by captured_at.
+ *
+ * The calibration curve maps Claude session activity to Claude plan-window
+ * utilization, so it MUST exclude snapshots from other agents — otherwise a
+ * Codex 5h-window reading gets read as a Claude burnrate sample and skews the
+ * predicted line. Snapshots without an `agent` field default to "claude-code"
+ * for back-compat with logs written before multi-agent support.
+ */
 export async function loadCalibrationSnapshots(): Promise<UsageSnapshot[]> {
   let raw: string;
   try {
@@ -1019,7 +1034,9 @@ export async function loadCalibrationSnapshots(): Promise<UsageSnapshot[]> {
     if (!t) continue;
     try {
       const s = JSON.parse(t) as UsageSnapshot;
-      if (s.captured_at) out.push(s);
+      if (!s.captured_at) continue;
+      if ((s.agent ?? "claude-code") !== "claude-code") continue;
+      out.push(s);
     } catch {
       /* skip malformed */
     }
@@ -1258,4 +1275,101 @@ export async function loadCalibrationCurve(
     loadCalibrationSnapshots(),
   ]);
   return buildCalibrationCurve(events, snapshots, tier, granularityMin);
+}
+
+/* ================================================================= */
+/*  Codex (OpenAI) re-export                                         */
+/* ================================================================= */
+
+import {
+  DEFAULT_CODEX_ROOT as _DEFAULT_CODEX_ROOT,
+  listCodexSessions as _listCodexSessions,
+  getCodexSession as _getCodexSession,
+  clearCodexCaches,
+} from "./codex.js";
+
+export {
+  DEFAULT_CODEX_ROOT,
+  listCodexSessions,
+  getCodexSession,
+  codexSessionLocalDay,
+  getLatestCodexUsage,
+} from "./codex.js";
+export type {
+  ListCodexOptions,
+  GetCodexOptions,
+  CodexUsageWindows,
+} from "./codex.js";
+
+
+/* ================================================================= */
+/*  Generic agent-source registry                                    */
+/*                                                                   */
+/*  Each coding-agent we observe (Claude Code, Codex, ...) is an     */
+/*  AgentSource. Adding a new agent = drop in a new source object.   */
+/*  Inlined here rather than a sibling module because the registry   */
+/*  binds the Claude Code reader (this file) AND the Codex reader —  */
+/*  splitting it creates a fs.ts ↔ agent-source.ts cycle that        */
+/*  Next.js + turbopack reject during page-data collection.          */
+/* ================================================================= */
+
+import type { AgentKind } from "./types.js";
+
+export type AgentSource = {
+  kind: AgentKind;
+  displayName: string;
+  defaultRoot: string;
+  listSessions(opts?: ListOptions): Promise<SessionMeta[]>;
+  getSession(id: string, opts?: { root?: string }): Promise<SessionDetail | null>;
+};
+
+const claudeCodeSource: AgentSource = {
+  kind: "claude-code",
+  displayName: "Claude Code",
+  defaultRoot: DEFAULT_ROOT,
+  async listSessions(opts) {
+    const sessions = await listSessions(opts);
+    for (const s of sessions) if (!s.agent) s.agent = "claude-code";
+    return sessions;
+  },
+  async getSession(id, opts) {
+    const detail = await getSession(id, opts);
+    if (detail && !detail.agent) detail.agent = "claude-code";
+    return detail;
+  },
+};
+
+const codexSource: AgentSource = {
+  kind: "codex",
+  displayName: "Codex (OpenAI)",
+  defaultRoot: _DEFAULT_CODEX_ROOT,
+  async listSessions(opts) {
+    return _listCodexSessions(opts);
+  },
+  async getSession(id) {
+    return _getCodexSession(id);
+  },
+};
+
+export const agentSources: AgentSource[] = [claudeCodeSource, codexSource];
+
+export function getAgentSource(kind: AgentKind): AgentSource | undefined {
+  return agentSources.find((s) => s.kind === kind);
+}
+
+export async function listAllSessions(opts: { limit?: number } = {}): Promise<SessionMeta[]> {
+  const lists = await Promise.all(agentSources.map((s) => s.listSessions(opts)));
+  const merged: SessionMeta[] = [];
+  for (const lst of lists) merged.push(...lst);
+  merged.sort((a, b) => (b.firstTimestamp ?? "").localeCompare(a.firstTimestamp ?? ""));
+  if (opts.limit !== undefined) return merged.slice(0, opts.limit);
+  return merged;
+}
+
+export async function getAnySession(id: string): Promise<SessionDetail | null> {
+  for (const source of agentSources) {
+    const detail = await source.getSession(id);
+    if (detail) return detail;
+  }
+  return null;
 }

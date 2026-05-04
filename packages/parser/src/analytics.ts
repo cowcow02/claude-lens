@@ -5,7 +5,7 @@
  * arrays and produce aggregates ready for charts.
  */
 
-import type { SessionDetail, SessionEvent, SessionMeta, Usage } from "./types.js";
+import type { AgentKind, SessionDetail, SessionEvent, SessionMeta, Usage } from "./types.js";
 
 const BLANK_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
@@ -851,6 +851,12 @@ export function summarizeBursts(bursts: ParallelismBurst[]): ParallelismBurstSta
 /*  Project rollups                                                  */
 /* ================================================================= */
 
+export type AgentBreakdown = {
+  agent: AgentKind;
+  sessions: number;
+  tokens: number;
+};
+
 export type ProjectRollup = {
   /** Stable project identifier — the canonical cwd path. Call sites
    *  should URL-encode it for use in href slugs. */
@@ -866,6 +872,10 @@ export type ProjectRollup = {
    *  into this project, excluding the parent repo itself. */
   worktreeCount: number;
   metrics: HighLevelMetrics;
+  /** Per-agent contribution to this project, sorted by session count desc.
+   *  Single-agent projects have one entry; mixed projects can be displayed
+   *  as e.g. "12 Claude · 3 Codex". */
+  perAgent: AgentBreakdown[];
   lastActiveMs?: number;
 };
 
@@ -883,6 +893,7 @@ export function groupByProject(sessions: SessionMeta[]): ProjectRollup[] {
         rawProjectDirs: [],
         worktreeCount: 0,
         metrics: highLevelMetrics([]),
+        perAgent: [],
         lastActiveMs: undefined,
       };
       map.set(key, cur);
@@ -906,6 +917,22 @@ export function groupByProject(sessions: SessionMeta[]): ProjectRollup[] {
       if (wt) wtNames.add(wt);
     }
     p.worktreeCount = wtNames.size;
+
+    const agentMap = new Map<AgentKind, AgentBreakdown>();
+    for (const s of p.sessions) {
+      const k = (s.agent ?? "claude-code") as AgentKind;
+      let row = agentMap.get(k);
+      if (!row) {
+        row = { agent: k, sessions: 0, tokens: 0 };
+        agentMap.set(k, row);
+      }
+      row.sessions += 1;
+      row.tokens +=
+        (s.totalUsage?.input ?? 0) +
+        (s.totalUsage?.output ?? 0) +
+        (s.totalUsage?.cacheRead ?? 0);
+    }
+    p.perAgent = Array.from(agentMap.values()).sort((a, b) => b.sessions - a.sessions);
   }
   return Array.from(map.values()).sort(
     (a, b) => (b.lastActiveMs ?? 0) - (a.lastActiveMs ?? 0),

@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import type { SessionMeta } from "@claude-lens/parser";
+import { useCallback, useMemo } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { AgentKind, SessionMeta } from "@claude-lens/parser";
 import type { DayOutcome, EntryEnrichmentStatus } from "@claude-lens/entries";
 import {
   formatDuration,
@@ -15,6 +15,7 @@ import {
 import { Search, Wrench, MessagesSquare, Clock } from "lucide-react";
 import { LiveBadge } from "@/components/live-badge";
 import { TeamBadge } from "@/components/team-badge";
+import { AgentBadge } from "@/components/agent-badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useViewToggle } from "@/components/view-toggle";
 import { OutcomePill, outcomePriority } from "@/components/outcome-pill";
@@ -27,21 +28,67 @@ export type SessionRow = {
   latestLocalDay: string | null;
 };
 
+type SortBy = "newest" | "longest" | "most-tokens" | "outcome";
+
+const SORT_VALUES: readonly SortBy[] = ["newest", "longest", "most-tokens", "outcome"] as const;
+
+function isSortBy(s: string | null | undefined): s is SortBy {
+  return s !== null && s !== undefined && (SORT_VALUES as readonly string[]).includes(s);
+}
+
 export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
   const router = useRouter();
-  const [query, setQuery] = useState("");
-  const [project, setProject] = useState("all");
-  const [sortBy, setSortBy] = useState<"newest" | "longest" | "most-tokens" | "outcome">("newest");
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // Filter state lives in the URL — back/forward replays the same view, and
+  // returning from a session detail page restores what the user had picked.
+  const query = searchParams.get("q") ?? "";
+  const project = searchParams.get("project") ?? "all";
+  const agentParam = searchParams.get("agent");
+  const agent: AgentKind | "all" =
+    agentParam === "claude-code" || agentParam === "codex" ? agentParam : "all";
+  const sortBy: SortBy = isSortBy(searchParams.get("sort"))
+    ? (searchParams.get("sort") as SortBy)
+    : "newest";
   const { mode: viewMode, toggle: viewToggle } = useViewToggle("cclens:sessions:view");
+
+  const updateParam = useCallback(
+    (key: string, value: string, fallback: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      if (!value || value === fallback) next.delete(key);
+      else next.set(key, value);
+      const qs = next.toString();
+      // replace, not push — we don't want a history entry per keystroke.
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const setQuery = (v: string) => updateParam("q", v, "");
+  const setProject = (v: string) => updateParam("project", v, "all");
+  const setAgent = (v: AgentKind | "all") => updateParam("agent", v, "all");
+  const setSortBy = (v: SortBy) => updateParam("sort", v, "newest");
 
   const projects = useMemo(() => {
     const s = new Set(rows.map((r) => r.session.projectName));
     return ["all", ...Array.from(s).sort()];
   }, [rows]);
 
+  const agentOptions = useMemo(() => {
+    const counts = new Map<AgentKind, number>();
+    for (const r of rows) {
+      const k = (r.session.agent ?? "claude-code") as AgentKind;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [rows]);
+
   const filtered = useMemo(() => {
     let items = rows.slice();
     if (project !== "all") items = items.filter((r) => r.session.projectName === project);
+    if (agent !== "all")
+      items = items.filter((r) => (r.session.agent ?? "claude-code") === agent);
     if (query) {
       const q = query.toLowerCase();
       items = items.filter(
@@ -78,7 +125,7 @@ export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
     else if (sortBy === "outcome")
       items.sort((a, b) => outcomePriority(b.outcome) - outcomePriority(a.outcome));
     return items;
-  }, [rows, project, query, sortBy]);
+  }, [rows, project, agent, query, sortBy]);
 
   return (
     <div>
@@ -116,6 +163,20 @@ export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
             </option>
           ))}
         </select>
+        {agentOptions.length > 1 && (
+          <select
+            value={agent}
+            onChange={(e) => setAgent(e.target.value as typeof agent)}
+            title="Filter by source agent"
+          >
+            <option value="all">All agents</option>
+            {agentOptions.map(([k, count]) => (
+              <option key={k} value={k}>
+                {agentLabel(k)} ({count})
+              </option>
+            ))}
+          </select>
+        )}
         <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
           <option value="newest">Newest</option>
           <option value="longest">Longest</option>
@@ -196,6 +257,7 @@ const sessionTableColumns: Column<SessionRow>[] = [
             {prettyProjectName(r.session.projectName)}
           </span>
           <TeamBadge session={r.session} />
+          <AgentBadge agent={r.session.agent} />
         </div>
         <div
           style={{
@@ -383,6 +445,7 @@ function SessionCard({ row }: { row: SessionRow }) {
             {prettyProjectName(s.projectName)}
           </span>
           <TeamBadge session={s} linkable={false} />
+          <AgentBadge agent={s.agent} />
         </div>
         <div
           style={{
@@ -480,4 +543,15 @@ function Stat({ icon, label }: { icon: React.ReactNode; label: string }) {
       {label}
     </span>
   );
+}
+
+function agentLabel(kind: AgentKind): string {
+  switch (kind) {
+    case "claude-code":
+      return "Claude Code";
+    case "codex":
+      return "Codex";
+    default:
+      return kind;
+  }
 }

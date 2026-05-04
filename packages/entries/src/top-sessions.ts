@@ -74,19 +74,25 @@ function bashVerb(cmd: string): string {
 /** Pick up to 3 sessions worth a deep timeline view. Score by active time
  *  weighted up by subagent dispatches and PRs shipped. Filter to substantial
  *  entries (≥20 min active OR ≥1 PR OR ≥10 turns). Cap to 1 per project so
- *  the three slots showcase distinct work streams. */
+ *  the three slots showcase distinct work streams.
+ *
+ *  Multi-agent guarantee: when the week's entries span more than one source
+ *  agent (Claude Code + Codex, etc.) the picks must show at least one
+ *  non-claude-code session. The default scoring filter is calibrated for
+ *  Claude Code's typical session length (≥20 min) and would silently
+ *  exclude Codex's typically-shorter dispatches; the guarantee keeps the
+ *  fleet view honest by reserving the last slot for the best non-Claude
+ *  session when one exists with any meaningful activity. */
 export function pickTopSessions(entriesByDay: Map<string, Entry[]>): Entry[] {
   const flat: Entry[] = [];
   for (const arr of entriesByDay.values()) flat.push(...arr);
 
+  const scoreEntry = (e: Entry) =>
+    e.numbers.active_min * (1 + 0.5 * e.numbers.subagent_calls + 5 * e.pr_titles.length);
+
   const scored = flat
     .filter(e => e.numbers.active_min >= 20 || e.numbers.turn_count >= 10 || e.pr_titles.length >= 1)
-    .map(e => ({
-      entry: e,
-      score: e.numbers.active_min * (
-        1 + 0.5 * e.numbers.subagent_calls + 5 * e.pr_titles.length
-      ),
-    }))
+    .map(e => ({ entry: e, score: scoreEntry(e) }))
     .sort((a, b) => b.score - a.score);
 
   const seenProjects = new Set<string>();
@@ -96,6 +102,31 @@ export function pickTopSessions(entriesByDay: Map<string, Entry[]>): Entry[] {
     seenProjects.add(entry.project);
     picked.push(entry);
     if (picked.length >= 3) break;
+  }
+
+  // Multi-agent guarantee: if the week has non-Claude entries but none made
+  // the cut, swap the LOWEST-scoring pick for the BEST non-Claude entry.
+  // We use a relaxed inclusion threshold here (≥3 min active OR ≥10 tools
+  // OR ≥3 turns) so a meaningful Codex session counts even when shorter
+  // than the Claude-tuned default. Same one-per-project rule still applies.
+  const hasNonClaude = flat.some(e => (e.agent ?? "claude-code") !== "claude-code");
+  const pickedHasNonClaude = picked.some(e => (e.agent ?? "claude-code") !== "claude-code");
+  if (hasNonClaude && !pickedHasNonClaude) {
+    const nonClaudeCandidates = flat
+      .filter(e => (e.agent ?? "claude-code") !== "claude-code")
+      .filter(e =>
+        e.numbers.active_min >= 3 ||
+        e.numbers.tools_total >= 10 ||
+        e.numbers.turn_count >= 3,
+      )
+      .map(e => ({ entry: e, score: scoreEntry(e) + 0.0001 * e.numbers.tools_total }))
+      .sort((a, b) => b.score - a.score);
+    const reserved = nonClaudeCandidates.find(c => !seenProjects.has(c.entry.project));
+    if (reserved) {
+      // Drop the lowest-scoring Claude pick (or just append if we have <3)
+      if (picked.length >= 3) picked.pop();
+      picked.push(reserved.entry);
+    }
   }
   return picked;
 }

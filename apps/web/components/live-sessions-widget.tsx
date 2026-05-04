@@ -17,6 +17,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { prettyProjectName } from "@/lib/format";
 import { TeamBadge } from "@/components/team-badge";
+import { AgentBadge } from "@/components/agent-badge";
 import { OutcomePill } from "@/components/outcome-pill";
 import type { DayOutcome, EntryEnrichmentStatus } from "@claude-lens/entries";
 
@@ -34,6 +35,7 @@ export type LiveSessionPick = {
   lastTimestamp?: string;
   teamName?: string;
   agentName?: string;
+  agent?: import("@claude-lens/parser").AgentKind;
 };
 
 export type LiveEntrySummary = {
@@ -248,6 +250,7 @@ export function LiveSessionsWidget({
               )}
             </span>
             <TeamBadge session={s} linkable={false} />
+            <AgentBadge agent={s.agent} />
           </div>
           {/* Subtitle: what the agent is saying in response. */}
           <div

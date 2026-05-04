@@ -95,7 +95,12 @@ export type SessionEvent = {
   };
 };
 
+/** Which coding-agent tool produced this transcript. */
+export type AgentKind = "claude-code" | "codex";
+
 export type SessionMeta = {
+  /** Source agent. Defaults to "claude-code" for legacy callers. */
+  agent?: AgentKind;
   /** URL-safe id — the session UUID, derived from the file name */
   id: string;
   /** absolute path to the JSONL file */
