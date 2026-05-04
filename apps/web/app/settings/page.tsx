@@ -13,7 +13,10 @@ export default function SettingsPage() {
           narratives by spawning your local <code>claude</code> CLI (uses your
           existing Claude Code auth — no API key required).
         </p>
-        <AiFeaturesForm initial={{ enabled: s.ai_features.enabled }} />
+        <AiFeaturesForm initial={{
+          enabled: s.ai_features.enabled,
+          autoBackfillLastWeek: s.ai_features.autoBackfillLastWeek,
+        }} />
       </section>
     </main>
   );

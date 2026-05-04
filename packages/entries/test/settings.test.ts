@@ -23,6 +23,7 @@ describe("settings", () => {
     expect(s.ai_features.enabled).toBe(true);
     expect(s.ai_features.model).toBe("sonnet");
     expect(s.ai_features.monthlyBudgetUsd).toBeNull();
+    expect(s.ai_features.autoBackfillLastWeek).toBe(true);
   });
 
   it("writeSettings persists JSON atomically with snake_case on-disk shape + chmod 600", () => {
@@ -31,6 +32,7 @@ describe("settings", () => {
         enabled: true,
         model: "sonnet",
         monthlyBudgetUsd: 5,
+        autoBackfillLastWeek: true,
       },
     };
     writeSettings(s);
@@ -41,6 +43,7 @@ describe("settings", () => {
         enabled: true,
         model: "sonnet",
         monthly_budget_usd: 5,
+        auto_backfill_last_week: true,
       },
     });
     if (process.platform !== "win32") {
@@ -55,10 +58,33 @@ describe("settings", () => {
         enabled: false,
         model: "opus",
         monthlyBudgetUsd: 10.5,
+        autoBackfillLastWeek: false,
       },
     };
     writeSettings(original);
     expect(readSettings()).toEqual(original);
+  });
+
+  it("defaults autoBackfillLastWeek to true when on-disk settings predate the field", () => {
+    writeFileSync(path, JSON.stringify({
+      ai_features: { enabled: true, model: "sonnet", monthly_budget_usd: null },
+    }));
+    const s = readSettings();
+    expect(s.ai_features.autoBackfillLastWeek).toBe(true);
+  });
+
+  it("preserves autoBackfillLastWeek=false across round-trip", () => {
+    writeFileSync(path, JSON.stringify({
+      ai_features: {
+        enabled: true, model: "sonnet", monthly_budget_usd: null,
+        auto_backfill_last_week: false,
+      },
+    }));
+    const s = readSettings();
+    expect(s.ai_features.autoBackfillLastWeek).toBe(false);
+    writeSettings(s);
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    expect(raw.ai_features.auto_backfill_last_week).toBe(false);
   });
 
   it("tolerates malformed JSON by returning defaults (enabled=true per Phase 2)", () => {

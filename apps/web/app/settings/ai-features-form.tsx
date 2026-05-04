@@ -3,10 +3,12 @@ import { useState } from "react";
 
 type Initial = {
   enabled: boolean;
+  autoBackfillLastWeek: boolean;
 };
 
 export function AiFeaturesForm({ initial }: { initial: Initial }) {
   const [enabled, setEnabled] = useState(initial.enabled);
+  const [autoBackfillLastWeek, setAutoBackfillLastWeek] = useState(initial.autoBackfillLastWeek);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
 
@@ -18,7 +20,7 @@ export function AiFeaturesForm({ initial }: { initial: Initial }) {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        ai_features: { enabled },
+        ai_features: { enabled, autoBackfillLastWeek },
       }),
     });
     setSaving(false);
@@ -30,6 +32,22 @@ export function AiFeaturesForm({ initial }: { initial: Initial }) {
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
         <span>Enable AI digests and enrichment</span>
+      </label>
+
+      <label className={`flex items-start gap-2 ${enabled ? "" : "opacity-50"}`}>
+        <input
+          type="checkbox"
+          checked={autoBackfillLastWeek}
+          disabled={!enabled}
+          onChange={e => setAutoBackfillLastWeek(e.target.checked)}
+        />
+        <span>
+          Auto-backfill last week's narrative on daemon start
+          <span className="block text-xs text-gray-500 mt-0.5">
+            Generates enriched entries, day digests, and the weekly digest for
+            the most recently completed ISO week. Runs once per ISO week.
+          </span>
+        </span>
       </label>
 
       <button

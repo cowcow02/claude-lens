@@ -21,6 +21,7 @@ import { isUsable, readOAuthCredentials } from "./usage/token.js";
 import { BASE_INTERVAL_MS, nextIntervalMs, type PollOutcome } from "./usage/backoff.js";
 import { runTeamSync } from "./team/sync.js";
 import { runPerceptionSweep } from "./perception/worker.js";
+import { backfillLastWeekDigest } from "./perception/backfill.js";
 
 const STATE_DIR = join(homedir(), ".cclens");
 const USAGE_LOG = join(STATE_DIR, "usage.jsonl");
@@ -46,6 +47,10 @@ let waitingForRefresh = false;
 
 const PERCEPTION_INTERVAL_MS = 5 * 60 * 1000;
 let perceptionInFlight = false;
+// One-shot per-process: backfill last week's narrative after the FIRST
+// successful sweep on this boot. Re-running on every poll would either
+// re-spend (if the lock file is mistakenly cleared) or just be wasted I/O.
+let backfillAttempted = false;
 
 const perceptionHandle: NodeJS.Timeout = setInterval(async () => {
   if (perceptionInFlight) return;
@@ -54,6 +59,15 @@ const perceptionHandle: NodeJS.Timeout = setInterval(async () => {
     const { sessionsProcessed, entriesWritten, errors } = await runPerceptionSweep();
     if (sessionsProcessed > 0 || errors > 0) {
       log("info", `perception sweep: ${sessionsProcessed} sessions, ${entriesWritten} entries, ${errors} errors`);
+    }
+    if (!backfillAttempted) {
+      backfillAttempted = true;
+      // Detached: a long LLM run shouldn't block the next sweep tick. Errors
+      // are caught inside backfillLastWeekDigest; this .catch is belt-and-
+      // braces against unexpected throws.
+      void backfillLastWeekDigest({ log }).catch((err) => {
+        log("warn", `auto-backfill: failed (${(err as Error).message})`);
+      });
     }
   } catch (err) {
     log("error", `perception sweep failed: ${(err as Error).message}`);

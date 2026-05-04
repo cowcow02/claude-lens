@@ -8,6 +8,7 @@ export type AiFeaturesSettings = {
   enabled: boolean;
   model: string;
   monthlyBudgetUsd: number | null;
+  autoBackfillLastWeek: boolean;
 };
 
 export type Settings = {
@@ -19,6 +20,7 @@ const DEFAULT_SETTINGS: Settings = {
     enabled: true,
     model: "sonnet",
     monthlyBudgetUsd: null,
+    autoBackfillLastWeek: true,
   },
 };
 
@@ -40,6 +42,7 @@ type SettingsOnDisk = {
     enabled: boolean;
     model: string;
     monthly_budget_usd: number | null;
+    auto_backfill_last_week: boolean;
   };
 };
 
@@ -49,6 +52,7 @@ function toDisk(s: Settings): SettingsOnDisk {
       enabled: s.ai_features.enabled,
       model: s.ai_features.model,
       monthly_budget_usd: s.ai_features.monthlyBudgetUsd,
+      auto_backfill_last_week: s.ai_features.autoBackfillLastWeek,
     },
   };
 }
@@ -60,6 +64,7 @@ function fromDisk(d: Partial<SettingsOnDisk>): Settings {
       enabled: af.enabled ?? DEFAULT_SETTINGS.ai_features.enabled,
       model: af.model ?? DEFAULT_SETTINGS.ai_features.model,
       monthlyBudgetUsd: af.monthly_budget_usd ?? null,
+      autoBackfillLastWeek: af.auto_backfill_last_week ?? DEFAULT_SETTINGS.ai_features.autoBackfillLastWeek,
     },
   };
 }

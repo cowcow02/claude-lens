@@ -25,11 +25,16 @@ export async function PUT(req: Request) {
       { status: 400 },
     );
   }
-  // Preserve other on-disk fields (model, monthlyBudgetUsd) — UI no longer edits
-  // them, but the settings module and queue still read them. Only enabled flips.
+  // Merge only the fields the UI actually sent, preserving everything else
+  // (model, monthlyBudgetUsd) so partial PUTs don't clobber unspecified fields.
   const current = readSettings();
+  const update = parsed.data.ai_features;
   writeSettings({
-    ai_features: { ...current.ai_features, enabled: parsed.data.ai_features.enabled },
+    ai_features: {
+      ...current.ai_features,
+      ...(update.enabled !== undefined ? { enabled: update.enabled } : {}),
+      ...(update.autoBackfillLastWeek !== undefined ? { autoBackfillLastWeek: update.autoBackfillLastWeek } : {}),
+    },
   });
   return NextResponse.json({ ok: true });
 }
