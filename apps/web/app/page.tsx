@@ -242,7 +242,7 @@ export default async function DashboardHome({
           </div>
           <div>
             {recentSessions.length === 0 ? (
-              <div className="af-empty">No sessions found in ~/.claude/projects</div>
+              <div className="af-empty">No sessions found from any registered agent source.</div>
             ) : (
               recentSessions.map((s) => (
                 <Link
