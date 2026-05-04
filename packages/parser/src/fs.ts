@@ -109,6 +109,7 @@ export function clearCaches(): void {
   metaCache.clear();
   detailCache.clear();
   fileListCache = null;
+  clearCodexCaches();
 }
 
 /**
@@ -1239,6 +1240,7 @@ import {
   DEFAULT_CODEX_ROOT as _DEFAULT_CODEX_ROOT,
   listCodexSessions as _listCodexSessions,
   getCodexSession as _getCodexSession,
+  clearCodexCaches,
 } from "./codex.js";
 
 export {

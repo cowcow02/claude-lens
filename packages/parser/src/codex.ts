@@ -153,6 +153,7 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
         totalUsage.input = numberOf(total.input_tokens) ?? totalUsage.input;
         totalUsage.output = numberOf(total.output_tokens) ?? totalUsage.output;
         totalUsage.cacheRead = numberOf(total.cached_input_tokens) ?? totalUsage.cacheRead;
+        // Codex does not emit cache-creation tokens — cacheWrite stays 0.
       }
       continue;
     }
@@ -346,6 +347,13 @@ type MetaEntry = { meta: SessionMeta; mtimeMs: number; sizeBytes: number };
 type DetailEntry = { detail: SessionDetail; mtimeMs: number; sizeBytes: number };
 const metaCache = new Map<string, MetaEntry>();
 const detailCache = new Map<string, DetailEntry>();
+
+/** Drop all Codex caches. Wired into fs.ts's clearCaches() so test
+ *  teardown and watcher invalidation hit every source uniformly. */
+export function clearCodexCaches(): void {
+  metaCache.clear();
+  detailCache.clear();
+}
 
 export type ListCodexOptions = { root?: string; limit?: number };
 
