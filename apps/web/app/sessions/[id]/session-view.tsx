@@ -292,33 +292,73 @@ export function SessionView({
   /** Detect PR creations in this session. */
   const prMarkers = useMemo(() => detectPrMarkers(session), [session]);
 
-  /** Idle bands derived from raw event timestamps — independent of which
-   *  presentation rows happen to be on screen. Anchoring idle to row kind
-   *  (the previous approach) missed Codex's reasoning gaps because Codex
-   *  sessions barely have user rows; LLM thinking time dominates instead.
-   *  Walking the raw event chronology with a 5s threshold catches both
-   *  Claude's user-pause idle and Codex's mid-turn dead air uniformly. */
+  /** Idle bands derived from raw event timestamps, classified per gap.
+   *
+   *  Two flavors:
+   *    - In-turn idle (gap between agent activities within the same user
+   *      turn) — multiple of these inside one turn collapse into ONE merged
+   *      band whose `start..end` spans the whole period and `durationMs`
+   *      sums the actual idle.
+   *    - Between-turn idle (gap whose terminating anchor IS a user message)
+   *      — emitted standalone. This is "user paused, walked away, came
+   *      back" time and is conceptually distinct from agent thinking.
+   *
+   *  Anchors only count user / agent / tool-call / tool-result events —
+   *  meta + thinking events are skipped so sub-second event-to-event gaps
+   *  don't crowd the strip.
+   *
+   *  Side effect: the leading warm-up gap before the first agent response
+   *  drops out unless it crosses MIN_GAP_MS — which the first 6s in a
+   *  typical Codex session does not. */
   const rawIdleBands = useMemo(() => {
-    const tsMs: number[] = [];
+    const isAnchor = (role: string) =>
+      role === "user" ||
+      role === "agent" ||
+      role === "tool-call" ||
+      role === "tool-result";
+    const MIN_GAP_MS = 10_000;
+    const anchors: { ms: number; role: string }[] = [];
     for (const e of events) {
+      if (!isAnchor(e.role)) continue;
       if (!e.timestamp) continue;
       const ms = Date.parse(e.timestamp);
-      if (Number.isFinite(ms)) tsMs.push(ms);
+      if (!Number.isFinite(ms)) continue;
+      anchors.push({ ms, role: e.role });
     }
-    if (tsMs.length < 2) return [];
-    tsMs.sort((a, b) => a - b);
-    const sessionStartMs = tsMs[0]!;
-    const bands: { start: number; end: number; durationMs: number }[] = [];
-    for (let i = 1; i < tsMs.length; i++) {
-      const gap = tsMs[i]! - tsMs[i - 1]!;
-      if (gap > 5_000) {
-        bands.push({
-          start: tsMs[i - 1]! - sessionStartMs,
-          end: tsMs[i]! - sessionStartMs,
-          durationMs: gap,
-        });
+    if (anchors.length < 2) return [];
+    anchors.sort((a, b) => a.ms - b.ms);
+    const sessionStartMs = anchors[0]!.ms - (events.find((e) => e.timestamp)?.tOffsetMs ?? 0);
+
+    type Band = { start: number; end: number; durationMs: number };
+    const bands: Band[] = [];
+    let inTurn: Band | null = null;
+
+    const flushInTurn = () => {
+      if (inTurn && inTurn.durationMs > MIN_GAP_MS) bands.push(inTurn);
+      inTurn = null;
+    };
+
+    for (let i = 1; i < anchors.length; i++) {
+      const gap = anchors[i]!.ms - anchors[i - 1]!.ms;
+      if (gap <= MIN_GAP_MS) continue;
+      const gStart = anchors[i - 1]!.ms - sessionStartMs;
+      const gEnd = anchors[i]!.ms - sessionStartMs;
+
+      if (anchors[i]!.role === "user") {
+        // Between-turn idle — close any in-progress in-turn merge first,
+        // then push the between-turn band on its own.
+        flushInTurn();
+        bands.push({ start: gStart, end: gEnd, durationMs: gap });
+      } else {
+        // In-turn idle — accumulate into the running merged band.
+        if (!inTurn) inTurn = { start: gStart, end: gEnd, durationMs: gap };
+        else {
+          inTurn.end = gEnd;
+          inTurn.durationMs += gap;
+        }
       }
     }
+    flushInTurn();
     return bands;
   }, [events]);
 
@@ -821,6 +861,7 @@ export function SessionView({
               isSessionLive={isSessionLive}
               team={team}
               model={model}
+              rawIdleBands={rawIdleBands}
             />
           </>
         ) : (
@@ -2567,6 +2608,7 @@ function TranscriptList({
   isSessionLive,
   team,
   model,
+  rawIdleBands,
 }: {
   displayRows: DisplayRow[];
   rowRefs: React.MutableRefObject<Record<number, HTMLDivElement | null>>;
@@ -2577,6 +2619,10 @@ function TranscriptList({
   isSessionLive?: boolean;
   team?: (TimelineData & { teamName: string }) | null;
   model?: string;
+  /** Anchor-to-anchor idle bands. The body emits IdleDivider before any
+   *  row whose start matches a band's end, so Codex sessions get the same
+   *  "Session idle X minutes" markers Claude has always had. */
+  rawIdleBands?: { start: number; end: number; durationMs: number }[];
 }) {
   // Find the last collapsed turn index so we can mark it as in-progress
   // when the session is live.
@@ -2590,9 +2636,38 @@ function TranscriptList({
     }
   }
 
+  const idleBandList = (rawIdleBands ?? []).slice().sort((a, b) => a.start - b.start);
+  /** Returns the durationMs of the idle band that ends at (or just before)
+   *  the given row's tOffset, or null if no band matches. Tolerance is 1s
+   *  to absorb Date.parse rounding differences between anchor.ms and the
+   *  presentation row's tOffsetMs. */
+  const idleBeforeOffset = (tOff: number | undefined): number | null => {
+    if (tOff === undefined) return null;
+    for (const b of idleBandList) {
+      if (Math.abs(b.end - tOff) < 1000) return b.durationMs;
+    }
+    return null;
+  };
+  /** Pull a t-offset off whichever display-row variant we have. */
+  const rowTOffset = (d: DisplayRow): number | undefined => {
+    if (d.kind === "turn-collapsed" || d.kind === "turn-expanded-header") return d.turn.tOffsetMs;
+    if (d.kind === "turn-expanded-footer") return undefined;
+    return d.row.tOffsetMs;
+  };
+
   const out: React.ReactNode[] = [];
   for (let i = 0; i < displayRows.length; i++) {
     const d = displayRows[i];
+    // Emit a "Session idle" divider before any row that starts right after
+    // an anchor-to-anchor idle band. Skips indented (child) rows so an
+    // expanded turn doesn't render dividers for its inner steps.
+    const indented = d.kind === "presentation" ? d.indented : false;
+    if (!indented) {
+      const idleMs = idleBeforeOffset(rowTOffset(d));
+      if (idleMs !== null && idleMs > IDLE_THRESHOLD_MS) {
+        out.push(<IdleDivider key={`idle-before-${i}`} gapMs={idleMs} />);
+      }
+    }
 
     // Collapsed turn summary row
     if (d.kind === "turn-collapsed") {
@@ -2645,12 +2720,10 @@ function TranscriptList({
       continue;
     }
 
-    // Normal presentation row (possibly indented as a child of an expanded turn)
+    // Normal presentation row (possibly indented as a child of an expanded
+    // turn). Idle dividers are now emitted at the top of the loop from the
+    // shared rawIdleBands list — no separate gap-before-user check needed.
     const r = d.row;
-    const gap = r.gapMs ?? 0;
-    if (r.kind === "user" && gap > IDLE_THRESHOLD_MS && !d.indented) {
-      out.push(<IdleDivider key={`idle-${rowPrimaryIndex(r)}`} gapMs={gap} />);
-    }
     const idx = rowPrimaryIndex(r);
     out.push(
       <TranscriptRow
