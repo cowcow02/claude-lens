@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { SessionMeta } from "@claude-lens/parser";
+import type { AgentKind, SessionMeta } from "@claude-lens/parser";
 import type { DayOutcome, EntryEnrichmentStatus } from "@claude-lens/entries";
 import {
   formatDuration,
@@ -32,6 +32,7 @@ export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("all");
+  const [agent, setAgent] = useState<AgentKind | "all">("all");
   const [sortBy, setSortBy] = useState<"newest" | "longest" | "most-tokens" | "outcome">("newest");
   const { mode: viewMode, toggle: viewToggle } = useViewToggle("cclens:sessions:view");
 
@@ -40,9 +41,20 @@ export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
     return ["all", ...Array.from(s).sort()];
   }, [rows]);
 
+  const agentOptions = useMemo(() => {
+    const counts = new Map<AgentKind, number>();
+    for (const r of rows) {
+      const k = (r.session.agent ?? "claude-code") as AgentKind;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [rows]);
+
   const filtered = useMemo(() => {
     let items = rows.slice();
     if (project !== "all") items = items.filter((r) => r.session.projectName === project);
+    if (agent !== "all")
+      items = items.filter((r) => (r.session.agent ?? "claude-code") === agent);
     if (query) {
       const q = query.toLowerCase();
       items = items.filter(
@@ -79,7 +91,7 @@ export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
     else if (sortBy === "outcome")
       items.sort((a, b) => outcomePriority(b.outcome) - outcomePriority(a.outcome));
     return items;
-  }, [rows, project, query, sortBy]);
+  }, [rows, project, agent, query, sortBy]);
 
   return (
     <div>
@@ -117,6 +129,20 @@ export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
             </option>
           ))}
         </select>
+        {agentOptions.length > 1 && (
+          <select
+            value={agent}
+            onChange={(e) => setAgent(e.target.value as typeof agent)}
+            title="Filter by source agent"
+          >
+            <option value="all">All agents</option>
+            {agentOptions.map(([k, count]) => (
+              <option key={k} value={k}>
+                {agentLabel(k)} ({count})
+              </option>
+            ))}
+          </select>
+        )}
         <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
           <option value="newest">Newest</option>
           <option value="longest">Longest</option>
@@ -483,4 +509,15 @@ function Stat({ icon, label }: { icon: React.ReactNode; label: string }) {
       {label}
     </span>
   );
+}
+
+function agentLabel(kind: AgentKind): string {
+  switch (kind) {
+    case "claude-code":
+      return "Claude Code";
+    case "codex":
+      return "Codex";
+    default:
+      return kind;
+  }
 }

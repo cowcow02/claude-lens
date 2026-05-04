@@ -10,8 +10,8 @@
 
 import { Activity } from "lucide-react";
 import {
-  readUsageSnapshots,
-  latestUsageSnapshot,
+  readUsageSnapshotsByAgent,
+  latestUsageSnapshotByAgent,
   readCachedPlanTier,
   PLAN_TIER_LABELS,
 } from "@/lib/usage-data";
@@ -22,12 +22,14 @@ import {
 } from "@/lib/calibration-data";
 import { UsageChartsDashboard } from "@/components/usage-charts-dashboard";
 import { PreviousCyclesTrend } from "@/components/previous-cycles-trend";
+import { CodexUsageCard } from "@/components/codex-usage-card";
 
 export const dynamic = "force-dynamic";
 
 export default async function UsagePage() {
-  const snapshots = readUsageSnapshots();
-  const latest = latestUsageSnapshot();
+  const snapshots = readUsageSnapshotsByAgent("claude-code");
+  const latest = latestUsageSnapshotByAgent("claude-code");
+  const codexLatest = latestUsageSnapshotByAgent("codex");
   const tier = readCachedPlanTier();
   const calibration = await readCalibrationDump();
   const predicted = predictedSeriesFor(calibration);
@@ -92,23 +94,28 @@ export default async function UsagePage() {
         )}
       </header>
 
-      {!latest ? (
+      {!latest && !codexLatest ? (
         <EmptyState />
       ) : (
         <>
-          <PreviousCyclesTrend windowLabel="7d" cycles={cycles7d} />
-          <UsageChartsDashboard snapshots={snapshots} predicted={predicted} />
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--af-text-tertiary)",
-              fontFamily: "var(--font-mono)",
-            }}
-            suppressHydrationWarning
-          >
-            Last daemon poll: {new Date(latest.captured_at).toLocaleString()} ·{" "}
-            {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} on disk
-          </div>
+          <CodexUsageCard latest={codexLatest} />
+          {latest && (
+            <>
+              <PreviousCyclesTrend windowLabel="7d" cycles={cycles7d} />
+              <UsageChartsDashboard snapshots={snapshots} predicted={predicted} />
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--af-text-tertiary)",
+                  fontFamily: "var(--font-mono)",
+                }}
+                suppressHydrationWarning
+              >
+                Last Claude poll: {new Date(latest.captured_at).toLocaleString()} ·{" "}
+                {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} on disk
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

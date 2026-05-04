@@ -411,6 +411,75 @@ export async function getCodexSession(
   return detail;
 }
 
+/**
+ * Read the *latest* Codex rollout's most recent `token_count` event and
+ * extract the rate-limit windows. Codex stores these in every token_count
+ * event's `rate_limits.{primary,secondary}` — primary is the 5h window
+ * (window_minutes=300), secondary is the 7d window (window_minutes=10080).
+ *
+ * Returns null when no Codex sessions exist yet, or when the latest
+ * rollout never reached a token_count event (e.g. a freshly-started
+ * session that hasn't logged usage yet).
+ */
+export type CodexUsageWindows = {
+  /** 5h window — `rate_limits.primary` */
+  five_hour: { utilization: number | null; resets_at: string | null };
+  /** 7d window — `rate_limits.secondary` */
+  seven_day: { utilization: number | null; resets_at: string | null };
+  /** Plan label as Codex reports it ("plus", "pro", "free", …) */
+  plan_type: string | null;
+  /** Path of the rollout we read from — useful for daemon logs */
+  source_path: string;
+};
+
+export async function getLatestCodexUsage(
+  opts: { root?: string } = {},
+): Promise<CodexUsageWindows | null> {
+  const root = opts.root ?? DEFAULT_CODEX_ROOT;
+  const files = await listRolloutFiles(root);
+  if (files.length === 0) return null;
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const file of files) {
+    const lines = await readJsonl(file.filePath);
+    // Walk backwards for the newest token_count event.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (typeof line !== "object" || line === null) continue;
+      const obj = line as Record<string, unknown>;
+      if (obj.type !== "event_msg") continue;
+      const payload = (obj.payload ?? {}) as Record<string, unknown>;
+      if (payload.type !== "token_count") continue;
+      const rl = (payload.rate_limits ?? null) as Record<string, unknown> | null;
+      if (!rl) continue;
+      const primary = (rl.primary ?? null) as Record<string, unknown> | null;
+      const secondary = (rl.secondary ?? null) as Record<string, unknown> | null;
+      const fivePct = numberOf(primary?.used_percent);
+      const sevenPct = numberOf(secondary?.used_percent);
+      const fiveResetUnix = numberOf(primary?.resets_at);
+      const sevenResetUnix = numberOf(secondary?.resets_at);
+      const planType =
+        typeof rl.plan_type === "string" ? (rl.plan_type as string) : null;
+      return {
+        five_hour: {
+          utilization: fivePct ?? null,
+          resets_at:
+            fiveResetUnix !== undefined ? new Date(fiveResetUnix * 1000).toISOString() : null,
+        },
+        seven_day: {
+          utilization: sevenPct ?? null,
+          resets_at:
+            sevenResetUnix !== undefined
+              ? new Date(sevenResetUnix * 1000).toISOString()
+              : null,
+        },
+        plan_type: planType,
+        source_path: file.filePath,
+      };
+    }
+  }
+  return null;
+}
+
 export function codexSessionLocalDay(meta: SessionMeta): string | undefined {
   if (!meta.firstTimestamp) return undefined;
   const ms = Date.parse(meta.firstTimestamp);

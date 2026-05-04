@@ -16,6 +16,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fetchUsage, UsageApiError } from "./usage/api.js";
+import { pollCodexUsage } from "./usage/codex.js";
 import { appendSnapshot } from "./usage/storage.js";
 import { isUsable, readOAuthCredentials } from "./usage/token.js";
 import { BASE_INTERVAL_MS, nextIntervalMs, type PollOutcome } from "./usage/backoff.js";
@@ -76,13 +77,32 @@ const perceptionHandle: NodeJS.Timeout = setInterval(async () => {
   }
 }, PERCEPTION_INTERVAL_MS);
 
+async function tickCodex(): Promise<void> {
+  // Best-effort: failures here never affect the Claude poll outcome,
+  // backoff state, or daemon health.
+  try {
+    const result = await pollCodexUsage();
+    if (result.kind === "no_sessions") return;
+    appendSnapshot(USAGE_LOG, result.snapshot);
+    log(
+      "info",
+      `codex snapshot 5h=${result.snapshot.five_hour.utilization}% 7d=${result.snapshot.seven_day.utilization}%`,
+    );
+  } catch (err) {
+    log("warn", `codex poll failed: ${(err as Error).message}`);
+  }
+}
+
 async function tick(): Promise<PollOutcome> {
+  // Always observe Codex first — it's a cheap disk read with no auth path,
+  // so it can't block on a broken Claude OAuth state.
+  await tickCodex();
   try {
     const snapshot = await fetchUsage();
     appendSnapshot(USAGE_LOG, snapshot);
     log(
       "info",
-      `snapshot 5h=${snapshot.five_hour.utilization}% 7d=${snapshot.seven_day.utilization}%`,
+      `claude snapshot 5h=${snapshot.five_hour.utilization}% 7d=${snapshot.seven_day.utilization}%`,
     );
     return "success";
   } catch (err) {

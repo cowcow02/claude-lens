@@ -1248,8 +1248,13 @@ export {
   listCodexSessions,
   getCodexSession,
   codexSessionLocalDay,
+  getLatestCodexUsage,
 } from "./codex.js";
-export type { ListCodexOptions, GetCodexOptions } from "./codex.js";
+export type {
+  ListCodexOptions,
+  GetCodexOptions,
+  CodexUsageWindows,
+} from "./codex.js";
 
 
 /* ================================================================= */
