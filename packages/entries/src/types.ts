@@ -62,6 +62,11 @@ export type EntrySignals = {
 
 export type Entry = {
   version: typeof CURRENT_ENTRY_SCHEMA_VERSION;
+  /** Source coding-agent that produced this session. Absent on entries
+   *  written before multi-agent support — readers MUST treat undefined
+   *  as "claude-code". Used by digest prompts to surface per-agent
+   *  contributions in the synthesized narrative. */
+  agent?: "claude-code" | "codex";
   session_id: string;
   /** "YYYY-MM-DD" in reader's TZ */
   local_day: string;
@@ -265,6 +270,16 @@ export type DayDigest = DigestEnvelope & {
   top_goal_categories: Array<{ category: string; minutes: number }>;
   concurrency_peak: number;
   agent_min: number;
+  /** Per-source-agent (claude-code, codex, …) breakdown of today's work.
+   *  Optional for backward-compat with pre-multi-agent cached digests;
+   *  absent === single-agent ("claude-code"). Used by the week digest
+   *  to surface fleet-shape signals in the synthesized narrative. */
+  agent_breakdown?: Array<{
+    agent: string;
+    sessions: number;
+    active_min: number;
+    tools_total: number;
+  }>;
   /** Day-level outcome derived from per-entry outcomes. Phase 2.1 — feeds weekly aggregation. */
   outcome_day: DayOutcome;
   /** Day-level helpfulness signal — mode across enriched entries. Phase 2.1 — feeds weekly trajectory. */

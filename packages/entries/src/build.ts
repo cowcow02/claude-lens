@@ -537,6 +537,7 @@ export function buildEntries(sessionDetail: SessionDetail): Entry[] {
 
     const entry: Entry = {
       version: CURRENT_ENTRY_SCHEMA_VERSION,
+      agent: sessionDetail.agent,
       session_id: sessionDetail.id,
       local_day,
       project,

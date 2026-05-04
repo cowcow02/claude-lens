@@ -82,9 +82,12 @@ export async function* runWeekDigestPipeline(
     }
 
     if (isToday) {
-      // Read today via the day pipeline (TTL-cached short-circuit). Never force.
+      // Read today via the day pipeline (TTL-cached short-circuit). Cascade
+      // force=true through so a forced week regen also forces today's
+      // enrichment; otherwise the day comes back deterministic-only and the
+      // week narrative falls back to the empty-headline path.
       const subOpts: DayPipelineOptions = {
-        settings: opts.settings, force: false, callLLM: opts.callLLM, now: opts.now,
+        settings: opts.settings, force: opts.force ?? false, callLLM: opts.callLLM, now: opts.now,
         todayLocalDay: opts.todayLocalDay, caller: opts.caller,
       };
       let captured: DayDigest | null = null;
@@ -189,6 +192,10 @@ export async function* runWeekDigestPipeline(
       const weekPromise = generateWeekDigest(monday, dayDigests, {
         model: opts.settings.model, callLLM: opts.callLLM,
         entriesByDay,
+        // The current week often has only Monday's data when freshly forced —
+        // unblock the LLM synth in that case so the user gets a usable
+        // narrative on day one of the week.
+        allowSingleDay: opts.force === true && isCurrentWeek,
         onProgress: info => { progressQueue.push({ bytes: info.bytes, elapsed_ms: info.elapsedMs }); },
       });
       const topSessionsPromise = Promise.all(topSlices.map(({ entry, slice }) =>
