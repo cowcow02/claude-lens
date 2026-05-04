@@ -42,51 +42,31 @@ type RolloutFile = {
   sizeBytes: number;
 };
 
+async function safeReaddir(p: string): Promise<string[]> {
+  return fs.readdir(p).catch(() => [] as string[]);
+}
+
 async function listRolloutFiles(root: string): Promise<RolloutFile[]> {
   const out: RolloutFile[] = [];
-  let years: string[] = [];
-  try {
-    years = await fs.readdir(root);
-  } catch {
-    return out;
-  }
+  const years = await safeReaddir(root);
   for (const year of years) {
     if (!/^\d{4}$/.test(year)) continue;
     const yearDir = path.join(root, year);
-    let months: string[] = [];
-    try {
-      months = await fs.readdir(yearDir);
-    } catch {
-      continue;
-    }
+    const months = await safeReaddir(yearDir);
     for (const month of months) {
       if (!/^\d{2}$/.test(month)) continue;
       const monthDir = path.join(yearDir, month);
-      let days: string[] = [];
-      try {
-        days = await fs.readdir(monthDir);
-      } catch {
-        continue;
-      }
+      const days = await safeReaddir(monthDir);
       for (const day of days) {
         if (!/^\d{2}$/.test(day)) continue;
         const dayDir = path.join(monthDir, day);
-        let entries: string[] = [];
-        try {
-          entries = await fs.readdir(dayDir);
-        } catch {
-          continue;
-        }
+        const entries = await safeReaddir(dayDir);
         for (const entry of entries) {
           const m = ROLLOUT_RE.exec(entry);
           if (!m) continue;
           const full = path.join(dayDir, entry);
-          let stat;
-          try {
-            stat = await fs.stat(full);
-          } catch {
-            continue;
-          }
+          const stat = await fs.stat(full).catch(() => null);
+          if (!stat) continue;
           out.push({
             filePath: full,
             sessionId: m[2],
