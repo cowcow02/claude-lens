@@ -1230,3 +1230,94 @@ export async function loadCalibrationCurve(
   ]);
   return buildCalibrationCurve(events, snapshots, tier, granularityMin);
 }
+
+/* ================================================================= */
+/*  Codex (OpenAI) re-export                                         */
+/* ================================================================= */
+
+import {
+  DEFAULT_CODEX_ROOT as _DEFAULT_CODEX_ROOT,
+  listCodexSessions as _listCodexSessions,
+  getCodexSession as _getCodexSession,
+} from "./codex.js";
+
+export {
+  DEFAULT_CODEX_ROOT,
+  listCodexSessions,
+  getCodexSession,
+  codexSessionLocalDay,
+} from "./codex.js";
+export type { ListCodexOptions, GetCodexOptions } from "./codex.js";
+
+
+/* ================================================================= */
+/*  Generic agent-source registry                                    */
+/*                                                                   */
+/*  Each coding-agent we observe (Claude Code, Codex, ...) is an     */
+/*  AgentSource. Adding a new agent = drop in a new source object.   */
+/*  Inlined here rather than a sibling module because the registry   */
+/*  binds the Claude Code reader (this file) AND the Codex reader —  */
+/*  splitting it creates a fs.ts ↔ agent-source.ts cycle that        */
+/*  Next.js + turbopack reject during page-data collection.          */
+/* ================================================================= */
+
+import type { AgentKind } from "./types.js";
+
+export type AgentSource = {
+  kind: AgentKind;
+  displayName: string;
+  defaultRoot: string;
+  listSessions(opts?: ListOptions): Promise<SessionMeta[]>;
+  getSession(id: string, opts?: { root?: string }): Promise<SessionDetail | null>;
+};
+
+const claudeCodeSource: AgentSource = {
+  kind: "claude-code",
+  displayName: "Claude Code",
+  defaultRoot: DEFAULT_ROOT,
+  async listSessions(opts) {
+    const sessions = await listSessions(opts);
+    for (const s of sessions) if (!s.agent) s.agent = "claude-code";
+    return sessions;
+  },
+  async getSession(id, opts) {
+    const detail = await getSession(id, opts);
+    if (detail && !detail.agent) detail.agent = "claude-code";
+    return detail;
+  },
+};
+
+const codexSource: AgentSource = {
+  kind: "codex",
+  displayName: "Codex (OpenAI)",
+  defaultRoot: _DEFAULT_CODEX_ROOT,
+  async listSessions(opts) {
+    return _listCodexSessions(opts);
+  },
+  async getSession(id) {
+    return _getCodexSession(id);
+  },
+};
+
+export const agentSources: AgentSource[] = [claudeCodeSource, codexSource];
+
+export function getAgentSource(kind: AgentKind): AgentSource | undefined {
+  return agentSources.find((s) => s.kind === kind);
+}
+
+export async function listAllSessions(opts: { limit?: number } = {}): Promise<SessionMeta[]> {
+  const lists = await Promise.all(agentSources.map((s) => s.listSessions(opts)));
+  const merged: SessionMeta[] = [];
+  for (const lst of lists) merged.push(...lst);
+  merged.sort((a, b) => (b.firstTimestamp ?? "").localeCompare(a.firstTimestamp ?? ""));
+  if (opts.limit !== undefined) return merged.slice(0, opts.limit);
+  return merged;
+}
+
+export async function getAnySession(id: string): Promise<SessionDetail | null> {
+  for (const source of agentSources) {
+    const detail = await source.getSession(id);
+    if (detail) return detail;
+  }
+  return null;
+}

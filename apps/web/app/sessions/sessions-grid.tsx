@@ -15,6 +15,7 @@ import {
 import { Search, Wrench, MessagesSquare, Clock } from "lucide-react";
 import { LiveBadge } from "@/components/live-badge";
 import { TeamBadge } from "@/components/team-badge";
+import { AgentBadge } from "@/components/agent-badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useViewToggle } from "@/components/view-toggle";
 import { OutcomePill, outcomePriority } from "@/components/outcome-pill";
@@ -196,6 +197,7 @@ const sessionTableColumns: Column<SessionRow>[] = [
             {prettyProjectName(r.session.projectName)}
           </span>
           <TeamBadge session={r.session} />
+          <AgentBadge agent={r.session.agent} />
         </div>
         <div
           style={{
@@ -383,6 +385,7 @@ function SessionCard({ row }: { row: SessionRow }) {
             {prettyProjectName(s.projectName)}
           </span>
           <TeamBadge session={s} linkable={false} />
+          <AgentBadge agent={s.agent} />
         </div>
         <div
           style={{

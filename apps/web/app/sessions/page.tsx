@@ -29,7 +29,7 @@ export default async function SessionsPage() {
           All sessions
         </h1>
         <p style={{ fontSize: 13, color: "var(--af-text-secondary)", marginTop: 4 }}>
-          {sessions.length} session{sessions.length === 1 ? "" : "s"} in{" "}
+          {sessions.length} session{sessions.length === 1 ? "" : "s"} across{" "}
           <code
             style={{
               fontFamily: "var(--font-mono)",
@@ -40,6 +40,18 @@ export default async function SessionsPage() {
             }}
           >
             ~/.claude/projects
+          </code>{" "}
+          +{" "}
+          <code
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              background: "var(--af-border-subtle)",
+              padding: "1px 6px",
+              borderRadius: 4,
+            }}
+          >
+            ~/.codex/sessions
           </code>
         </p>
       </header>
