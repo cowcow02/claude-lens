@@ -680,6 +680,9 @@ export type SessionPin = {
  *  per-session story grounded in the actual transcript. */
 export type WeekTopSession = {
   session_id: string;
+  /** Source coding-agent. Lets the per-session card show an agent badge so
+   *  a Codex top-session is visibly distinct from a Claude Code one. */
+  agent?: "claude-code" | "codex";
   /** Local day this session is anchored to (the entry's local_day). */
   date: string;
   project: string;

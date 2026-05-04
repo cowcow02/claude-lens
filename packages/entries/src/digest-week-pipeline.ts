@@ -7,7 +7,7 @@ import { listEntriesForDay } from "./fs.js";
 import { runDayDigestPipeline, type PipelineEvent, type PipelineOptions as DayPipelineOptions } from "./digest-day-pipeline.js";
 import { generateWeekDigest, buildDeterministicWeekDigest, weekDates } from "./digest-week.js";
 import { pickTopSessions, buildSessionSlice, generateTopSession, type RawSessionEvent } from "./top-sessions.js";
-import { getSession } from "@claude-lens/parser/fs";
+import { getAnySession } from "@claude-lens/parser/fs";
 import { appendSpend } from "./budget.js";
 import { computeCostUsd } from "./enrich.js";
 import { writeInteractiveLock, removeInteractiveLock } from "./pipeline-lock.js";
@@ -160,7 +160,9 @@ export async function* runWeekDigestPipeline(
     const picks = aiOn ? pickTopSessions(entriesByDay) : [];
     const topSlicesPrep = await Promise.all(picks.map(async (entry) => {
       try {
-        const sessionDetail = await getSession(entry.session_id);
+        // getAnySession dispatches across the AgentSource registry so a
+        // Codex pick resolves to its rollout, not just Claude transcripts.
+        const sessionDetail = await getAnySession(entry.session_id);
         if (!sessionDetail) return null;
         const events = sessionDetail.events as unknown as RawSessionEvent[];
         const dd = dayDigestByDate.get(entry.local_day);
@@ -235,7 +237,9 @@ export async function* runWeekDigestPipeline(
       const topSessions: WeekTopSession[] = [];
       for (const r of topResults) {
         if (!r) continue;
-        topSessions.push(r.topSession);
+        // Stamp the source agent on the top session so the renderer can
+        // show an agent badge for non-Claude picks.
+        topSessions.push({ ...r.topSession, agent: r.entry.agent });
         if (r.usage) {
           appendSpend({
             ts: new Date().toISOString(), caller: opts.caller ?? "web",
