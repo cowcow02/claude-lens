@@ -65,15 +65,10 @@ import {
 /*  Constants + theming                                               */
 /* ------------------------------------------------------------------ */
 
-/** Gap > this (ms) before a user row is shown as a "Session idle" divider. */
+/** Gap > this (ms) before a user row is shown as a "Session idle" divider
+ *  in the transcript body (separate from the minimap, which now derives
+ *  idle from raw event timestamps via rawIdleBands). */
 const IDLE_THRESHOLD_MS = 2000;
-
-/** Same idea but for non-user rows (agent text, tool groups). Codex sessions
- *  often have only 1-2 user messages with multi-minute pauses between agent
- *  reasoning steps, so anchoring idle bands to user rows alone leaves Codex
- *  minimaps blank. A higher threshold here keeps Claude's tightly-streamed
- *  tool-call gaps from flooding the minimap. */
-const IDLE_THRESHOLD_AGENT_MS = 30_000;
 
 /** Sticky header height (session header + tabs + mini-map).
  *  Transcript rows reserve this as scroll-margin so scrollIntoView lands
@@ -296,6 +291,36 @@ export function SessionView({
 
   /** Detect PR creations in this session. */
   const prMarkers = useMemo(() => detectPrMarkers(session), [session]);
+
+  /** Idle bands derived from raw event timestamps — independent of which
+   *  presentation rows happen to be on screen. Anchoring idle to row kind
+   *  (the previous approach) missed Codex's reasoning gaps because Codex
+   *  sessions barely have user rows; LLM thinking time dominates instead.
+   *  Walking the raw event chronology with a 5s threshold catches both
+   *  Claude's user-pause idle and Codex's mid-turn dead air uniformly. */
+  const rawIdleBands = useMemo(() => {
+    const tsMs: number[] = [];
+    for (const e of events) {
+      if (!e.timestamp) continue;
+      const ms = Date.parse(e.timestamp);
+      if (Number.isFinite(ms)) tsMs.push(ms);
+    }
+    if (tsMs.length < 2) return [];
+    tsMs.sort((a, b) => a - b);
+    const sessionStartMs = tsMs[0]!;
+    const bands: { start: number; end: number; durationMs: number }[] = [];
+    for (let i = 1; i < tsMs.length; i++) {
+      const gap = tsMs[i]! - tsMs[i - 1]!;
+      if (gap > 5_000) {
+        bands.push({
+          start: tsMs[i - 1]! - sessionStartMs,
+          end: tsMs[i]! - sessionStartMs,
+          durationMs: gap,
+        });
+      }
+    }
+    return bands;
+  }, [events]);
 
   const coldResumeMarkers = useMemo(() => {
     const seen = new Set<string>();
@@ -714,6 +739,7 @@ export function SessionView({
             collapsed={collapsed}
             prMarkers={prMarkers}
             coldResumeMarkers={coldResumeMarkers}
+            rawIdleBands={rawIdleBands}
             model={model}
             selectedSubagentId={selectedSubagentId}
             onSelectSubagent={(id) => {
@@ -1292,6 +1318,7 @@ function Minimap({
   onSelectSubagent,
   prMarkers,
   coldResumeMarkers,
+  rawIdleBands,
   model,
 }: {
   displayRows: DisplayRow[];
@@ -1308,6 +1335,11 @@ function Minimap({
     tOffsetMs: number;
     info: NonNullable<SessionEvent["coldResume"]>;
   }[];
+  /** Idle bands derived directly from raw event timestamps. Used in place
+   *  of the legacy "gap before user row" heuristic so Codex sessions
+   *  (which spend most of their time in agent reasoning, not user input)
+   *  surface their dead-air on the minimap. */
+  rawIdleBands?: { start: number; end: number; durationMs: number }[];
   model?: string;
 }) {
   const WIDTH = 1400;
@@ -1463,55 +1495,65 @@ function Minimap({
       }
     }
 
+    // Build a sorted copy of idle bands so we can clip row/turn ends to
+    // the start of the next idle band (or the next row, whichever comes
+    // first). This stops a row's rectangle from spanning across an idle
+    // gap and visually swallowing it.
+    const idleBands = (rawIdleBands ?? []).slice().sort((a, b) => a.start - b.start);
+    const nextIdleStartFrom = (t: number): number | undefined => {
+      for (const b of idleBands) {
+        if (b.start >= t) return b.start;
+      }
+      return undefined;
+    };
+
     for (let i = 0; i < withTime.length; i++) {
       const item = withTime[i];
       const next = withTime[i + 1];
       const start = item.start;
-
-      // Idle gap before user rows (only in atomic view — turns already
-      // contain their idle time inside their duration). Also fire for
-      // long agent / tool-group gaps with a higher threshold so Codex
-      // sessions with sparse user rows still surface their dead-air
-      // periods on the minimap.
-      if (item.kind === "row" && out.length > 0) {
-        const fireUser = item.row.kind === "user" && item.gapMs > IDLE_THRESHOLD_MS;
-        const fireAgent =
-          (item.row.kind === "agent" || item.row.kind === "tool-group") &&
-          item.gapMs > IDLE_THRESHOLD_AGENT_MS;
-        if (fireUser || fireAgent) {
-          out.push({
-            kind: "idle",
-            start: Math.max(0, start - item.gapMs),
-            end: start,
-            durationMs: item.gapMs,
-          });
-        }
-      }
+      const nextRowStart = next?.start;
+      const nextIdleStart = nextIdleStartFrom(start + 1);
+      // Cap end to whichever comes first: next visible row, next idle band.
+      const cap = (raw: number) =>
+        Math.min(
+          raw,
+          nextRowStart ?? Number.POSITIVE_INFINITY,
+          nextIdleStart ?? Number.POSITIVE_INFINITY,
+        );
 
       if (item.kind === "turn") {
-        // Turn's end = start + duration, clamped against the next
-        // segment's start so adjacent turns don't overlap.
         const turnEnd = start + (item.turn.durationMs ?? 0);
-        const nextStart = next?.start;
-        const end = nextStart !== undefined ? Math.min(turnEnd, nextStart) : turnEnd;
         out.push({
           kind: "turn",
           turn: item.turn,
           primaryIndex: item.turn.firstPrimaryIndex,
           start,
-          end: Math.max(end, start + 1),
+          end: Math.max(cap(turnEnd), start + 1),
         });
       } else {
-        const end = next?.start ?? Math.min(start + 800, safeDur);
+        const end = cap(nextRowStart ?? start + 800);
         out.push({
           kind: "row",
           row: item.row,
           primaryIndex: rowPrimaryIndex(item.row),
           start,
-          end,
+          end: Math.max(end, start + 1),
         });
       }
     }
+
+    // Idle bands are computed from raw event timestamps (5s threshold) up
+    // in the parent — append them and let the sort below interleave by
+    // start time so they slot between rows correctly.
+    for (const band of idleBands) {
+      out.push({
+        kind: "idle",
+        start: band.start,
+        end: band.end,
+        durationMs: band.durationMs,
+      });
+    }
+    out.sort((a, b) => a.start - b.start);
 
     // Cap the number of rendered segments. Each <rect> carries two
     // event handlers (onMouseEnter + onClick), so 2000 raw-events in
@@ -1557,7 +1599,7 @@ function Minimap({
       }
     }
     return bucketed;
-  }, [displayRows, safeDur]);
+  }, [displayRows, safeDur, rawIdleBands]);
 
   /* Sequential layout with a minimum displayed width per segment.
      - Raw proportional width = (seg.end - seg.start) / safeDur * WIDTH
