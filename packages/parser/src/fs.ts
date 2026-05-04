@@ -865,6 +865,9 @@ const USAGE_LOG = path.join(os.homedir(), ".cclens", "usage.jsonl");
 
 type UsageSnapshot = {
   captured_at?: string;
+  /** Source agent. Absent on legacy snapshots written before multi-agent
+   *  support — readers MUST treat undefined as "claude-code". */
+  agent?: "claude-code" | "codex";
   five_hour?: { utilization?: number; resets_at?: string };
   seven_day?: { utilization?: number; resets_at?: string };
   seven_day_sonnet?: { utilization?: number } | null;
@@ -897,6 +900,9 @@ export async function loadUsageByDay(
     try {
       const snap = JSON.parse(trimmed) as UsageSnapshot;
       if (!snap.captured_at) continue;
+      // Same rationale as loadCalibrationSnapshots: peak Claude utilization
+      // can't include Codex's 5h reading or downstream charts skew.
+      if ((snap.agent ?? "claude-code") !== "claude-code") continue;
       const ms = Date.parse(snap.captured_at);
       if (Number.isNaN(ms)) continue;
       if (ms < startMs) continue;
@@ -977,7 +983,15 @@ export async function loadCalibrationEvents(
   return events;
 }
 
-/** All snapshots from ~/.cclens/usage.jsonl, sorted by captured_at. */
+/**
+ * All Claude Code snapshots from ~/.cclens/usage.jsonl, sorted by captured_at.
+ *
+ * The calibration curve maps Claude session activity to Claude plan-window
+ * utilization, so it MUST exclude snapshots from other agents — otherwise a
+ * Codex 5h-window reading gets read as a Claude burnrate sample and skews the
+ * predicted line. Snapshots without an `agent` field default to "claude-code"
+ * for back-compat with logs written before multi-agent support.
+ */
 export async function loadCalibrationSnapshots(): Promise<UsageSnapshot[]> {
   let raw: string;
   try {
@@ -991,7 +1005,9 @@ export async function loadCalibrationSnapshots(): Promise<UsageSnapshot[]> {
     if (!t) continue;
     try {
       const s = JSON.parse(t) as UsageSnapshot;
-      if (s.captured_at) out.push(s);
+      if (!s.captured_at) continue;
+      if ((s.agent ?? "claude-code") !== "claude-code") continue;
+      out.push(s);
     } catch {
       /* skip malformed */
     }
