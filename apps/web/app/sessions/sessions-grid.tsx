@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useMemo } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { AgentKind, SessionMeta } from "@claude-lens/parser";
 import type { DayOutcome, EntryEnrichmentStatus } from "@claude-lens/entries";
 import {
@@ -28,13 +28,47 @@ export type SessionRow = {
   latestLocalDay: string | null;
 };
 
+type SortBy = "newest" | "longest" | "most-tokens" | "outcome";
+
+const SORT_VALUES: readonly SortBy[] = ["newest", "longest", "most-tokens", "outcome"] as const;
+
+function isSortBy(s: string | null | undefined): s is SortBy {
+  return s !== null && s !== undefined && (SORT_VALUES as readonly string[]).includes(s);
+}
+
 export function SessionsGrid({ rows }: { rows: SessionRow[] }) {
   const router = useRouter();
-  const [query, setQuery] = useState("");
-  const [project, setProject] = useState("all");
-  const [agent, setAgent] = useState<AgentKind | "all">("all");
-  const [sortBy, setSortBy] = useState<"newest" | "longest" | "most-tokens" | "outcome">("newest");
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // Filter state lives in the URL — back/forward replays the same view, and
+  // returning from a session detail page restores what the user had picked.
+  const query = searchParams.get("q") ?? "";
+  const project = searchParams.get("project") ?? "all";
+  const agentParam = searchParams.get("agent");
+  const agent: AgentKind | "all" =
+    agentParam === "claude-code" || agentParam === "codex" ? agentParam : "all";
+  const sortBy: SortBy = isSortBy(searchParams.get("sort"))
+    ? (searchParams.get("sort") as SortBy)
+    : "newest";
   const { mode: viewMode, toggle: viewToggle } = useViewToggle("cclens:sessions:view");
+
+  const updateParam = useCallback(
+    (key: string, value: string, fallback: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      if (!value || value === fallback) next.delete(key);
+      else next.set(key, value);
+      const qs = next.toString();
+      // replace, not push — we don't want a history entry per keystroke.
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const setQuery = (v: string) => updateParam("q", v, "");
+  const setProject = (v: string) => updateParam("project", v, "all");
+  const setAgent = (v: AgentKind | "all") => updateParam("agent", v, "all");
+  const setSortBy = (v: SortBy) => updateParam("sort", v, "newest");
 
   const projects = useMemo(() => {
     const s = new Set(rows.map((r) => r.session.projectName));
