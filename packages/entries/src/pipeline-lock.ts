@@ -2,9 +2,14 @@ import { writeFileSync, unlinkSync, existsSync, readFileSync, statSync } from "n
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+// Lock is "fresh" if mtime is within STALE_MS AND owning pid is alive. The
+// pipeline keeps mtime fresh via a HEARTBEAT_MS interval; without that, any
+// synth lasting more than STALE_MS would falsely look idle to other callers.
 const STALE_MS = 60 * 1000;
+const HEARTBEAT_MS = 30 * 1000;
 
 let lockPathCached: string | null = null;
+let heartbeat: NodeJS.Timeout | null = null;
 
 function lockPath(): string {
   if (lockPathCached) return lockPathCached;
@@ -17,11 +22,27 @@ export function __setInteractiveLockPathForTest(path: string): void {
   lockPathCached = path;
 }
 
-export function writeInteractiveLock(): void {
+function touchLock(): void {
   writeFileSync(lockPath(), String(process.pid), "utf8");
 }
 
+export function writeInteractiveLock(): void {
+  touchLock();
+  if (heartbeat) clearInterval(heartbeat);
+  heartbeat = setInterval(() => {
+    try { touchLock(); } catch { /* disk full or path gone — leave it */ }
+  }, HEARTBEAT_MS);
+  // Don't keep the Node event loop alive just for this timer; long-lived
+  // pipelines have their own work pinning the loop, and short-lived tests
+  // shouldn't hang on a stray interval.
+  heartbeat.unref?.();
+}
+
 export function removeInteractiveLock(): void {
+  if (heartbeat) {
+    clearInterval(heartbeat);
+    heartbeat = null;
+  }
   try { unlinkSync(lockPath()); } catch { /* already gone */ }
 }
 

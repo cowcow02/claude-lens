@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { readSettings, readWeekDigest } from "@claude-lens/entries/node";
+import { readSettings, readWeekDigest, interactiveLockFresh } from "@claude-lens/entries/node";
 import { lastCompletedWeekMonday, currentWeekMonday, listEntriesForDay } from "@/lib/entries";
-import { shouldAutoFireWeek } from "@/lib/auto-week-fire";
 import { WeekDigestView } from "@/components/week-digest-view";
 import { InsightsTopBar } from "@/components/insights-top-bar";
 
@@ -48,7 +47,10 @@ export default async function InsightsPage() {
   const prior = readWeekDigest(priorMonday(lastWeek));
   const hasData = !!cached || hasAnyEntries(lastWeek);
 
-  const autoFire = aiOn && !cached && shouldAutoFireWeek(lastWeek);
+  // Auto-fire when AI is on and the digest isn't already cached. The interactive
+  // pipeline lock (heartbeat-refreshed) suppresses concurrent fires from the
+  // daemon's boot backfill or another tab; we never fire on top of an in-flight run.
+  const autoFire = aiOn && !cached && !interactiveLockFresh(Date.now());
 
   // Prev/next nav targets — prev is the week before lastWeek; next is the
   // current in-progress week (if any data) since we're already viewing the

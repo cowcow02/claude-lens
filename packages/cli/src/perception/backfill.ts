@@ -1,13 +1,13 @@
 import { listEntriesForDay, readWeekDigest } from "@claude-lens/entries/fs";
 import {
-  readSettings, runWeekDigestPipeline, weekDates, shouldAutoFireWeek,
+  readSettings, runWeekDigestPipeline, weekDates, interactiveLockFresh,
 } from "@claude-lens/entries/node";
 
 export type BackfillReason =
   | "ai_disabled"
   | "autofill_disabled"
   | "already_cached"
-  | "already_fired_this_week"
+  | "in_flight"
   | "no_entries"
   | "ok";
 
@@ -53,12 +53,13 @@ export function lastCompletedWeekMonday(nowMs: number = Date.now()): string {
 
 /**
  * Boot-time backfill of the most recently completed ISO week's narrative.
- * Idempotent: shares the `~/.cclens/auto-week-fired-at` lock with the web's
- * /insights auto-fire so the two paths never double-spend.
  *
- * Best-effort: any error logs warn and returns `fired:false`. The daemon
- * does not crash on a failed backfill — user can always force-regen from
- * /insights to override the per-week lock.
+ * "Already done?" is answered by the digest file on disk; "currently running?"
+ * by the heartbeat-refreshed interactive pipeline lock. No standalone fire-
+ * once-per-week file: a half-completed run leaves no digest and no fresh
+ * lock, so the next caller (daemon boot, /insights visit) retries naturally.
+ *
+ * Best-effort: pipeline errors log warn but never crash the daemon.
  */
 export async function backfillLastWeekDigest(
   opts: BackfillOptions = {},
@@ -86,12 +87,9 @@ export async function backfillLastWeekDigest(
     log("info", `auto-backfill: skipped (no_entries)`);
     return { fired: false, reason: "no_entries", key: monday };
   }
-  // The lock is consumed inside this call — once shouldAutoFireWeek returns
-  // true it has already written `monday` to the file, so a second daemon
-  // boot in the same week (or a /insights visit) sees `false`.
-  if (!shouldAutoFireWeek(monday)) {
-    log("info", `auto-backfill: skipped (already_fired_this_week)`);
-    return { fired: false, reason: "already_fired_this_week", key: monday };
+  if (interactiveLockFresh(now)) {
+    log("info", `auto-backfill: skipped (in_flight)`);
+    return { fired: false, reason: "in_flight", key: monday };
   }
 
   log("info", `auto-backfill: fired week-${monday}`);

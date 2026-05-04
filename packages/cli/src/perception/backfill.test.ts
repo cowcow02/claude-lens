@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   __setSettingsPathForTest, writeSettings,
+  __setInteractiveLockPathForTest, writeInteractiveLock, removeInteractiveLock,
 } from "@claude-lens/entries/node";
 import { __setEntriesDirForTest, __setDigestsDirForTest } from "@claude-lens/entries/fs";
 import { backfillLastWeekDigest, lastCompletedWeekMonday } from "./backfill.js";
@@ -40,19 +41,17 @@ describe("backfillLastWeekDigest gates", () => {
   let tmp: string;
   let entriesDir: string;
   let digestsDir: string;
-  let lockFile: string;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "backfill-"));
     entriesDir = join(tmp, "entries");
     digestsDir = join(tmp, "digests");
-    lockFile = join(tmp, "auto-week-fired-at");
     mkdirSync(entriesDir, { recursive: true });
     mkdirSync(digestsDir, { recursive: true });
     __setSettingsPathForTest(join(tmp, "settings.json"));
     __setEntriesDirForTest(entriesDir);
     __setDigestsDirForTest(digestsDir);
-    process.env.CCLENS_AUTO_WEEK_FILE = lockFile;
+    __setInteractiveLockPathForTest(join(tmp, "llm-interactive.lock"));
 
     // Default: AI on, autofill on. Override per test.
     writeSettings({
@@ -63,6 +62,11 @@ describe("backfillLastWeekDigest gates", () => {
         autoBackfillLastWeek: true,
       },
     });
+  });
+
+  afterEach(() => {
+    // Clear any heartbeat the lock may have started.
+    removeInteractiveLock();
   });
 
   it("lastCompletedWeekMonday: Sunday → previous Monday", () => {
@@ -79,7 +83,6 @@ describe("backfillLastWeekDigest gates", () => {
     const r = await backfillLastWeekDigest({ now: FROZEN_NOW, runPipeline: fakePipeline as never });
     expect(r).toEqual({ fired: false, reason: "ai_disabled", key: EXPECTED_MONDAY });
     expect(fakePipeline).not.toHaveBeenCalled();
-    expect(existsSync(lockFile)).toBe(false);
   });
 
   it("autofill_disabled: skip when only the auto-backfill flag is off", async () => {
@@ -110,30 +113,29 @@ describe("backfillLastWeekDigest gates", () => {
   });
 
   it("no_entries: skip when no entries exist for any day in last week", async () => {
-    // Entries dir is empty — `listEntriesForDay` returns [] for every date.
     const fakePipeline = vi.fn();
     const r = await backfillLastWeekDigest({ now: FROZEN_NOW, runPipeline: fakePipeline as never });
     expect(r).toEqual({ fired: false, reason: "no_entries", key: EXPECTED_MONDAY });
     expect(fakePipeline).not.toHaveBeenCalled();
-    // The no_entries gate runs BEFORE the lock — so the lock file is still untouched.
-    expect(existsSync(lockFile)).toBe(false);
   });
 
-  it("already_fired_this_week: skip when lock file already records this Monday", async () => {
-    // Pre-seed the lock with the same Monday — shouldAutoFireWeek will return false.
-    writeFileSync(lockFile, EXPECTED_MONDAY + "\n");
-    // Also need at least one entry so we get past the no_entries gate.
+  it("in_flight: skip when the interactive pipeline lock is fresh", async () => {
     const day = "2026-04-15";
     const e = makeEntry(day, "abc-123");
     const key = `${e.session_id}__${day}`;
     writeFileSync(join(entriesDir, `${key}.json`), JSON.stringify(e));
+
+    // Simulate a synth currently running by writing the live lock with this
+    // process's pid; interactiveLockFresh will see fresh mtime + pidAlive.
+    writeInteractiveLock();
+
     const fakePipeline = vi.fn();
     const r = await backfillLastWeekDigest({ now: FROZEN_NOW, runPipeline: fakePipeline as never });
-    expect(r).toEqual({ fired: false, reason: "already_fired_this_week", key: EXPECTED_MONDAY });
+    expect(r).toEqual({ fired: false, reason: "in_flight", key: EXPECTED_MONDAY });
     expect(fakePipeline).not.toHaveBeenCalled();
   });
 
-  it("ok: fires the pipeline when all gates open and consumes the week lock", async () => {
+  it("ok: fires the pipeline when all gates open", async () => {
     const day = "2026-04-15";
     const e = makeEntry(day, "abc-123");
     const key = `${e.session_id}__${day}`;
@@ -160,8 +162,48 @@ describe("backfillLastWeekDigest gates", () => {
     expect(call[1].todayLocalDay).toBe("2026-04-26");
     expect(call[1].currentWeekMonday).toBe("2026-04-20");
 
-    // Lock was consumed and now records last week's Monday.
-    expect(readFileSync(lockFile, "utf8").trim()).toBe(EXPECTED_MONDAY);
     expect(logs.some(([lvl, m]) => lvl === "info" && m.includes(`fired week-${EXPECTED_MONDAY}`))).toBe(true);
+  });
+});
+
+describe("interactive lock heartbeat", () => {
+  let tmp: string;
+  let lockFile: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "lock-hb-"));
+    lockFile = join(tmp, "llm-interactive.lock");
+    __setInteractiveLockPathForTest(lockFile);
+  });
+
+  afterEach(() => {
+    removeInteractiveLock();
+  });
+
+  it("writeInteractiveLock keeps mtime fresh past the original 60s STALE_MS via heartbeat", async () => {
+    vi.useFakeTimers();
+    try {
+      const t0 = Date.now();
+      vi.setSystemTime(t0);
+      writeInteractiveLock();
+      const initialMtime = statSync(lockFile).mtimeMs;
+
+      // Advance past the heartbeat interval (30s) — the timer should have fired
+      // and re-touched the file even without an explicit caller refresh.
+      vi.setSystemTime(t0 + 31_000);
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      const refreshedMtime = statSync(lockFile).mtimeMs;
+      expect(refreshedMtime).toBeGreaterThanOrEqual(initialMtime);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removeInteractiveLock clears the heartbeat and deletes the file", () => {
+    writeInteractiveLock();
+    expect(statSync(lockFile).isFile()).toBe(true);
+    removeInteractiveLock();
+    expect(() => statSync(lockFile)).toThrow();
   });
 });
