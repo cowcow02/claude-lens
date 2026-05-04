@@ -15,7 +15,6 @@ export * from "./prompts/digest-week.js";
 export * from "./prompts/digest-month.js";
 export * from "./digest-week-pipeline.js";
 export * from "./digest-month-pipeline.js";
-export * from "./auto-week-fire.js";
 export {
   readDayDigest, writeDayDigest, getTodayDigestFromCache, setTodayDigestInCache,
   readWeekDigest, writeWeekDigest, listWeekDigestKeys,
