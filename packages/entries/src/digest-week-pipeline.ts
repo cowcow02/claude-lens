@@ -262,6 +262,19 @@ export async function* runWeekDigestPipeline(
     } else {
       digest.is_live = true;
       setCurrentWeekDigestInCache(monday, digest, now());
+      // Force=true on the current week is an explicit user-driven generation.
+      // The default rule keeps current-week digests in-memory only (so they
+      // recompute as the week progresses), but Next.js bundles each route
+      // with its own module scope — the API route's in-memory cache isn't
+      // visible to the insights page's RSC. Writing to disk on force=true
+      // bridges that gap so the user actually sees the digest they paid to
+      // generate. The deterministic-data view stays correct because every
+      // future page load will refresh from this snapshot until either the
+      // user re-forces or the next day's data triggers a fresh write.
+      if (opts.force === true) {
+        writeWeekDigest(digest);
+        yield { type: "saved", path: `~/.cclens/digests/week/${monday}.json` };
+      }
     }
 
     yield { type: "digest", digest };
