@@ -107,11 +107,10 @@ importers:
         version: 2.1.9(@types/node@20.19.39)(lightningcss@1.32.0)
 
   packages/cli:
-    dependencies:
+    devDependencies:
       '@claude-lens/entries':
         specifier: workspace:*
         version: link:../entries
-    devDependencies:
       '@claude-lens/parser':
         specifier: workspace:*
         version: link:../parser
@@ -4062,6 +4061,7 @@ packages:
 
   uuid@9.0.1:
     resolution: {integrity: sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   vfile-message@4.0.3:
