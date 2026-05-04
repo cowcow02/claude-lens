@@ -2,6 +2,7 @@ import { statSync, readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { parseTranscript } from "@claude-lens/parser";
 import type { SessionDetail } from "@claude-lens/parser";
+import { listCodexSessions, getCodexSession } from "@claude-lens/parser/fs";
 import { buildEntries } from "@claude-lens/entries";
 import { writeEntryPreservingEnrichment } from "@claude-lens/entries/fs";
 import {
@@ -108,6 +109,41 @@ export async function runPerceptionSweep(opts: SweepOptions = {}): Promise<Sweep
     // Generate / Regenerate on a past day. This keeps LLM spend user-
     // initiated and predictable; end users don't get a surprise bill from
     // an unbidden historical backfill on first run.
+
+    // Codex pass: build entries from rollouts under ~/.codex/sessions/.
+    // The Codex parser produces the same SessionDetail shape Claude does,
+    // so buildEntries works without modification. Each Codex session is
+    // small (typically <200 events) and they're sparse (a few dozen vs
+    // thousands of Claude files), so we skip the byte-offset checkpoint
+    // and just rely on the parser's mtime+size cache to make this fast.
+    try {
+      const codexMetas = await listCodexSessions();
+      for (const meta of codexMetas) {
+        try {
+          const detail = await getCodexSession(meta.id);
+          if (!detail) continue;
+          const built = buildEntries(detail);
+          for (const e of built) {
+            // Codex doesn't have a byte_offset analog; size of the rollout
+            // is captured for parity with Claude's checkpoint shape.
+            try {
+              const stat = statSync(meta.filePath);
+              e.source_checkpoint.byte_offset = stat.size;
+            } catch {
+              // file disappeared between list + build — fall through with 0
+            }
+            writeEntryPreservingEnrichment(e);
+            entries++;
+          }
+          sessions++;
+        } catch (err) {
+          errors++;
+          log(`codex skipped ${meta.id}: ${(err as Error).message}`);
+        }
+      }
+    } catch (err) {
+      log(`codex pass failed: ${(err as Error).message}`);
+    }
   } finally {
     markSweepEnd();
   }

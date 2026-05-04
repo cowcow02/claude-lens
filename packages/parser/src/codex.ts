@@ -157,6 +157,14 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
       }
       continue;
     }
+    // For each Codex event we emit a synthesized Claude-shaped `raw` and
+    // matching `rawType` ("user" / "assistant"). buildEntries (in
+    // @claude-lens/entries) reads first_user, tool counts, model, and
+    // usage off the raw line in Claude's wire format. The mapping is
+    // deliberately lossy for `raw` (the original Codex JSONL line is
+    // discarded once the parser is done with it) but keeps the entries
+    // pipeline agent-agnostic without a parallel buildEntries-codex
+    // implementation.
     if (type === "event_msg" && subtype === "user_message") {
       const text = typeof payload.message === "string" ? payload.message : "";
       const preview = previewOf(text);
@@ -169,10 +177,10 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
         index: idx++,
         timestamp: ts,
         role: "user",
-        rawType: "event_msg/user_message",
+        rawType: "user",
         preview,
         blocks: text ? [{ type: "text", text }] : [],
-        raw: obj,
+        raw: { type: "user", message: { role: "user", content: text }, cwd },
       });
       continue;
     }
@@ -184,10 +192,19 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
         index: idx++,
         timestamp: ts,
         role: "agent",
-        rawType: "event_msg/agent_message",
+        rawType: "assistant",
         preview,
         blocks: text ? [{ type: "text", text }] : [],
-        raw: obj,
+        model,
+        raw: {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: text ? [{ type: "text", text }] : [],
+            model,
+          },
+          cwd,
+        },
       });
       continue;
     }
@@ -201,10 +218,19 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
         index: idx++,
         timestamp: ts,
         role: "agent-thinking",
-        rawType: "response_item/reasoning",
+        rawType: "assistant",
         preview: previewOf(text),
         blocks: text ? [{ type: "thinking", thinking: text }] : [],
-        raw: obj,
+        model,
+        raw: {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: text ? [{ type: "thinking", thinking: text }] : [],
+            model,
+          },
+          cwd,
+        },
       });
       continue;
     }
@@ -212,23 +238,33 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
       const name = typeof payload.name === "string" ? payload.name : "(unknown)";
       const callId = typeof payload.call_id === "string" ? payload.call_id : undefined;
       const args = typeof payload.arguments === "string" ? payload.arguments : "";
+      const input = safeParse(args);
       toolCallCount += 1;
       const block: ContentBlock = {
         type: "tool_use",
         id: callId ?? `codex-${idx}`,
         name,
-        input: safeParse(args),
+        input,
       };
       events.push({
         index: idx++,
         timestamp: ts,
         role: "tool-call",
-        rawType: "response_item/function_call",
+        rawType: "assistant",
         preview: `${name}(${truncate(args, 80)})`,
         blocks: [block],
         toolName: name,
         toolUseId: callId,
-        raw: obj,
+        model,
+        raw: {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: callId, name, input }],
+            model,
+          },
+          cwd,
+        },
       });
       continue;
     }
@@ -240,16 +276,26 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
         tool_use_id: callId ?? "",
         content: output,
       };
+      const isError = /process exited with code [1-9]/i.test(output);
       events.push({
         index: idx++,
         timestamp: ts,
         role: "tool-result",
-        rawType: "response_item/function_call_output",
+        rawType: "user",
         preview: previewOf(output),
         blocks: [block],
         toolUseId: callId,
         toolResult: output,
-        raw: obj,
+        raw: {
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: callId, content: output, is_error: isError },
+            ],
+          },
+          cwd,
+        },
       });
       continue;
     }
@@ -271,6 +317,35 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
   // Minimap, presentation layer, and turns view all depend on for x-axis
   // positioning. Without them the timeline strip on the session detail
   // page collapses to width 0 — the missing minimap users see today.
+  // Codex emits cumulative `total_token_usage` on each token_count event.
+  // buildEntries dedupes per-assistant `msg.id` and reads usage off the
+  // raw shape, so we attribute the FINAL cumulative total to the last
+  // assistant event with a synthetic message id. Without this Codex
+  // entries report 0 tokens which torpedoes the digest narrative.
+  if (totalUsage.input > 0 || totalUsage.output > 0) {
+    let lastAssistantIdx = -1;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i]!.rawType === "assistant") {
+        lastAssistantIdx = i;
+        break;
+      }
+    }
+    if (lastAssistantIdx >= 0) {
+      const ev = events[lastAssistantIdx]!;
+      const r = (ev.raw ?? {}) as Record<string, unknown>;
+      const m = (r.message ?? {}) as Record<string, unknown>;
+      m.id = `codex-${file.sessionId}-total`;
+      m.usage = {
+        input_tokens: totalUsage.input,
+        output_tokens: totalUsage.output,
+        cache_read_input_tokens: totalUsage.cacheRead,
+        cache_creation_input_tokens: 0,
+      };
+      r.message = m;
+      ev.raw = r;
+    }
+  }
+
   const startMs = firstTimestamp ? Date.parse(firstTimestamp) : undefined;
   if (startMs !== undefined && Number.isFinite(startMs)) {
     let prevMs: number | undefined;
