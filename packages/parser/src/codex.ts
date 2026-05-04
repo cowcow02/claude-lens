@@ -266,6 +266,24 @@ function parseRollout(file: RolloutFile, lines: unknown[]): Parsed {
     });
   }
 
+  // Annotate every event with tOffsetMs (relative to session start) and
+  // gapMs (delta from the previous timestamped event). These are what the
+  // Minimap, presentation layer, and turns view all depend on for x-axis
+  // positioning. Without them the timeline strip on the session detail
+  // page collapses to width 0 — the missing minimap users see today.
+  const startMs = firstTimestamp ? Date.parse(firstTimestamp) : undefined;
+  if (startMs !== undefined && Number.isFinite(startMs)) {
+    let prevMs: number | undefined;
+    for (const ev of events) {
+      if (!ev.timestamp) continue;
+      const ms = Date.parse(ev.timestamp);
+      if (!Number.isFinite(ms)) continue;
+      ev.tOffsetMs = Math.max(0, ms - startMs);
+      if (prevMs !== undefined) ev.gapMs = Math.max(0, ms - prevMs);
+      prevMs = ms;
+    }
+  }
+
   const activeSegments = computeActiveSegments(tsMs);
   const airTimeMs = activeSegments.reduce((acc, s) => acc + (s.endMs - s.startMs), 0);
   const durationMs =
