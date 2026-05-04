@@ -68,6 +68,13 @@ import {
 /** Gap > this (ms) before a user row is shown as a "Session idle" divider. */
 const IDLE_THRESHOLD_MS = 2000;
 
+/** Same idea but for non-user rows (agent text, tool groups). Codex sessions
+ *  often have only 1-2 user messages with multi-minute pauses between agent
+ *  reasoning steps, so anchoring idle bands to user rows alone leaves Codex
+ *  minimaps blank. A higher threshold here keeps Claude's tightly-streamed
+ *  tool-call gaps from flooding the minimap. */
+const IDLE_THRESHOLD_AGENT_MS = 30_000;
+
 /** Sticky header height (session header + tabs + mini-map).
  *  Transcript rows reserve this as scroll-margin so scrollIntoView lands
  *  them below the sticky area instead of hidden underneath. */
@@ -1462,19 +1469,23 @@ function Minimap({
       const start = item.start;
 
       // Idle gap before user rows (only in atomic view — turns already
-      // contain their idle time inside their duration).
-      if (
-        item.kind === "row" &&
-        item.row.kind === "user" &&
-        item.gapMs > IDLE_THRESHOLD_MS &&
-        out.length > 0
-      ) {
-        out.push({
-          kind: "idle",
-          start: Math.max(0, start - item.gapMs),
-          end: start,
-          durationMs: item.gapMs,
-        });
+      // contain their idle time inside their duration). Also fire for
+      // long agent / tool-group gaps with a higher threshold so Codex
+      // sessions with sparse user rows still surface their dead-air
+      // periods on the minimap.
+      if (item.kind === "row" && out.length > 0) {
+        const fireUser = item.row.kind === "user" && item.gapMs > IDLE_THRESHOLD_MS;
+        const fireAgent =
+          (item.row.kind === "agent" || item.row.kind === "tool-group") &&
+          item.gapMs > IDLE_THRESHOLD_AGENT_MS;
+        if (fireUser || fireAgent) {
+          out.push({
+            kind: "idle",
+            start: Math.max(0, start - item.gapMs),
+            end: start,
+            durationMs: item.gapMs,
+          });
+        }
       }
 
       if (item.kind === "turn") {
